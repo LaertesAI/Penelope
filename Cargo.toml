@@ -1,6 +1,6 @@
 [package]
 name = "katecli"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Kate: a small agent harness with a memory map, routed tool output and ScreenCodec as its eyes"
 license = "MIT"

@@ -8,7 +8,7 @@
 
 Kate is a small agent harness for the command line. The command is `katecli`.
 
-Status: first working version 0.1.0, private. One real run so far.
+Status: version 0.2.0, private. Three real runs so far.
 
 ## What it does
 
@@ -19,7 +19,10 @@ Status: first working version 0.1.0, private. One real run so far.
 | Memory map | Notes live at waypoints of a tree under `.kate/memory/`. A lookup follows signposts from the start, one level at a time, and never searches all notes. Finished walks are stored, the same request jumps to its waypoint the next time. | works |
 | Eyes | If `screencodec-mcp` is installed, Kate connects it: pages and pictures come as text, never as screenshots. | wired, not tested inside Kate |
 | Main model | The official `claude` command with the user's own login, or any OpenAI-compatible endpoint (API key or local model). | claude tested, OpenAI-compatible written and untested |
-| MCP server | `katecli mcp` offers `run`, `run_detail`, `fetch`, `memory_go`, `memory_note`, `memory_map` to any MCP client. | works |
+| MCP server | `katecli mcp` offers `run`, `run_detail`, `fetch`, `memory_go`, `memory_note`, `memory_map`, `skill` to any MCP client. | works |
+| Auto-learning | After each answer the weaker model reads the exchange and files lasting rules of the user at a waypoint. | works, 1 run |
+| Plugins | `katecli plugin add DIR` registers a plugin folder of Claude Code: skills by name and description, MCP servers for the main model. | works, 1 plugin tried (9 skills, 7 servers) |
+| Statistic | `katecli stats` counts how many characters of tool output stayed away from the main model. | works |
 
 ## Build
 
@@ -38,6 +41,8 @@ katecli memory note --path java/microservices/api "REST endpoints use plural nou
 katecli memory go "how do we name api endpoints in java"
 katecli memory map
 katecli run --ask "which test fails?" cargo test
+katecli plugin add ~/path/to/plugin            # a plugin folder of Claude Code
+katecli stats
 katecli mcp                                    # for other MCP clients
 ```
 
@@ -48,6 +53,7 @@ katecli mcp                                    # for other MCP clients
   "main": {"kind": "claude-cli", "model": "sonnet"},
   "weak": {"kind": "claude-cli", "model": "haiku"},
   "run_policy": "safe",
+  "auto_learn": true,
   "screencodec": {"command": "", "hosts": "", "images": ""}
 }
 ```
@@ -65,8 +71,10 @@ weaker model Claude Haiku.
 - A piped command (`cargo tree | wc -l`) was refused by the safe policy.
 - The note landed at the waypoint `rust/kate`.
 - Tokens of the main model: 9,070 in, 699 out. A comparison run without condensing has not been made.
+- Second run: the sentence "commit messages are English and carry no emojis" was filed at `git/commits` by the weaker model.
 
 ## Not built yet
 
-Plugins from Claude Code, bots, scheduled tasks, auto-learning after each turn, the Hugging Face browser with COAA
-cassettes, a graphical window with the cat, approval prompts for commands outside the safe list.
+Bots, scheduled tasks, the Hugging Face browser with COAA cassettes, a graphical window with the cat, approval
+prompts for commands outside the safe list, hooks and agents of plugins. Tools of plugin MCP servers are visible to
+the main model but not on the allow list yet.

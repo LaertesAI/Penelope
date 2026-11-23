@@ -26,7 +26,11 @@ impl Chat {
     }
 
     pub fn turn(&mut self, ctx: &Ctx, user: &str, memory: &str) -> Result<String, String> {
-        let system = if memory.is_empty() { RULES.to_string() } else { format!("{}\n\nNotes from the memory map for this request:\n{}", RULES, memory) };
+        let mut system = if memory.is_empty() { RULES.to_string() } else { format!("{}\n\nNotes from the memory map for this request:\n{}", RULES, memory) };
+        let skills = crate::plugins::skill_index(ctx);
+        if !skills.is_empty() {
+            system.push_str(&format!("\n\nInstalled skills (read one with the tool skill before you use it):\n{}", skills));
+        }
         match ctx.cfg["main"]["kind"].as_str().unwrap_or("claude-cli") {
             "openai" => self.turn_openai(ctx, user, &system),
             _ => self.turn_claude(ctx, user, &system),
@@ -36,7 +40,12 @@ impl Chat {
     fn turn_claude(&mut self, ctx: &Ctx, user: &str, system: &str) -> Result<String, String> {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
         let mut servers = json!({"kate": {"command": exe.to_string_lossy(), "args": ["mcp", "--root", ctx.root.to_string_lossy()]}});
-        let mut allowed: Vec<String> = ["run", "run_detail", "fetch", "memory_go", "memory_note", "memory_map"].iter().map(|t| format!("mcp__kate__{}", t)).collect();
+        let mut allowed: Vec<String> = ["run", "run_detail", "fetch", "memory_go", "memory_note", "memory_map", "skill"].iter().map(|t| format!("mcp__kate__{}", t)).collect();
+        if let Some(obj) = crate::plugins::servers(ctx).as_object() {
+            for (k, s) in obj {
+                servers[k] = s.clone();        // tools of plugin servers are not on the allow list: the model sees them, a call is refused
+            }
+        }
         let sc_cmd = ctx.cfg["screencodec"]["command"].as_str().filter(|c| !c.is_empty()).map(std::path::PathBuf::from).or_else(|| which("screencodec-mcp"));
         if let Some(sc) = sc_cmd {
             servers["screencodec"] = json!({"command": sc.to_string_lossy(), "args": [], "env": {

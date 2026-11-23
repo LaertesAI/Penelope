@@ -22,7 +22,9 @@ pub fn tool_specs() -> Value {
         {"name": "memory_note", "description": "Store one rule, preference or fact at a waypoint of the memory map, for example path \"rust/errors\". Without a path Kate files it by language or topic.",
          "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}, "text": {"type": "string"}}, "required": ["text"]}},
         {"name": "memory_map", "description": "The whole memory map as an indented list of waypoints.",
-         "inputSchema": {"type": "object", "properties": {}}}
+         "inputSchema": {"type": "object", "properties": {}}},
+        {"name": "skill", "description": "Read the instructions of one installed skill by its name. The system prompt lists the skills.",
+         "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}}
     ])
 }
 
@@ -35,6 +37,7 @@ pub fn call(ctx: &Ctx, name: &str, a: &Value) -> Result<String, String> {
         "memory_go" => Ok(tools::memory_go(ctx, &s("query"))),
         "memory_note" => Ok(tools::memory_note(ctx, &s("path"), &s("text"))),
         "memory_map" => Ok(tools::memory_map(ctx)),
+        "skill" => Ok(crate::plugins::skill_body(ctx, &s("name"))),
         _ => Err(format!("unknown tool {}", name)),
     }
 }

@@ -5,6 +5,7 @@ mod cat;
 mod config;
 mod mcp;
 mod memory;
+mod plugins;
 mod tools;
 mod weak;
 
@@ -19,6 +20,9 @@ katecli memory note [--path a/b] TEXT
                              store a rule or fact at a waypoint (without --path: filed by language or topic)
 katecli run [--ask QUESTION] COMMAND
                              run a command, long output condensed by the weaker model
+katecli plugin add DIR       register a plugin folder in the format of Claude Code (skills and MCP servers)
+katecli plugin list          show the registered plugins
+katecli stats                how much tool output the weaker model kept away from the main model
 katecli mcp [--root DIR]     serve Kate's tools as an MCP server on stdin and stdout
 katecli doctor               check the programs and models Kate needs";
 
@@ -62,6 +66,11 @@ fn main() {
             answer(&ctx, &mut chat, &text);
         }
         "doctor" => doctor(&ctx),
+        "stats" => print!("{}", tools::stats(&ctx)),
+        "plugin" => match args.get(1).map(String::as_str) {
+            Some("add") if args.len() >= 3 => println!("{}", plugins::add(&ctx, &args[2])),
+            _ => print!("{}", plugins::list(&ctx)),
+        },
         "chat" => repl(&ctx),
         other => {
             cat::warn(&format!("unknown command: {}", other));
@@ -97,6 +106,11 @@ fn answer(ctx: &config::Ctx, chat: &mut backend::Chat, text: &str) {
         Ok(a) => {
             println!("{}", a);
             cat::say(&format!("tokens so far: {} in, {} out", chat.input_tokens, chat.output_tokens));
+            if ctx.cfg["auto_learn"].as_bool().unwrap_or(true) {
+                for id in tools::learn(ctx, text, &a) {
+                    cat::say(&format!("learned: {}", id));
+                }
+            }
         }
         Err(e) => cat::warn(&e),
     }
