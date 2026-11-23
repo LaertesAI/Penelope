@@ -15,7 +15,7 @@ Status: version 0.2.0, private. Three real runs so far.
 | Part | What it does | State |
 |---|---|---|
 | Routed tool output | The tool `run` executes a shell command. Output over 40 lines goes to a weaker model first and comes back as at most 12 lines. The raw output stays on disk under a run id. | works |
-| Web pages | The tool `fetch` loads a page and lets the weaker model answer one question from it. The page text never enters the main model. | written, not tested against a live page |
+| Web pages | The tool `fetch` loads a page and lets the weaker model answer one question from it. The page text never enters the main model. | works, 1 page tried |
 | Memory map | Notes live at waypoints of a tree under `.kate/memory/`. A lookup follows signposts from the start, one level at a time, and never searches all notes. Finished walks are stored, the same request jumps to its waypoint the next time. | works |
 | Eyes | If `screencodec-mcp` is installed, Kate connects it: pages and pictures come as text, never as screenshots. | wired, not tested inside Kate |
 | Main model | The official `claude` command with the user's own login, or any OpenAI-compatible endpoint (API key or local model). | claude tested, OpenAI-compatible written and untested |
@@ -71,6 +71,8 @@ weaker model Claude Haiku.
 - A piped command (`cargo tree | wc -l`) was refused by the safe policy.
 - The note landed at the waypoint `rust/kate`.
 - Tokens of the main model: 9,070 in, 699 out. A comparison run without condensing has not been made.
+- Direct call `katecli run cargo tree`: 6,947 characters of output, 168 characters reached the main model (2 percent).
+- `fetch` on https://example.org/ returned the purpose of the page in 3 lines.
 - Second run: the sentence "commit messages are English and carry no emojis" was filed at `git/commits` by the weaker model.
 
 ## Not built yet
