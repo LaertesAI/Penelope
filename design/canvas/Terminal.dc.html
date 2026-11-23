@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Kate in the terminal</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Space+Grotesk:wght@400;500;700&display=swap">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div style="width: 1200px; height: 720px; box-sizing: border-box; padding: 40px 44px; background: #0E0D13; color: #F6F3EC; font-family: 'Space Grotesk', system-ui, sans-serif; display: flex; flex-direction: column; gap: 22px">
+<div style="display: flex; gap: 28px; align-items: flex-start">
+<img src="/_blob/ab369e1e355153c186e4c0b71984d1c1" alt="katecli during a session: the request, two tool calls, the answer and a learned rule on the left, the cat with the session numbers on the right" style="width: 728px; height: 522px; border-radius: 12px; box-shadow: 0 0 0 1px #2E2A3A; flex-shrink: 0">
+<div style="display: flex; flex-direction: column; gap: 22px">
+<img src="/_blob/db92e22e6f4aea7d4e305a73d7f69320" alt="Start screen of katecli: the name, the cat on the input box and the state of the memory map" style="width: 348px; height: 250px; border-radius: 12px; box-shadow: 0 0 0 1px #2E2A3A">
+<img src="/_blob/afa9f3682d40ef4b70adf3770f2c98d2" alt="Question before a command outside the safe list: run it once, allow all in this session, or refuse" style="width: 348px; height: 250px; border-radius: 12px; box-shadow: 0 0 0 1px #2E2A3A">
+</div>
+</div>
+<div style="display: flex; justify-content: space-between; align-items: flex-end; gap: 32px">
+<div style="display: flex; flex-direction: column; gap: 6px">
+<h1 style="margin: 0; font-size: 26px; line-height: 1.15; font-weight: 700">katecli 0.3.0, full screen</h1>
+<p style="margin: 0; font-size: 15px; line-height: 1.4; color: #B5B1C2; max-width: 700px">Pictures of the running program in a terminal of 124 columns and 40 rows. The session on the left is a real turn with Claude Sonnet and Claude Haiku.</p>
+</div>
+<div style="display: grid; grid-template-columns: repeat(3, auto); gap: 4px 22px; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 13px; color: #B5B1C2">
+<span><span style="color: #F6F3EC">/</span> commands</span>
+<span><span style="color: #F6F3EC">ctrl+p</span> palette</span>
+<span><span style="color: #F6F3EC">ctrl+o</span> models</span>
+<span><span style="color: #F6F3EC">esc</span> stop</span>
+<span><span style="color: #F6F3EC">f1</span> help</span>
+<span><span style="color: #F6F3EC">f12</span> picture</span>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1200,"height":720}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

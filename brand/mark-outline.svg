@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="115 127 790 790" role="img" aria-label="Kate mark, outline with prompt eyes">
+<g id="cat" fill="none" stroke="#FFB43A" stroke-width="50" stroke-linecap="round" stroke-linejoin="round">
+    <path id="face-outline" d="M193 420 276 203 387 338H636L747 203 827 420C854 480 874 532 874 588 874 725 748 841 586 841H437C273 841 147 729 147 588 147 528 166 477 193 420Z" />
+    <path id="chevron-eye" d="m305 456 95 61-96 63" />
+    <path id="mouth" d="M423 693C434 746 477 754 511 704 545 754 589 746 600 693" />
+  </g>
+  <rect id="cursor-eye" x="585" y="518" width="170" height="63" rx="23" fill="#2DD4BF" />
+  <path id="nose" d="M492 604H530Q555 604 544 626L527 649Q511 668 496 649L478 626Q466 604 492 604Z" fill="#FFB43A" />
+</svg>

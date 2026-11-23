@@ -1,0 +1,34 @@
+<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" width="1024" height="1024">
+  <title>Kate command line AI app icon</title>
+  <defs>
+    <clipPath id="tile-clip">
+      <rect x="4" y="4" width="1016" height="1016" rx="240" />
+    </clipPath>
+  </defs>
+  <g clip-path="url(#tile-clip)">
+    <rect x="4" y="4" width="1016" height="1016" rx="240" fill="#15131C" />
+    <g id="prompt">
+      <path d="M374 242 492 333 374 424" fill="none" stroke="#F6F3EC" stroke-width="61" stroke-linecap="round" stroke-linejoin="round" />
+      <rect x="571" y="215" width="106" height="235" fill="#2DD4BF" />
+    </g>
+    <g id="cat">
+      <path d="M113 983 Q102 983 103 968 Q110 884 155 805 C125 742 134 636 157 570 Q177 507 219 516 C271 525 350 587 391 639 Q512 594 632 639 C675 586 753 525 802 516 C848 505 866 563 875 624 Q890 733 862 805 Q906 882 914 966 Q917 983 902 983Z" fill="#FFB43A" />
+      <g id="inner-ears" fill="#F6F3EC">
+        <path d="M192 759 C174 713 183 624 205 588 Q215 571 230 577 C264 591 308 628 328 661 Q247 699 192 759Z" />
+        <path d="M694 661 C718 625 761 590 793 577 Q811 568 821 593 C840 636 837 722 821 759 Q768 699 694 661Z" />
+      </g>
+      <g id="eyes" fill="#15131C">
+        <ellipse cx="362" cy="842" rx="80" ry="84" />
+        <ellipse cx="656" cy="842" rx="80" ry="84" />
+      </g>
+      <g id="eye-highlights" fill="#F6F3EC">
+        <circle cx="339" cy="806" r="23.5" />
+        <circle cx="631" cy="806" r="23.5" />
+      </g>
+      <g id="paws" fill="#F6F3EC">
+        <path d="M116 963 C125 924 173 887 214 887 C266 886 311 920 317 964 C321 995 301 1014 277 1014 C264 1014 256 1008 256 995 L256 970 C256 950 235 950 235 970 L235 994 Q236 1016 213 1016 Q189 1016 189 995 L189 970 C189 951 168 951 168 970 L167 995 Q166 1012 151 1012 C125 1006 111 990 116 963Z" />
+        <path d="M697 964 C704 920 750 886 801 887 C844 887 890 923 899 962 C906 989 889 1007 864 1012 Q847 1016 847 995 L847 970 C847 951 826 951 826 970 L826 994 Q827 1016 802 1016 Q779 1016 777 995 L777 970 C777 951 755 951 755 970 L755 995 Q756 1015 735 1014 C709 1014 691 994 697 964Z" />
+      </g>
+    </g>
+  </g>
+</svg>
