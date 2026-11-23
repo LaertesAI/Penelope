@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/banner.png" alt="Kate, a command line harness that remembers the way" width="100%"></p>
+
 # Kate
 
 ```

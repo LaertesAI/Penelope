@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 256" role="img" aria-label="Kate logo with name">
+  <rect width="256" height="256" rx="56" fill="#15131C"/>
+  <g fill="#FFB43A" stroke="#FFB43A" stroke-width="12" stroke-linejoin="round">
+    <path d="M56 122 L64 54 L112 96 Z"/>
+    <path d="M200 122 L192 54 L144 96 Z"/>
+    <rect x="52" y="92" width="152" height="112" rx="52"/>
+  </g>
+  <g fill="#15131C">
+    <rect x="88" y="122" width="20" height="40" rx="8"/>
+    <rect x="148" y="122" width="20" height="40" rx="8"/>
+    <path d="M120 177 H136 L128 187 Z" stroke="#15131C" stroke-width="5" stroke-linejoin="round"/>
+  </g>
+  <g transform="translate(296 62) scale(2.2)">
+  <g fill="none" stroke="#15131C" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 3 V41 M4 31 L19 19 M10.5 26 L20 41"/>
+    <g transform="translate(31 0)"><circle cx="14" cy="29.5" r="11.5"/><path d="M25.5 18 V41"/></g>
+    <g transform="translate(68 0)"><path d="M8 7 V33 Q8 41 16 41 H19 M1 18 H18"/></g>
+    <g transform="translate(97 0)"><path d="M2.5 29.5 H25.5 A11.5 11.5 0 1 0 22.13 37.63"/></g>
+  </g>
+  <rect x="134" y="15" width="14" height="29.25" rx="3" fill="#E08A00"/>
+  </g>
+</svg>
