@@ -7,7 +7,7 @@ comes from the weaver of the Odyssey, who undid part of her work every night: th
 notes back the same way. Earlier names of the project: Kate with the command `katecli` (until 0.3.0), Strix Forgery
 with the command `strix` (0.4.0).
 
-Status: version 0.5.0, private. Eleven real runs so far.
+Status: version 0.6.0, private. Fourteen real runs so far.
 
 <p align="center"><img src="docs/screens/chat.png" alt="penelope: transcript on the left, the woven mark and the session numbers on the right" width="100%"></p>
 
@@ -34,10 +34,15 @@ The marks are drawn by a script in the Polytrope folder (`brand/build/` there). 
 | Memory map | Notes live at waypoints of a tree under `.penelope/memory/`. A lookup follows signposts from the start, one level at a time, and never searches all notes. Finished walks are stored, the same request jumps to its waypoint the next time. | works |
 | Eyes | If `screencodec-mcp` is installed, Penelope connects it: pages and pictures come as text, never as screenshots. | wired, not tested inside the harness |
 | Main model | The official `claude` command with the user's own login, or any OpenAI-compatible endpoint (API key or local model). | claude tested, OpenAI-compatible written and untested |
-| MCP server | `penelope mcp` offers `run`, `run_detail`, `fetch`, `memory_go`, `memory_note`, `memory_map`, `skill` to any MCP client. | works |
+| MCP server | `penelope mcp` offers all 15 tools to any MCP client: `run`, `run_detail`, `fetch`, `web_search`, `read`, `write`, `edit`, `find`, `grep`, `scout`, `plan`, `memory_go`, `memory_note`, `memory_map`, `skill`. | works |
 | Auto-learning | After each answer the weaker model reads the exchange and files lasting rules of the user at a waypoint. | works, 2 runs |
 | Plugins | `penelope plugin add DIR` registers a plugin folder of Claude Code: skills by name and description, MCP servers for the main model. | works, 1 plugin tried (9 skills, 7 servers) |
-| Sessions | Every conversation through the `claude` command is stored with its first request, turns and tokens. `penelope sessions` lists them, `penelope chat --resume N` goes on with one. | works, 1 test, 1 real resume |
+| Scout | With `"delegate": "auto"` the main model has no search tools. Every search goes to the tool `scout`: the weaker model gets the task, calls `web_search`, `fetch`, `find`, `grep`, `read` and safe commands itself and returns a report of at most 15 lines. Its tokens never reach the main model. | works, 3 real tasks |
+| Web search | `web_search` asks the search tool of the `claude` command (run by the weaker model), DuckDuckGo's HTML page, a SearXNG instance or the Brave API. The query passes the privacy filter first. | claude and DuckDuckGo tried, SearXNG and Brave written and untested |
+| File tools | `read` with line numbers, `find` by name or path pattern, `grep` for plain text, `write` and `edit`. A change opens the question "Change this file?" in the interface. | works, 3 tests, 1 real change |
+| Plan | The main model keeps the steps of a task with the tool `plan`. The side panel shows them with a mark per state. | works, 1 real run |
+| Sessions as tabs | Every conversation through the `claude` command is stored with its transcript. The top row shows the sessions as tabs, `f2` opens the list, `f3` and `f4` change the tab, `penelope chat --resume N` opens one from the command line. | works, 1 test, 2 real sessions |
+| Setup | `penelope setup` asks seven questions with numbered answers: both models, who searches, privacy, both policies, the search source. `/setup` does the same from the interface. | works, 1 test |
 | Unravel | `penelope memory unravel [N]` takes back the last N notes of the memory map. A journal keeps the order of the notes. | works, 1 test |
 | Crew | `penelope crew` lists the eight model families of Polytrope and what does each job today. | works |
 | Statistic | `penelope stats` counts how many characters of tool output stayed away from the main model and how many items the filter masked. | works |
@@ -48,7 +53,7 @@ The marks are drawn by a script in the Polytrope folder (`brand/build/` there). 
 cd cli
 cargo build --release
 ./target/release/penelope doctor
-cargo test                      # 19 tests, no model call
+cargo test                      # 25 tests, no model call
 ```
 
 ## The full screen interface
@@ -69,12 +74,15 @@ or output selects the plain chat by itself.
 | `ctrl+p` | command palette with search |
 | `ctrl+o` | choose the main and the weaker model |
 | `ctrl+n` | new session |
+| `f2` | list of the stored sessions, `enter` opens one |
+| `f3`, `f4` or `alt+left`, `alt+right` | the tab to the left or right |
+| `alt+1` to `alt+9` | the tab with that number |
 | `ctrl+b` | show or hide the side panel |
 | `f1` | keys and commands |
 | `f12` | save the screen as an SVG picture under `.penelope/screens/` |
 | `ctrl+c` | empty the input, leave when it is empty |
 
-Commands: `/new`, `/models`, `/sessions`, `/crew`, `/map`, `/go TEXT`, `/note TEXT`, `/unravel`, `/stats`, `/plugins`,
+Commands: `/new`, `/models`, `/sessions`, `/setup`, `/crew`, `/map`, `/go TEXT`, `/note TEXT`, `/unravel`, `/stats`, `/plugins`,
 `/doctor`, `/copy`, `/shot`, `/sidebar`, `/help`, `/quit`.
 
 The side panel shows the woven square. Its loose thread at the lower right takes the colour of the mood:
@@ -99,7 +107,9 @@ Paths on the screen show the home folder as `~`.
 ## Use without the interface
 
 ```bash
-penelope init                                     # .penelope folder in this project
+penelope setup --here                             # .penelope folder in this project and seven questions
+penelope search "ratatui terminal library"         # web search, up to 8 results
+penelope scout "Where does this project parse its settings?"   # a lookup on the weaker model
 penelope ask "Run the tests and tell me what fails"
 penelope sessions                                 # stored conversations, newest first
 penelope chat --resume 1                          # go on with the newest one
@@ -121,6 +131,9 @@ penelope mcp                                      # for other MCP clients
   "main": {"kind": "claude-cli", "model": "sonnet"},
   "weak": {"kind": "claude-cli", "model": "haiku"},
   "run_policy": "safe",
+  "edit_policy": "ask",
+  "delegate": "auto",
+  "search": {"kind": "auto"},
   "privacy": "rules",
   "auto_learn": true,
   "screencodec": {"command": "", "hosts": "", "images": ""}
@@ -130,6 +143,10 @@ penelope mcp                                      # for other MCP clients
 - `kind: "openai"` takes `base_url`, `model` and `api_key_env` and works with OpenAI, OpenRouter, Ollama or llama.cpp.
 - `run_policy: "safe"` runs read-only and build commands without shell operators. Every other command needs a yes in
   the interface. Outside the interface it is refused. `"all"` runs every command without a question.
+- `edit_policy: "ask"` asks before every change to a file. `"all"` changes files without a question.
+- `delegate: "auto"` sends every search to the scout on the weaker model. `"offer"` lets the main model choose, `"off"` has no scout.
+- `search.kind`: `auto` (the search tool of the `claude` command if the weaker model runs there, else DuckDuckGo), `claude`,
+  `duckduckgo`, `searxng` with `url`, `brave` with `api_key_env`, `off`. DuckDuckGo's page refused after 2 queries in a test.
 - `privacy: "rules"` masks secrets in the request and in tool output. `"pii"` also masks e-mail addresses and IBANs.
   `"off"` passes everything unchanged.
 - A Claude subscription is used through the official `claude` command only. Penelope has no login of its own.
@@ -182,13 +199,23 @@ Runs of version 0.5.0 (2026-11-24, command `penelope`), same kind of folder:
 - `penelope chat --resume 1` with a piped command (`echo penelope | tr a-z A-Z`): the question appeared, `y` let it
   run, the model reported `PENELOPE` and referred to the earlier turn.
 
+Runs of version 0.6.0 (2026-11-24), main model Claude Sonnet, weaker model Claude Haiku, `delegate` on `auto`:
+
+- Request with three steps: newest version of the crate ureq from the web, the file that prints a word, a comment on
+  top of that file. The main model stored a plan, sent two scouts (14 s and 8 s, 4 steps, 12,218 tokens in and 1,151
+  out on Haiku), read the file and asked to change it. After `y` the file started with `// newest ureq: 3.5.2`.
+  The main model itself used 8,669 tokens in and 1,021 out. The version number was not checked by a person.
+- A second session with one question, then `f3`: the first session came back with its whole transcript.
+- `penelope scout` from the command line answered a web question and a file question in 15 s with 4 steps.
+- A run before the fix sent the scout to the folder above the working directory. The rules now name the working directory.
+
 ## The crew
 
 Polytrope plans one small model family per job. `penelope crew` prints this table with the settings of the folder:
 
 | Family | Job | Today in Penelope |
 |---|---|---|
-| Nostos | tool calling | the main model writes the tool calls |
+| Nostos | tool calling | the weaker model runs lookups as scout, the main model writes the other tool calls |
 | Teiresias | router and decisions | fixed rules: safe list for commands, walk through the memory map |
 | Outis | privacy and PII detection | fixed rules in `cli/src/privacy.rs` |
 | Aiolos | compression and summaries | the weaker model condenses long tool output |
@@ -202,5 +229,5 @@ None of the eight families is trained yet. The research folder of each family is
 ## Not built yet
 
 Bots, scheduled tasks, the Hugging Face browser with COAA cassettes, a graphical window, hooks and agents of plugins,
-a privacy filter for the answers of the models, the eight model families. Tools of plugin MCP servers are visible to the
+a privacy filter for the answers of the models, a tool to start training runs, the eight model families. Tools of plugin MCP servers are visible to the
 main model but not on the allow list yet. [`docs/ROADMAP.md`](docs/ROADMAP.md) lists every part.

@@ -84,7 +84,10 @@ pub fn crew(ctx: &Ctx) -> String {
         level => format!("fixed rules, level {}, {} items masked so far", level, masked),
     };
     let rows: [(&str, &str, String); 8] = [
-        ("Nostos", "tool calling", format!("main model {} writes the tool calls", model("main"))),
+        ("Nostos", "tool calling", match ctx.cfg["delegate"].as_str().unwrap_or("auto") {
+            "off" => format!("main model {} writes every tool call", model("main")),
+            mode => format!("stand-in {} runs lookups as scout (delegate {})", model("weak"), mode),
+        }),
         ("Teiresias", "router and decisions", "fixed rules: safe list for commands, walk through the memory map".to_string()),
         ("Outis", "privacy and PII detection", privacy),
         ("Aiolos", "compression and summaries", format!("stand-in {} condenses long tool output", model("weak"))),
@@ -118,6 +121,9 @@ pub fn stats(ctx: &Ctx) -> String {
         out.push_str(&format!("{}: {} condensed calls, {} characters of output, {} characters sent to the main model ({} percent)\n",
                               tool, c, r, s, if r > 0 { s * 100 / r } else { 0 }));
     }
+    out.push_str(&format!("scout: {} tasks with {} steps on the weaker model, {} tokens in and {} out that the main model never read\n",
+                          v["scout"]["tasks"].as_u64().unwrap_or(0), v["scout"]["steps"].as_u64().unwrap_or(0),
+                          v["scout"]["tokens_in"].as_u64().unwrap_or(0), v["scout"]["tokens_out"].as_u64().unwrap_or(0)));
     out.push_str(&format!("privacy: {} secrets masked before a model read them\n", v["privacy"]["masked"].as_u64().unwrap_or(0)));
     out
 }
@@ -127,16 +133,17 @@ fn next_run_id(ctx: &Ctx) -> u64 {
     n + 1
 }
 
-/// Asks the person at the terminal interface whether a command outside the safe list may run. The interface names a
+/// Asks the person at the terminal interface whether a command outside the safe list may run, or whether a file may change
+/// (`kind` is "command" or "file"). The interface names a
 /// folder in PENELOPE_APPROVE_DIR. The question is a file `ID.req` there, the answer a file `ID.ans` with `yes` or `no`.
 /// Without that folder nobody can answer: None. No answer within 120 seconds counts as no.
-fn ask_person(command: &str, cwd: &str) -> Option<bool> {
+pub fn ask_person(command: &str, cwd: &str, kind: &str) -> Option<bool> {
     let dir = std::path::PathBuf::from(std::env::var("PENELOPE_APPROVE_DIR").ok().filter(|d| !d.is_empty())?);
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     let id = format!("{}-{}", std::process::id(), nanos);
     let (req, ans) = (dir.join(format!("{}.req", id)), dir.join(format!("{}.ans", id)));
     let tmp = dir.join(format!("{}.tmp", id));
-    fs::write(&tmp, serde_json::json!({"command": command, "cwd": cwd}).to_string()).ok()?;
+    fs::write(&tmp, serde_json::json!({"command": command, "cwd": cwd, "kind": kind}).to_string()).ok()?;
     fs::rename(&tmp, &req).ok()?;
     for _ in 0..600 {
         if let Ok(answer) = fs::read_to_string(&ans) {
@@ -153,7 +160,10 @@ fn ask_person(command: &str, cwd: &str) -> Option<bool> {
 /// Runs a shell command. Short output comes back as it is. Long output is stored and condensed by the weaker model.
 pub fn run(ctx: &Ctx, command: &str, question: &str, cwd: &str) -> String {
     if ctx.cfg["run_policy"].as_str().unwrap_or("safe") != "all" && !is_safe(command) {
-        match ask_person(command, cwd) {
+        if crate::scout::inside() {
+            return "NOT run. A scout runs commands of the safe list only: read-only and build commands without shell operators.".to_string();
+        }
+        match ask_person(command, cwd, "command") {
             Some(true) => {}
             Some(false) => return "NOT run. The user declined this command.".to_string(),
             None => return "NOT run. The command is not on the safe list (read-only and build commands without shell operators). \
@@ -313,4 +323,23 @@ pub fn learn(ctx: &Ctx, user: &str, answer: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// The plan of the running task: a list of steps with a state each. The side panel shows it.
+pub fn plan(ctx: &Ctx, items: &serde_json::Value) -> String {
+    let mut out = Vec::new();
+    for item in items.as_array().cloned().unwrap_or_default().iter().take(12) {
+        let text: String = item["text"].as_str().unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" ").chars().take(80).collect();
+        let state = match item["state"].as_str().unwrap_or("pending") {
+            "done" => "done",
+            "doing" => "doing",
+            _ => "pending",
+        };
+        if !text.is_empty() {
+            out.push(serde_json::json!({"text": text, "state": state}));
+        }
+    }
+    let done = out.iter().filter(|i| i["state"] == "done").count();
+    let _ = fs::write(ctx.root.join("plan.json"), serde_json::to_string_pretty(&out).unwrap());
+    if out.is_empty() { "plan cleared".to_string() } else { format!("plan stored: {} steps, {} done", out.len(), done) }
 }

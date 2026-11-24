@@ -66,7 +66,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         put(f, area, 0, 0, "Penelope needs 30 columns and 8 rows.", fg(ASH));
         return;
     }
-    let body = Rect::new(area.x, area.y, area.width, area.height - 1);
+    let bar = if !app.tabs.is_empty() && area.height >= 14 { 1 } else { 0 };
+    let body = Rect::new(area.x, area.y + bar, area.width, area.height - 1 - bar);
+    if bar == 1 {
+        tabs(f, app, Rect::new(area.x, area.y, area.width, 1));
+    }
     footer(f, app, Rect::new(area.x, area.bottom() - 1, area.width, 1));
     if app.items.is_empty() && app.busy.is_none() {
         home(f, app, body);
@@ -80,6 +84,48 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 fn tilde(path: &str) -> String {
     let home = std::env::var("HOME").unwrap_or_default();
     if !home.is_empty() && path.starts_with(&home) { format!("~{}", &path[home.len()..]) } else { path.to_string() }
+}
+
+/// The stored sessions as tabs, oldest on the left. The open one is marked. A session without an answer yet shows as "new".
+/// If the row is too narrow, the tabs around the open one stay.
+fn tabs(f: &mut Frame, app: &App, area: Rect) {
+    fill(f, area, NIGHT);
+    let open = app.session_id.as_ref().and_then(|id| app.tabs.iter().position(|(t, _)| t == id));
+    let mut labels: Vec<(String, bool)> = app.tabs.iter().enumerate().map(|(i, (_, title))| (format!(" {} {} ", i + 1, clip(title, 20)), Some(i) == open)).collect();
+    if open.is_none() {
+        labels.push((" + new ".to_string(), true));
+    }
+    let hint = "f2 list · f3 f4 change ";
+    let room = (area.width as usize).saturating_sub(hint.len() + 2);
+    let at = labels.iter().position(|(_, on)| *on).unwrap_or(0);
+    let (mut first, mut last, mut used) = (at, at, width(&labels[at].0));
+    loop {                                                   // grow the window to both sides while it fits
+        let before = first;
+        let after = last;
+        if last + 1 < labels.len() && used + width(&labels[last + 1].0) <= room {
+            last += 1;
+            used += width(&labels[last].0);
+        }
+        if first > 0 && used + width(&labels[first - 1].0) <= room {
+            first -= 1;
+            used += width(&labels[first].0);
+        }
+        if first == before && last == after {
+            break;
+        }
+    }
+    let mut x = area.x + 1;
+    for (label, on_tab) in &labels[first..=last] {
+        put(f, area, x, area.y, label, if *on_tab { on(INK, CLAY).add_modifier(Modifier::BOLD) } else { on(ASH, NIGHT) });
+        x += width(label) as u16;
+    }
+    put(f, area, area.right().saturating_sub(hint.len() as u16), area.y, hint, on(DIM, NIGHT));
+}
+
+/// The same for a text that holds a path somewhere inside.
+fn tilde_all(text: &str) -> String {
+    let home = std::env::var("HOME").unwrap_or_default();
+    if home.len() > 1 { text.replace(&home, "~") } else { text.to_string() }
 }
 
 fn footer(f: &mut Frame, app: &App, area: Rect) {
@@ -296,9 +342,9 @@ fn transcript(app: &App, w: usize) -> Vec<Line<'static>> {
                 };
                 let room = w.saturating_sub(width(name) + 8);
                 out.push(Line::from(vec![Span::raw("  "), Span::styled(icon, fg(colour)), Span::raw(" "), Span::styled(name.clone(), bold(PAPER)),
-                                         Span::raw("  "), Span::styled(clip(detail, room), fg(ASH))]));
+                                         Span::raw("  "), Span::styled(clip(&tilde_all(detail), room), fg(ASH))]));
                 if !summary.is_empty() {
-                    out.push(Line::from(vec![Span::styled("    ↳ ", fg(DIM)), Span::styled(clip(summary, w.saturating_sub(8)), fg(DIM))]));
+                    out.push(Line::from(vec![Span::styled("    ↳ ", fg(DIM)), Span::styled(clip(&tilde_all(summary), w.saturating_sub(8)), fg(DIM))]));
                 }
             }
             Item::Note { icon, label, text, colour } => {
@@ -364,6 +410,17 @@ fn sidebar(f: &mut Frame, app: &App, area: Rect) {
         ("aiolos".into(), format!("{} · stand-in", weak), PAPER),
         ("outis".into(), privacy, PAPER),
     ]);
+    if !app.side.plan.is_empty() {
+        let rows = app.side.plan.iter().take(8).map(|(text, state)| {
+            let (mark, colour) = match state.as_str() {
+                "done" => ("●", DIM),
+                "doing" => ("◐", CLAY),
+                _ => ("○", ASH),
+            };
+            (String::new(), format!("{} {}", mark, text), colour)
+        }).collect();
+        section(f, &mut y, "PLAN", rows);
+    }
     let mut memory = Vec::new();
     let way = if app.trail.is_empty() { "start".to_string() } else { format!("start › {}", app.trail.last().unwrap().replace('/', " › ")) };
     for row in wrap_plain(&way, w as usize) {
@@ -378,7 +435,8 @@ fn sidebar(f: &mut Frame, app: &App, area: Rect) {
         let (calls, kept) = app.side.routed[i];
         if calls == 0 { "no long output yet".to_string() } else { format!("{} calls · {} % kept away", calls, kept) }
     };
-    section(f, &mut y, "ROUTED OUTPUT", vec![("run".into(), routed(0), PAPER), ("fetch".into(), routed(1), PAPER)]);
+    let scout = if app.side.scout.0 == 0 { "no task yet".to_string() } else { format!("{} tasks · {} tokens", app.side.scout.0, num(app.side.scout.1)) };
+    section(f, &mut y, "ROUTED TO THE WEAKER MODEL", vec![("run".into(), routed(0), PAPER), ("fetch".into(), routed(1), PAPER), ("scout".into(), scout, PAPER)]);
     section(f, &mut y, "EYES AND PLUGINS", vec![
         ("screen".into(), if app.side.screencodec { "● ScreenCodec".into() } else { "○ not installed".into() }, if app.side.screencodec { SEA } else { DIM }),
         ("plugins".into(), format!("{}", app.side.plugins), PAPER),
@@ -458,15 +516,43 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
                 put(f, inner, inner.x, inner.bottom(), &more, on(DIM, RAISED));
             }
         }
-        Overlay::Approve { command, cwd, .. } => {
+        Overlay::Sessions { sel } => {
+            let all = crate::sessions::all(&app.ctx);
+            let inner = dialog(f, area, "Sessions", 92, all.len().min(16) as u16 + 7);
+            put(f, inner, inner.x, inner.y, "enter opens a session · the newest is on top", on(ASH, RAISED));
+            let rows = inner.height.saturating_sub(2) as usize;
+            let first = (sel + 1).saturating_sub(rows);
+            for (i, e) in all.iter().rev().skip(first).take(rows).enumerate() {
+                let y = inner.y + 2 + i as u16;
+                let chosen = first + i == *sel;
+                let open = app.session_id.as_deref() == e["id"].as_str();
+                let (bg, main, side) = if chosen { (CLAY, INK, INK) } else { (RAISED, PAPER, ASH) };
+                let row = Rect::new(inner.x.saturating_sub(1), y, inner.width + 2, 1);
+                fill(f, row, bg);
+                let meta = format!("{}  {:>3} turns", crate::sessions::stamp(e["last"].as_u64().unwrap_or(0)), e["turns"].as_u64().unwrap_or(0));
+                put(f, row, inner.x, y, &format!("{:>2}", all.len() - first - i), on(side, bg));
+                put(f, row, inner.x + 4, y, &meta, on(side, bg));
+                put(f, row, inner.x + 6 + width(&meta) as u16, y, &clip(e["title"].as_str().unwrap_or(""), (inner.width as usize).saturating_sub(width(&meta) + 14)),
+                    on(main, bg).add_modifier(if open { Modifier::BOLD } else { Modifier::empty() }));
+                if open {
+                    put(f, row, inner.right().saturating_sub(4), y, "open", on(side, bg));
+                }
+            }
+            if all.is_empty() {
+                put(f, inner, inner.x, inner.y + 2, "no session yet. A session is stored after its first answer.", on(DIM, RAISED));
+            }
+        }
+        Overlay::Approve { command, cwd, file, .. } => {
             let w = 76u16.min(area.width.saturating_sub(4)).max(10);
+            let command = &tilde_all(command);
             let rows = wrap_plain(command, (w as usize).saturating_sub(8).max(1));
-            let inner = dialog(f, area, "Run this command?", w, rows.len() as u16 + 10);
-            put(f, inner, inner.x, inner.y, "The command is outside the safe list. Penelope waits for an answer.", on(ASH, RAISED));
+            let inner = dialog(f, area, if *file { "Change this file?" } else { "Run this command?" }, w, rows.len() as u16 + 10);
+            put(f, inner, inner.x, inner.y, if *file { "The main model wants to change a file. Penelope waits for an answer." }
+                else { "The command is outside the safe list. Penelope waits for an answer." }, on(ASH, RAISED));
             let mut y = inner.y + 2;
             for row in rows.iter().take(inner.height.saturating_sub(5) as usize) {
                 fill(f, Rect::new(inner.x, y, inner.width, 1), INK);
-                put(f, inner, inner.x + 1, y, "$", on(CLAY, INK));
+                put(f, inner, inner.x + 1, y, if *file { "±" } else { "$" }, on(CLAY, INK));
                 put(f, inner, inner.x + 3, y, row, on(PAPER, INK));
                 y += 1;
             }
@@ -475,7 +561,7 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
             }
             y += 2;
             let mut x = inner.x;
-            for (key, text) in [("y", "run it once"), ("a", "allow all in this session"), ("n", "refuse")] {
+            for (key, text) in [("y", if *file { "change it" } else { "run it once" }), ("a", "allow all in this session"), ("n", "refuse")] {
                 put(f, inner, x, y, &format!(" {} ", key), on(INK, CLAY).add_modifier(Modifier::BOLD));
                 put(f, inner, x + 4, y, text, on(PAPER, RAISED));
                 x += 4 + text.len() as u16 + 3;

@@ -61,6 +61,28 @@ pub fn list(ctx: &Ctx) -> String {
     out
 }
 
+/// Every stored conversation, oldest first by its start. The tabs of the interface keep this order.
+pub fn all(ctx: &Ctx) -> Vec<Value> {
+    let mut all = load(ctx);
+    all.sort_by_key(|s| s["started"].as_u64().unwrap_or(0));
+    all
+}
+
+fn transcript_path(ctx: &Ctx, id: &str) -> std::path::PathBuf {
+    let name: String = id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
+    ctx.root.join("sessions").join(format!("{}.json", name))
+}
+
+/// What the interface showed in a conversation, so that a tab can show it again.
+pub fn save_transcript(ctx: &Ctx, id: &str, items: &[Value]) {
+    let _ = fs::create_dir_all(ctx.root.join("sessions"));
+    let _ = fs::write(transcript_path(ctx, id), serde_json::to_string(items).unwrap());
+}
+
+pub fn load_transcript(ctx: &Ctx, id: &str) -> Vec<Value> {
+    fs::read_to_string(transcript_path(ctx, id)).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+}
+
 /// A conversation by its number in the list (1 is the newest) or by the start of its id.
 pub fn pick(ctx: &Ctx, key: &str) -> Option<Value> {
     let all = load(ctx);

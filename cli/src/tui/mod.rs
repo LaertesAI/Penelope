@@ -45,7 +45,9 @@ pub enum Overlay {
     Palette { query: String, sel: usize },
     Models { sel: usize, weak: bool },
     Pager { title: String, lines: Vec<String>, scroll: usize },
-    Approve { id: String, command: String, cwd: String },
+    Approve { id: String, command: String, cwd: String, file: bool },
+    /// The list of stored sessions. Enter opens one.
+    Sessions { sel: usize },
 }
 
 pub struct Cmd {
@@ -59,7 +61,8 @@ pub struct Cmd {
 pub const COMMANDS: &[Cmd] = &[
     Cmd { name: "/new", help: "start a new session", key: "ctrl+n", takes_text: false },
     Cmd { name: "/models", help: "choose the main and the weaker model", key: "ctrl+o", takes_text: false },
-    Cmd { name: "/sessions", help: "list the stored sessions", key: "", takes_text: false },
+    Cmd { name: "/sessions", help: "list the stored sessions and open one", key: "f2", takes_text: false },
+    Cmd { name: "/setup", help: "answer the setup questions again", key: "", takes_text: false },
     Cmd { name: "/crew", help: "the model families and what does each job today", key: "", takes_text: false },
     Cmd { name: "/map", help: "show the memory map", key: "", takes_text: false },
     Cmd { name: "/go", help: "follow the memory map to a topic", key: "", takes_text: true },
@@ -93,6 +96,10 @@ pub struct Side {
     pub plugins: usize,
     /// Secrets the privacy filter masked in tool output.
     pub masked: u64,
+    /// Tasks the scout ran on the weaker model, and the tokens it spent there.
+    pub scout: (u64, u64),
+    /// The plan of the running task: text and state of each step.
+    pub plan: Vec<(String, String)>,
 }
 
 pub struct App {
@@ -133,6 +140,42 @@ pub struct App {
     seen: HashSet<String>,
     shot: bool,
     quit: bool,
+    /// The claude session this transcript belongs to. None before the first answer.
+    pub session_id: Option<String>,
+    /// Stored sessions as tabs: id and title, oldest first.
+    pub tabs: Vec<(String, String)>,
+    setup: bool,
+}
+
+/// Labels and icons of status lines, so that a stored transcript finds its fixed texts again.
+const NOTE_KINDS: &[(&str, &str)] = &[("memory", "◆"), ("learned", "✦"), ("outis", "◆"), ("resumed", "↺"), ("unravel", "↺"), ("stopped", "■"), ("note", "◆")];
+
+fn item_json(item: &Item) -> serde_json::Value {
+    use serde_json::json;
+    match item {
+        Item::User(t) => json!({"k": "user", "t": t}),
+        Item::Reply(t) => json!({"k": "reply", "t": t}),
+        Item::Tool { name, detail, state, summary, .. } => json!({"k": "tool", "name": name, "detail": detail, "ok": *state != ToolState::Failed, "summary": summary}),
+        Item::Note { label, text, colour, .. } => json!({"k": "note", "label": label, "t": text, "c": [colour.0, colour.1, colour.2]}),
+        Item::Error(t) => json!({"k": "error", "t": t}),
+    }
+}
+
+fn item_from(v: &serde_json::Value) -> Option<Item> {
+    let t = || v["t"].as_str().unwrap_or("").to_string();
+    Some(match v["k"].as_str()? {
+        "user" => Item::User(t()),
+        "reply" => Item::Reply(t()),
+        "tool" => Item::Tool { id: String::new(), name: v["name"].as_str().unwrap_or("").to_string(), detail: v["detail"].as_str().unwrap_or("").to_string(),
+                               state: if v["ok"].as_bool().unwrap_or(true) { ToolState::Done } else { ToolState::Failed }, summary: v["summary"].as_str().unwrap_or("").to_string() },
+        "note" => {
+            let (label, icon) = NOTE_KINDS.iter().find(|(l, _)| Some(*l) == v["label"].as_str()).copied().unwrap_or(("note", "◆"));
+            let c = |i: usize| v["c"][i].as_u64().unwrap_or(180) as u8;
+            Item::Note { icon, label, text: t(), colour: (c(0), c(1), c(2)) }
+        }
+        "error" => Item::Error(t()),
+        _ => return None,
+    })
 }
 
 fn save_config(ctx: &Ctx) {
@@ -153,10 +196,68 @@ impl App {
             busy: None, learning: false, streaming: false, scroll: 0, page: 10, sidebar: true, tick: 0, last_key: Instant::now(), flash: None, toast: None,
             chat: Some(Chat::new()), cancel: Arc::new(AtomicBool::new(false)), pid: Arc::new(AtomicU32::new(0)), tx, rx,
             tokens: (0, 0), turns: 0, tool_calls: 0, trail: Vec::new(), learned: Vec::new(), side: Side::default(),
-            approve_dir, allow_all: false, seen: HashSet::new(), shot: false, quit: false,
+            approve_dir, allow_all: false, seen: HashSet::new(), shot: false, quit: false, session_id: None, tabs: Vec::new(), setup: false,
         };
+        app.refresh_tabs();
         app.refresh_side();
         app
+    }
+
+    pub fn refresh_tabs(&mut self) {
+        self.tabs = crate::sessions::all(&self.ctx).iter().map(|e| (e["id"].as_str().unwrap_or("").to_string(), e["title"].as_str().unwrap_or("").to_string())).collect();
+    }
+
+    /// Writes the transcript of the running session to disk. Before the first answer there is no session to write to.
+    fn save_session(&self) {
+        if let Some(id) = &self.session_id {
+            let items: Vec<serde_json::Value> = self.items.iter().map(item_json).collect();
+            crate::sessions::save_transcript(&self.ctx, id, &items);
+        }
+    }
+
+    /// Opens a stored session: its transcript comes back and the next request goes on in the same conversation.
+    pub fn open_session(&mut self, entry: &serde_json::Value) {
+        if self.busy.is_some() {
+            self.toast("a turn is running. Stop it with esc before you change the session".to_string());
+            return;
+        }
+        let Some(id) = entry["id"].as_str() else { return };
+        self.save_session();
+        let chat = Chat::resume(entry);
+        self.tokens = (chat.input_tokens, chat.output_tokens);
+        self.turns = chat.turns;
+        self.chat = Some(chat);
+        self.items = crate::sessions::load_transcript(&self.ctx, id).iter().filter_map(item_from).collect();
+        self.tool_calls = self.items.iter().filter(|i| matches!(i, Item::Tool { .. })).count() as u64;
+        if self.items.is_empty() {
+            self.note("↺", "resumed", entry["title"].as_str().unwrap_or("").to_string(), art::SEA);
+        }
+        self.session_id = Some(id.to_string());
+        self.trail.clear();
+        self.learned.clear();
+        self.scroll = 0;
+        let _ = fs::remove_file(self.ctx.root.join("plan.json"));
+        self.refresh_side();
+    }
+
+    /// The tab left or right of the open one. A new session without an answer sits right of all tabs.
+    fn step_tab(&mut self, by: i64) {
+        if self.tabs.is_empty() {
+            return;
+        }
+        let now = self.session_id.as_ref().and_then(|id| self.tabs.iter().position(|(t, _)| t == id)).map(|i| i as i64).unwrap_or(self.tabs.len() as i64);
+        let next = (now + by).clamp(0, self.tabs.len() as i64 - 1) as usize;
+        self.open_tab(next);
+    }
+
+    fn open_tab(&mut self, index: usize) {
+        let Some((id, _)) = self.tabs.get(index).cloned() else { return };
+        if self.session_id.as_deref() == Some(id.as_str()) {
+            return;
+        }
+        if let Some(entry) = crate::sessions::all(&self.ctx).into_iter().find(|e| e["id"].as_str() == Some(id.as_str())) {
+            self.open_session(&entry);
+        }
     }
 
     pub fn refresh_side(&mut self) {
@@ -170,6 +271,9 @@ impl App {
             self.side.routed[i] = (stats[tool]["calls"].as_u64().unwrap_or(0), if raw > 0 { 100 - (sent * 100 / raw).min(100) } else { 0 });
         }
         self.side.masked = stats["privacy"]["masked"].as_u64().unwrap_or(0);
+        self.side.scout = (stats["scout"]["tasks"].as_u64().unwrap_or(0), stats["scout"]["tokens_in"].as_u64().unwrap_or(0) + stats["scout"]["tokens_out"].as_u64().unwrap_or(0));
+        let plan: serde_json::Value = fs::read_to_string(self.ctx.root.join("plan.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+        self.side.plan = plan.as_array().map(|a| a.iter().map(|i| (i["text"].as_str().unwrap_or("").to_string(), i["state"].as_str().unwrap_or("").to_string())).collect()).unwrap_or_default();
         self.side.screencodec = self.ctx.cfg["screencodec"]["command"].as_str().map(|c| !c.is_empty()).unwrap_or(false)
             || crate::config::which("screencodec-mcp").is_some();
         self.side.plugins = plugins::load(&self.ctx)["plugins"].as_array().map(|a| a.len()).unwrap_or(0);
@@ -340,6 +444,7 @@ impl App {
                 Msg::Done(chat, result) => {
                     self.tokens = (chat.input_tokens, chat.output_tokens);
                     self.turns = chat.turns;
+                    self.session_id = chat.session.clone().or(self.session_id.take());
                     self.chat = Some(*chat);
                     self.busy = None;
                     self.streaming = false;
@@ -363,6 +468,8 @@ impl App {
                         Err(e) => self.items.push(Item::Error(e)),
                     }
                     self.scroll = 0;
+                    self.save_session();
+                    self.refresh_tabs();
                     self.refresh_side();
                 }
                 Msg::Learned(ids) => {
@@ -372,6 +479,7 @@ impl App {
                         self.learned.push(id);
                         self.flash = Some((Mood::Learned, Instant::now()));
                     }
+                    self.save_session();
                     self.refresh_side();
                 }
             }
@@ -380,7 +488,16 @@ impl App {
 
     /// Looks for a question of the run tool: a command outside the safe list that waits for a yes.
     fn poll_approvals(&mut self) {
-        if !matches!(self.overlay, Overlay::None) || self.tick % 3 != 0 {
+        if self.tick % 3 != 0 {
+            return;
+        }
+        if let Overlay::Approve { id, .. } = &self.overlay {       // the asker gave up after 120 seconds: the question is gone
+            if id != "x" && !self.approve_dir.join(format!("{}.req", id)).exists() {
+                self.overlay = Overlay::None;
+                self.toast("the question ran out of time and counted as no".to_string());
+            }
+        }
+        if !matches!(self.overlay, Overlay::None) {
             return;
         }
         let Ok(dir) = fs::read_dir(&self.approve_dir) else { return };
@@ -397,7 +514,7 @@ impl App {
                 self.answer(id, true);
                 continue;
             }
-            self.overlay = Overlay::Approve { id: id.to_string(), command, cwd: v["cwd"].as_str().unwrap_or("").to_string() };
+            self.overlay = Overlay::Approve { id: id.to_string(), command, cwd: v["cwd"].as_str().unwrap_or("").to_string(), file: v["kind"].as_str() == Some("file") };
             return;
         }
     }
@@ -432,7 +549,11 @@ impl App {
                 if self.busy.is_some() {
                     self.stop_turn();
                 }
+                self.save_session();
+                self.session_id = None;
                 self.items.clear();
+                let _ = fs::remove_file(self.ctx.root.join("plan.json"));
+                self.refresh_side();
                 self.chat = Some(Chat::new());
                 self.tokens = (0, 0);
                 self.turns = 0;
@@ -451,7 +572,12 @@ impl App {
                 self.refresh_side();
             }
             "/go" | "/note" => self.toast(format!("{} TEXT", name)),
-            "/sessions" => self.pager("Sessions", crate::sessions::list(&self.ctx)),
+            "/sessions" => {
+                self.refresh_tabs();
+                let at = self.session_id.as_ref().and_then(|id| self.tabs.iter().rev().position(|(t, _)| t == id)).unwrap_or(0);
+                self.overlay = Overlay::Sessions { sel: at };
+            }
+            "/setup" => self.setup = true,
             "/crew" => self.pager("Crew", tools::crew(&self.ctx)),
             "/unravel" => {
                 let report = tools::unravel(&self.ctx, 1);
@@ -523,6 +649,7 @@ impl App {
         let mut run: Option<&'static Cmd> = None;
         let mut reply: Option<(String, bool, bool)> = None;
         let mut pick: Option<(usize, bool)> = None;
+        let mut open: Option<usize> = None;
         match &mut self.overlay {
             Overlay::None => {}
             Overlay::Palette { query, sel } => match key.code {
@@ -563,6 +690,16 @@ impl App {
                 KeyCode::PageDown => *scroll = (*scroll + 10).min(lines.len().saturating_sub(1)),
                 _ => {}
             },
+            Overlay::Sessions { sel } => match key.code {
+                KeyCode::Esc | KeyCode::Char('q') => close = true,
+                KeyCode::Up => *sel = sel.saturating_sub(1),
+                KeyCode::Down => *sel = (*sel + 1).min(self.tabs.len().saturating_sub(1)),
+                KeyCode::Enter => {
+                    open = Some(self.tabs.len().saturating_sub(1 + *sel));        // the list shows the newest first
+                    close = true;
+                }
+                _ => {}
+            },
             Overlay::Approve { id, .. } => match key.code {
                 KeyCode::Char('y') | KeyCode::Enter => reply = Some((id.clone(), true, false)),
                 KeyCode::Char('a') => reply = Some((id.clone(), true, true)),
@@ -583,6 +720,10 @@ impl App {
                 self.toast(format!("{} model is now {}", if weak { "weaker" } else { "main" }, model));
             }
             close = true;
+        }
+        if let Some(index) = open {
+            self.overlay = Overlay::None;
+            self.open_tab(index);
         }
         if let Some((id, yes, always)) = reply {
             self.allow_all |= always;
@@ -628,6 +769,12 @@ impl App {
             KeyCode::Char('n') if ctrl => self.command("/new"),
             KeyCode::Char('b') if ctrl => self.sidebar = !self.sidebar,
             KeyCode::F(1) => self.command("/help"),
+            KeyCode::F(2) => self.command("/sessions"),
+            KeyCode::F(3) => self.step_tab(-1),
+            KeyCode::F(4) => self.step_tab(1),
+            KeyCode::Left if alt => self.step_tab(-1),
+            KeyCode::Right if alt => self.step_tab(1),
+            KeyCode::Char(c) if alt && c.is_ascii_digit() && c != '0' => self.open_tab(c as usize - '1' as usize),
             KeyCode::Esc => {
                 if self.busy.is_some() {
                     self.stop_turn();
@@ -720,14 +867,11 @@ fn help_text() -> String {
 }
 
 /// Runs the interface until the person leaves it.
-pub fn run(ctx: Ctx, resume: Option<(Chat, String)>) -> Result<(), String> {
+pub fn run(ctx: Ctx, resume: Option<serde_json::Value>) -> Result<(), String> {
     art::detect_colour();
     let mut app = App::new(ctx);
-    if let Some((chat, title)) = resume {
-        app.tokens = (chat.input_tokens, chat.output_tokens);
-        app.turns = chat.turns;
-        app.chat = Some(chat);
-        app.note("↺", "resumed", title, art::SEA);
+    if let Some(entry) = resume {
+        app.open_session(&entry);
     }
     std::env::set_var("PENELOPE_APPROVE_DIR", &app.approve_dir);
     let mut terminal = ratatui::init();
@@ -743,7 +887,20 @@ pub fn run(ctx: Ctx, resume: Option<(Chat, String)>) -> Result<(), String> {
                 app.save_shot(svg);
             }
             if app.quit {
+                app.save_session();
                 return Ok(());
+            }
+            if app.setup {                       // the setup asks on the plain terminal, then the interface comes back
+                app.setup = false;
+                let _ = execute!(std::io::stdout(), DisableMouseCapture, DisableBracketedPaste);
+                ratatui::restore();
+                app.ctx.cfg = crate::setup::wizard(&mut std::io::stdin().lock(), &mut std::io::stdout(), app.ctx.cfg.clone());
+                save_config(&app.ctx);
+                terminal = ratatui::init();
+                let _ = execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste);
+                app.toast("settings saved".to_string());
+                app.refresh_side();
+                continue;
             }
             if event::poll(Duration::from_millis(80)).map_err(|e| e.to_string())? {
                 loop {
@@ -819,7 +976,7 @@ mod tests {
                 1 => Overlay::Palette { query: "m".into(), sel: 1 },
                 2 => Overlay::Models { sel: 0, weak: true },
                 3 => Overlay::Pager { title: "Help".into(), lines: help_text().lines().map(String::from).collect(), scroll: 2 },
-                _ => Overlay::Approve { id: "x".into(), command: "rm -rf target && cargo build".into(), cwd: "/tmp".into() },
+                _ => Overlay::Approve { id: "x".into(), command: "rm -rf target && cargo build".into(), cwd: "/tmp".into(), file: overlay % 2 == 0 },
             };
             for (w, h) in [(20, 5), (40, 12), (80, 24), (100, 30), (120, 40), (200, 60)] {
                 screen(&mut a, w, h);

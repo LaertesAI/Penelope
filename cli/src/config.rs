@@ -15,6 +15,9 @@ pub fn default_config() -> Value {
         "main": {"kind": "claude-cli", "model": "sonnet"},
         "weak": {"kind": "claude-cli", "model": "haiku"},
         "run_policy": "safe",
+        "edit_policy": "ask",
+        "delegate": "auto",
+        "search": {"kind": "auto"},
         "privacy": "rules",
         "auto_learn": true,
         "screencodec": {"command": "", "hosts": "", "images": ""}

@@ -34,7 +34,12 @@ fn short_name(name: &str) -> String {
 
 /// The one argument of a tool call a person wants to read: the command, the address, the query.
 fn tool_detail(input: &Value) -> String {
-    for key in ["command", "url", "query", "name", "path", "text", "ref", "pattern"] {
+    if let Some(items) = input["items"].as_array() {          // the plan: how far it is and the step in work
+        let done = items.iter().filter(|i| i["state"] == "done").count();
+        let now = items.iter().find(|i| i["state"] == "doing").or_else(|| items.iter().find(|i| i["state"] == "pending"));
+        return format!("{} of {} done{}", done, items.len(), now.and_then(|i| i["text"].as_str()).map(|t| format!(" · {}", t)).unwrap_or_default());
+    }
+    for key in ["command", "url", "query", "task", "path", "name", "text", "ref", "pattern"] {
         if let Some(s) = input[key].as_str().filter(|s| !s.is_empty()) {
             return s.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(160).collect();
         }
@@ -49,15 +54,35 @@ fn first_line(text: &str) -> String {
     text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("").chars().take(160).collect()
 }
 
-pub const RULES: &str = "You work inside Penelope, a small agent harness. Rules: \
+/// The rules the main model works by. They depend on the setting "delegate": who does the searching.
+pub fn rules(ctx: &Ctx) -> String {
+    let look = match ctx.cfg["delegate"].as_str().unwrap_or("auto") {
+        "off" => "2. Use web_search to find pages and fetch to read one. Use find, grep and read to look at files.",
+        "offer" => "2. Hand every lookup that needs more than one step to scout: research on the web, the question where something is in the \
+project. scout runs on a weaker model with its own tools and returns a short report. For a single quick lookup use web_search, fetch, find, grep or read yourself.",
+        _ => "2. Every search goes to scout: research on the web, reading pages, finding files, the question where something is in the project. \
+Give scout the full question and say what you need back. scout runs on a weaker model with its own tools and returns a short report. \
+You have no search tools of your own.",
+    };
+    let home = std::env::var("HOME").unwrap_or_default();
+    let cwd = std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_default();
+    let cwd = match cwd.strip_prefix(&home) {
+        Some(rest) if home.len() > 1 => format!("~{}", rest),
+        _ => cwd,
+    };
+    format!("You work inside Penelope, a small agent harness. The working directory is {cwd}. It is the project, also when a folder \
+above it holds a repository. Paths are relative to it, and ~ stands for the home folder. Rules: \
 1. Use the tool run for every shell command. Long output comes back condensed by a weaker model. Ask run_detail for raw lines only when you need them. \
-2. Use fetch for web pages and give it the question you want answered. \
-3. When the user states a rule, a preference or a fact to keep, store it with memory_note. At the start of a task, look up the topic with memory_go. \
-4. To look at a web page or a picture use the screencodec tools, never a screenshot. \
-5. Answer briefly.";
+{} \
+3. Use read for a file you are about to change, then edit for a part of it or write for the whole file. A change waits for the user's yes. \
+4. For a task with three steps or more, keep the list of steps current with plan. \
+5. When the user states a rule, a preference or a fact to keep, store it with memory_note. At the start of a task, look up the topic with memory_go. \
+6. To look at a web page as it is drawn or at a picture use the screencodec tools, never a screenshot. \
+7. Answer briefly.", look, cwd = cwd)
+}
 
 pub struct Chat {
-    session: Option<String>,
+    pub session: Option<String>,
     history: Vec<Value>,
     pub input_tokens: u64,
     pub output_tokens: u64,
@@ -96,7 +121,7 @@ impl Chat {
         if masked > 0 {
             on(Event::Masked(masked));
         }
-        let mut system = if memory.is_empty() { RULES.to_string() } else { format!("{}\n\nNotes from the memory map for this request:\n{}", RULES, memory) };
+        let mut system = if memory.is_empty() { rules(ctx) } else { format!("{}\n\nNotes from the memory map for this request:\n{}", rules(ctx), memory) };
         let skills = crate::plugins::skill_index(ctx);
         if !skills.is_empty() {
             system.push_str(&format!("\n\nInstalled skills (read one with the tool skill before you use it):\n{}", skills));
@@ -120,7 +145,7 @@ impl Chat {
         if let Ok(dir) = std::env::var("PENELOPE_APPROVE_DIR") {
             servers["penelope"]["env"] = json!({"PENELOPE_APPROVE_DIR": dir});       // the interface answers questions about unsafe commands
         }
-        let mut allowed: Vec<String> = ["run", "run_detail", "fetch", "memory_go", "memory_note", "memory_map", "skill"].iter().map(|t| format!("mcp__penelope__{}", t)).collect();
+        let mut allowed: Vec<String> = mcp::main_tools(ctx).iter().map(|t| format!("mcp__penelope__{}", t)).collect();
         if let Some(obj) = crate::plugins::servers(ctx).as_object() {
             for (k, s) in obj {
                 servers[k] = s.clone();        // tools of plugin servers are not on the allow list: the model sees them, a call is refused
@@ -212,7 +237,8 @@ impl Chat {
         let m = &ctx.cfg["main"];
         let base = m["base_url"].as_str().unwrap_or("http://localhost:11434/v1").trim_end_matches('/').to_string();
         let key = m["api_key_env"].as_str().and_then(|n| std::env::var(n).ok()).unwrap_or_default();
-        let tools: Vec<Value> = mcp::tool_specs().as_array().unwrap().iter()
+        let mine = mcp::main_tools(ctx);
+        let tools: Vec<Value> = mcp::tool_specs().as_array().unwrap().iter().filter(|t| mine.contains(&t["name"].as_str().unwrap_or("")))
             .map(|t| json!({"type": "function", "function": {"name": t["name"], "description": t["description"], "parameters": t["inputSchema"]}})).collect();
         self.history.push(json!({"role": "user", "content": user}));
         for _ in 0..8 {

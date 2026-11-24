@@ -3,10 +3,14 @@
 mod backend;
 mod loom;
 mod config;
+mod files;
 mod mcp;
 mod memory;
 mod plugins;
 mod privacy;
+mod scout;
+mod search;
+mod setup;
 mod sessions;
 mod tools;
 mod tui;
@@ -19,6 +23,7 @@ penelope chat --plain         chat line by line, without the full screen interfa
 penelope chat --resume N      go on with session N of the list
 penelope ask \"TEXT\"           one question, one answer
 penelope init                 create a .penelope folder in this directory
+penelope setup [--here]       answer seven questions: models, who searches, privacy, policies, web search
 penelope sessions             list the stored sessions, newest first
 penelope crew                 the eight model families and what does each job today
 penelope memory map           show the memory map
@@ -26,6 +31,8 @@ penelope memory go QUERY      follow the map to a waypoint and print the notes o
 penelope memory note [--path a/b] TEXT
                               store a rule or fact at a waypoint (without --path: filed by language or topic)
 penelope memory unravel [N]   take back the last note, or the last N notes
+penelope search WORDS         search the web and print up to 8 results
+penelope scout TASK           let the weaker model look something up with its own tool calls
 penelope run [--ask QUESTION] COMMAND
                               run a command, long output condensed by the weaker model
 penelope plugin add DIR       register a plugin folder in the format of Claude Code (skills and MCP servers)
@@ -55,6 +62,15 @@ fn main() {
         loom::say(&format!("ready: {}", root.display()));
         return;
     }
+    if cmd == "setup" {
+        // The settings go to the folder penelope would use here. `--here` makes a .penelope folder in this directory first.
+        let root = if args.iter().any(|a| a == "--here") { std::env::current_dir().unwrap().join(".penelope") } else { config::find_root(root_arg.as_deref()) };
+        let mut ctx = config::load(&root);
+        ctx.cfg = setup::wizard(&mut std::io::stdin().lock(), &mut std::io::stdout(), ctx.cfg.clone());
+        let _ = std::fs::write(root.join("config.json"), serde_json::to_string_pretty(&ctx.cfg).unwrap());
+        loom::say(&format!("saved: {}", root.join("config.json").display()));
+        return;
+    }
     let ctx = config::load(&config::find_root(root_arg.as_deref()));
     match cmd {
         "mcp" => mcp::serve(&ctx),
@@ -73,6 +89,8 @@ fn main() {
             let mut chat = backend::Chat::new();
             answer(&ctx, &mut chat, &text);
         }
+        "search" => print!("{}", search::search(&ctx, &args[1..].join(" "))),
+        "scout" => println!("{}", scout::run(&ctx, &args[1..].join(" "), "")),
         "doctor" => doctor(&ctx),
         "crew" => print!("{}", tools::crew(&ctx)),
         "sessions" => print!("{}", sessions::list(&ctx)),
@@ -86,7 +104,7 @@ fn main() {
             if let Some(i) = args.iter().position(|a| a == "--resume") {
                 let key = args.get(i + 1).cloned().unwrap_or_default();
                 match sessions::pick(&ctx, &key) {
-                    Some(entry) => resume = Some((backend::Chat::resume(&entry), entry["title"].as_str().unwrap_or("").to_string())),
+                    Some(entry) => resume = Some(entry),
                     None => {
                         loom::warn(&format!("no session {} in the list (penelope sessions)", key));
                         std::process::exit(2);
@@ -95,7 +113,7 @@ fn main() {
             }
             let plain = args.iter().any(|a| a == "--plain") || !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal();
             if plain {
-                repl(&ctx, resume.map(|(chat, _)| chat));
+                repl(&ctx, resume.map(|entry| backend::Chat::resume(&entry)));
             } else if let Err(e) = tui::run(ctx, resume) {
                 loom::warn(&e);
                 std::process::exit(1);
@@ -188,6 +206,13 @@ pub fn doctor_text(ctx: &config::Ctx) -> String {
     let sc = ctx.cfg["screencodec"]["command"].as_str().filter(|c| !c.is_empty()).map(std::path::PathBuf::from).or_else(|| config::which("screencodec-mcp"));
     line("screencodec-mcp (eyes: pages and pictures as text)", sc.is_some(), sc.map(|p| p.display().to_string()).unwrap_or_else(|| "not on the PATH, Penelope runs without it".into()));
     line("run policy", true, ctx.cfg["run_policy"].as_str().unwrap_or("safe").to_string());
+    line("edit policy (file changes)", true, ctx.cfg["edit_policy"].as_str().unwrap_or("ask").to_string());
+    line("delegate (who searches)", true, format!("{}: {}", ctx.cfg["delegate"].as_str().unwrap_or("auto"), match ctx.cfg["delegate"].as_str().unwrap_or("auto") {
+        "off" => "the main model searches itself",
+        "offer" => "the main model may search itself or send a scout",
+        _ => "every search runs on the weaker model as scout",
+    }));
+    line("web search", true, search::kind(ctx).to_string());
     line("memory map", true, format!("{} lines", tools::memory_map(ctx).lines().count()));
     out
 }
