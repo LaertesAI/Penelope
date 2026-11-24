@@ -6,18 +6,12 @@ take notes back.
 
 <img src="lockup.png" alt="Penelope lockup" width="60%">
 
-The files in this folder are a copy of `brand/penelope/` in the Laertes folder. The script there draws them
-(`brand/build/brand_build.py`). The whole set of ten marks and the rules for it are described in the Laertes `BRAND.md`.
+This folder holds only what the repository needs: the lockup for the README and the four SVG files the terminal
+pictures are built from. The full set of marks is kept outside this repository.
 
 | File | Use |
 |---|---|
-| `mark.svg`, `mark-ink.svg`, `mark-paper.svg` | the weave in colour and in one colour |
-| `logo.png` | the picture: a weaver at her loom in a dot screen, 1024 pixels |
-| `symbol.png` | the painted sign alone, 1024 pixels |
-| `logo.svg` | the flat tile as a vector file |
-| `lockup.svg`, `lockup.png` | weave, name and the word Harness |
-| `wordmark.svg` | the name in drawn capitals |
-| `favicon.svg`, `favicon-32.png`, `favicon-16.png` | small sizes |
+| `lockup.png` | weave picture, name and the word Harness, used at the top of the README |
 | `term-weave.svg`, `term-thread.svg` | the weave without its loose thread, and the thread alone as a mask |
 | `term-mark.svg`, `term-word.svg` | the mark and the name for the start screen |
 

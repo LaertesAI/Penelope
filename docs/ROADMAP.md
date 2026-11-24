@@ -95,7 +95,6 @@ Every part of the plan with its state on 2026-11-24, version 0.9.0. Earlier name
 - One pair of runs measured lessons: 2 tool calls became 1 and 656 output tokens became 401. No run of the pair returned the answer.
 - Input tokens of the same request were 7,658, 4,536 and 4,812 in 3 runs without a lesson. The 7,528 tokens of the run with lessons lie inside that spread.
 - 3 of 5 lesson steps of version 0.9.0 filed nothing. Two of them ran before `.penelope/lessons.log` existed, so their cause is unknown.
-- `docs/screens/lessons.png` is a picture of version 0.6.0 and shows the old family name Outis.
 - A scout cannot run commands outside the safe list and cannot change files.
 - A question about an unsafe command exists in the full screen interface only. Every other caller gets a refusal.
 - The interface was run in tmux with 124 columns and 40 rows. Other terminals are untested.

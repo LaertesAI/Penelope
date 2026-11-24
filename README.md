@@ -8,7 +8,22 @@ notes back the same way. Earlier names of the project: Kate with the command `ka
 with the command `strix` (0.4.0). The agency was called VeeAI and Polytrope before. The model families Utis, Klea,
 Tiresias and Telemach were called Outis, Kleia, Teiresias and Phaiax until 0.7.0.
 
-Status: version 0.9.0, private. Twenty-five real runs so far.
+## What sets Penelope apart
+
+- Tool work runs on a cheaper model. Searches go to a scout on the weaker model, and long command output is shortened
+  before the main model reads it. In one request 12,218 tokens of searching stayed on the weaker model while the main
+  model used 8,669. In one run 6,947 characters of command output became 168.
+- The memory is a map, and it learns from failed tool calls. Notes live at waypoints of a tree. After a turn with a
+  failed call the weaker model files up to 3 lessons, and every later turn gets them. `penelope memory unravel` takes
+  a note back.
+- A filter masks secrets before any model reads them: keys, passwords and tokens in requests, files, tool output and
+  answers, on request also e-mail addresses and IBANs.
+- No file changes without a yes. A change shows its diff first, a command outside the safe list asks, and scouts can
+  only read.
+- The model is your choice: the `claude` command with your own login, or an endpoint in the format of OpenAI with an
+  API key or a local model.
+
+Status: version 0.9.0. Twenty-five real runs so far.
 
 <p align="center"><img src="docs/screens/chat.png" alt="penelope: transcript on the left, the woven mark and the session numbers on the right" width="100%"></p>
 
@@ -105,9 +120,8 @@ away from the main model, ScreenCodec, plugins and the run policy. A terminal un
 shows the face as text in the input box. A terminal without 24 bit colour gets the nearest of 216 colours.
 Paths on the screen show the home folder as `~`.
 
-<p align="center"><img src="docs/screens/approve.png" alt="Question before a command outside the safe list" width="49%"> <img src="docs/screens/palette.png" alt="Command palette" width="49%"></p>
 
-<p align="center"><img src="docs/screens/approve-file.png" alt="Question before a change to a file: one removed line in red, two added lines in clay" width="49%"> <img src="docs/screens/question.png" alt="Question of the main model with two answers" width="49%"></p>
+<p align="center"><img src="docs/screens/approve-file.png" alt="Question before a change to a file: one removed line in red, two added lines in clay" width="80%"></p>
 
 ## Use without the interface
 
@@ -278,7 +292,6 @@ Four turns in the full screen interface, one session each:
 - Request with a piped command (`echo penelope | tr a-z A-Z`): the question appeared, `y` let it run, the model
   reported `PENELOPE`. The turn took 7,177 tokens in and 82 out.
 
-<p align="center"><img src="docs/screens/answer-masked.png" alt="An answer of the main model with a masked token and the note of utis below it" width="49%"> <img src="docs/screens/plugin-tools.png" alt="One plugin tool call that worked and one that the claude command refused" width="49%"></p>
 
 ## The crew
 
