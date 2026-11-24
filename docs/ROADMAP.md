@@ -41,6 +41,8 @@ Every part of the plan with its state on 2026-11-24, version 0.9.0. Earlier name
 
 ## Next
 
+[`PLAN.md`](PLAN.md) orders the open parts into versions 0.10 to 0.15: 11 further tools, 7 roles for subagents and 4 ways they work together.
+
 | Part | First step |
 |---|---|
 | Allow rule for a single tool of a plugin | a list of tool names next to `"allow"` in `plugins.json` |

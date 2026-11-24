@@ -19,7 +19,7 @@ Status: version 0.9.0, private. Twenty-five real runs so far.
 | [`cli/`](cli) | The Rust crate with the command `penelope` |
 | [`brand/`](brand) | Mark, logo, lockup, small marks and the four pictures of the terminal interface, see [`BRAND.md`](brand/BRAND.md) |
 | [`brand/build/`](brand/build) | `term_art.sh` turns the SVG files into the pictures the interface draws |
-| [`docs/`](docs) | [`ROADMAP.md`](docs/ROADMAP.md) with every planned part and its state, screen pictures |
+| [`docs/`](docs) | [`ROADMAP.md`](docs/ROADMAP.md) with every planned part and its state, [`PLAN.md`](docs/PLAN.md) with the remaining tools and the orchestration of subagents, screen pictures |
 
 The marks are drawn by a script in the Laertes folder (`brand/build/` there). This folder holds a copy of the results.
 
