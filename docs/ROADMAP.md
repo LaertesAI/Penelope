@@ -1,7 +1,7 @@
 # Penelope roadmap
 
 Every part of the plan with its state on 2026-11-24, version 0.10.0. Earlier names: Kate until 0.3.0, Strix Forgery in 0.4.0.
-The repository is public at https://github.com/LaertesAI/Penelope. Licence: not chosen yet.
+The repository is public at https://github.com/LaertesAI/Penelope. Licence: MIT, see [`LICENSE`](../LICENSE).
 
 ## Built
 

@@ -8,6 +8,7 @@
   <a href="#parts"><img src="https://img.shields.io/badge/MCP_tools-22-C4623E?style=flat-square&labelColor=1C1A17" alt="22 MCP tools"></a>
   <a href="docs/PROVIDERS.md"><img src="https://img.shields.io/badge/providers-23-C4623E?style=flat-square&labelColor=1C1A17" alt="23 providers"></a>
   <a href="#status"><img src="https://img.shields.io/badge/status-alpha-C4623E?style=flat-square&labelColor=1C1A17" alt="status alpha"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/licence-MIT-C4623E?style=flat-square&labelColor=1C1A17" alt="licence MIT"></a>
 </p>
 
 # Penelope
@@ -33,7 +34,7 @@ model, keeps notes in a memory map, and asks before every change to a file.
 | Real runs | 29 with the `claude` command: 25 up to version 0.9.0 and 4 for the tools new in 0.10.0, listed in [`docs/RUNS.md`](docs/RUNS.md). No run used a provider key. |
 | Platform | Linux. Background jobs read `/proc`. Windows and macOS are untried. |
 | Settings folder | `.penelope/` in the project, else `~/.penelope/` |
-| Licence | not chosen yet. No LICENSE file exists, and `cli/Cargo.toml` still carries the field `license = "MIT"` of an earlier version. |
+| Licence | MIT, see [`LICENSE`](LICENSE). `cli/Cargo.toml` carries the same field. |
 
 The badges above are static. Version and edition come from `cli/Cargo.toml`, the test count from `cargo test`.
 The tool count comes from `tool_specs` in `cli/src/mcp.rs`, the provider count from `cli/src/providers.rs`.
