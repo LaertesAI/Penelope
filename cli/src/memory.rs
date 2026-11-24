@@ -147,6 +147,27 @@ impl Memory {
         id
     }
 
+    /// The notes at a waypoint and at every waypoint below it. At most `limit` characters, the newest lines survive a cut.
+    pub fn branch(&self, root: &str, limit: usize) -> String {
+        let (mut text, mut stack) = (String::new(), vec![root.to_string()]);
+        while let Some(id) = stack.pop() {
+            if let Ok(body) = fs::read_to_string(self.note_file(&id)) {
+                let lines: Vec<&str> = body.lines().filter(|l| l.starts_with("- ")).collect();
+                if !lines.is_empty() {
+                    text.push_str(&format!("[{}]\n{}\n", id, lines.join("\n")));
+                }
+            }
+            stack.extend(self.children(&id));
+        }
+        while text.len() > limit {
+            match text.find('\n') {
+                Some(i) => text.drain(..=i),
+                None => break,
+            };
+        }
+        text
+    }
+
     /// Every note in the order it was written, at most the last 500.
     fn journal(&self) -> Vec<Value> {
         fs::read_to_string(self.dir.join("journal.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
@@ -303,6 +324,11 @@ mod tests {
         assert!(text.contains("anyhow") && !text.contains("unwrap"), "{}", text);
         assert_eq!(m.unravel(5).len(), 1);
         assert!(m.unravel(1).is_empty());
+        m.note("tools/edit", "Read the file before an edit.");
+        m.note("tools/run/cargo", "Tests run with cargo test --release.");
+        let lessons = m.branch("tools", 800);
+        assert!(lessons.contains("[tools/edit]") && lessons.contains("cargo test --release") && !lessons.contains("anyhow"), "{}", lessons);
+        assert!(m.branch("tools", 50).len() <= 50 && m.branch("missing", 800).is_empty());
         let _ = fs::remove_dir_all(&root);
     }
 }

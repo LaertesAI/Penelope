@@ -407,6 +407,10 @@ fn sidebar(f: &mut Frame, app: &App, area: Rect) {
     };
     section(f, &mut y, "CREW", vec![
         ("lead".into(), format!("{} · {}", main, mkind), PAPER),
+        ("nostos".into(), match app.ctx.cfg["delegate"].as_str().unwrap_or("auto") {
+            "off" => "no scout".to_string(),
+            mode => format!("{} · scout {}", crate::scout::model(&app.ctx)["model"].as_str().unwrap_or("?"), mode),
+        }, PAPER),
         ("aiolos".into(), format!("{} · stand-in", weak), PAPER),
         ("outis".into(), privacy, PAPER),
     ]);
@@ -515,6 +519,26 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
                 let more = format!("{} to {} of {} · up and down scroll", start + 1, (start + h).min(rows.len()), rows.len());
                 put(f, inner, inner.x, inner.bottom(), &more, on(DIM, RAISED));
             }
+        }
+        Overlay::Question { question, options, sel, .. } => {
+            let w = 76u16.min(area.width.saturating_sub(4)).max(10);
+            let rows = wrap_plain(question, (w as usize).saturating_sub(6).max(1));
+            let inner = dialog(f, area, "The main model asks", w, (rows.len() + options.len()) as u16 + 8);
+            let mut y = inner.y;
+            for row in &rows {
+                put(f, inner, inner.x, y, row, on(PAPER, RAISED));
+                y += 1;
+            }
+            y += 1;
+            for (i, option) in options.iter().enumerate() {
+                let chosen = i == *sel;
+                let (bg, colour) = if chosen { (CLAY, INK) } else { (RAISED, PAPER) };
+                let row = Rect::new(inner.x.saturating_sub(1), y, inner.width + 2, 1);
+                fill(f, row, bg);
+                put(f, row, inner.x, y, &format!("{}  {}", i + 1, clip(option, (inner.width as usize).saturating_sub(5))), on(colour, bg));
+                y += 1;
+            }
+            put(f, inner, inner.x, y + 1, "enter or the number chooses · esc closes without an answer", on(DIM, RAISED));
         }
         Overlay::Sessions { sel } => {
             let all = crate::sessions::all(&app.ctx);

@@ -48,6 +48,8 @@ pub enum Overlay {
     Approve { id: String, command: String, cwd: String, file: bool },
     /// The list of stored sessions. Enter opens one.
     Sessions { sel: usize },
+    /// A question of the main model with fixed answers.
+    Question { id: String, question: String, options: Vec<String>, sel: usize },
 }
 
 pub struct Cmd {
@@ -63,6 +65,7 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd { name: "/models", help: "choose the main and the weaker model", key: "ctrl+o", takes_text: false },
     Cmd { name: "/sessions", help: "list the stored sessions and open one", key: "f2", takes_text: false },
     Cmd { name: "/setup", help: "answer the setup questions again", key: "", takes_text: false },
+    Cmd { name: "/scout", help: "who searches: auto, web, offer or off (no word: the next one)", key: "", takes_text: false },
     Cmd { name: "/crew", help: "the model families and what does each job today", key: "", takes_text: false },
     Cmd { name: "/map", help: "show the memory map", key: "", takes_text: false },
     Cmd { name: "/go", help: "follow the memory map to a topic", key: "", takes_text: true },
@@ -81,6 +84,8 @@ pub const COMMANDS: &[Cmd] = &[
 enum Msg {
     Trail(Vec<String>, bool),
     Turn(TurnEvent),
+    /// Waypoints of the lessons the weaker model drew from the tool calls of a turn.
+    Lessons(Vec<String>),
     Done(Box<Chat>, Result<String, String>),
     Learned(Vec<String>),
 }
@@ -148,7 +153,7 @@ pub struct App {
 }
 
 /// Labels and icons of status lines, so that a stored transcript finds its fixed texts again.
-const NOTE_KINDS: &[(&str, &str)] = &[("memory", "◆"), ("learned", "✦"), ("outis", "◆"), ("resumed", "↺"), ("unravel", "↺"), ("stopped", "■"), ("note", "◆")];
+const NOTE_KINDS: &[(&str, &str)] = &[("memory", "◆"), ("learned", "✦"), ("outis", "◆"), ("resumed", "↺"), ("unravel", "↺"), ("stopped", "■"), ("lesson", "✦"), ("scout", "◆"), ("note", "◆")];
 
 fn item_json(item: &Item) -> serde_json::Value {
     use serde_json::json;
@@ -280,7 +285,7 @@ impl App {
     }
 
     pub fn mood(&self) -> Mood {
-        if matches!(self.overlay, Overlay::Approve { .. }) {
+        if matches!(self.overlay, Overlay::Approve { .. } | Overlay::Question { .. }) {
             return Mood::Asking;
         }
         if self.busy.is_some() {
@@ -374,10 +379,15 @@ impl App {
                 let _ = tx.send(Msg::Turn(e));
             });
             let answer = result.clone().ok();
+            let trace = chat.trace.clone();
             let _ = tx.send(Msg::Done(Box::new(chat), result));
             if let Some(a) = answer {
                 let ids = if ctx.cfg["auto_learn"].as_bool().unwrap_or(true) { tools::learn(&ctx, &text, &a) } else { Vec::new() };
                 let _ = tx.send(Msg::Learned(ids));
+            }
+            let lessons = tools::learn_tools(&ctx, &text, &trace);          // also after a failed turn: failures teach the most
+            if !lessons.is_empty() {
+                let _ = tx.send(Msg::Lessons(lessons));
             }
         });
     }
@@ -472,6 +482,14 @@ impl App {
                     self.refresh_tabs();
                     self.refresh_side();
                 }
+                Msg::Lessons(ids) => {
+                    for id in ids {
+                        self.note("✦", "lesson", format!("{} (from the tool calls of this turn)", id), art::CLAY);
+                        self.flash = Some((Mood::Learned, Instant::now()));
+                    }
+                    self.save_session();
+                    self.refresh_side();
+                }
                 Msg::Learned(ids) => {
                     self.learning = false;
                     for id in ids {
@@ -491,7 +509,7 @@ impl App {
         if self.tick % 3 != 0 {
             return;
         }
-        if let Overlay::Approve { id, .. } = &self.overlay {       // the asker gave up after 120 seconds: the question is gone
+        if let Overlay::Approve { id, .. } | Overlay::Question { id, .. } = &self.overlay {       // the asker gave up: the question is gone
             if id != "x" && !self.approve_dir.join(format!("{}.req", id)).exists() {
                 self.overlay = Overlay::None;
                 self.toast("the question ran out of time and counted as no".to_string());
@@ -510,6 +528,11 @@ impl App {
             self.seen.insert(id.to_string());
             let v: serde_json::Value = fs::read_to_string(entry.path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
             let command = v["command"].as_str().unwrap_or("").to_string();
+            if v["kind"].as_str() == Some("question") {
+                let options = v["options"].as_array().map(|a| a.iter().filter_map(|o| o.as_str().map(String::from)).collect()).unwrap_or_default();
+                self.overlay = Overlay::Question { id: id.to_string(), question: command, options, sel: 0 };
+                return;
+            }
             if self.allow_all {
                 self.answer(id, true);
                 continue;
@@ -520,8 +543,12 @@ impl App {
     }
 
     fn answer(&mut self, id: &str, yes: bool) {
+        self.answer_text(id, if yes { "yes" } else { "no" });
+    }
+
+    fn answer_text(&mut self, id: &str, text: &str) {
         let tmp = self.approve_dir.join(format!("{}.tmp", id));
-        let _ = fs::write(&tmp, if yes { "yes" } else { "no" });
+        let _ = fs::write(&tmp, text);
         let _ = fs::rename(&tmp, self.approve_dir.join(format!("{}.ans", id)));
     }
 
@@ -578,6 +605,19 @@ impl App {
                 self.overlay = Overlay::Sessions { sel: at };
             }
             "/setup" => self.setup = true,
+            "/scout" => {
+                let modes = ["auto", "web", "offer", "off"];
+                let now = self.ctx.cfg["delegate"].as_str().unwrap_or("auto").to_string();
+                let next = if modes.contains(&rest) { rest } else { modes[(modes.iter().position(|m| *m == now).unwrap_or(3) + 1) % 4] };
+                self.ctx.cfg["delegate"] = serde_json::json!(next);
+                save_config(&self.ctx);
+                self.note("◆", "scout", match next {
+                    "auto" => "auto: every search runs on the weaker model, from the next request on",
+                    "web" => "web: web research runs on the weaker model, the main model searches files itself",
+                    "offer" => "offer: the main model decides whether it searches itself or sends a scout",
+                    _ => "off: the main model does every search itself",
+                }.to_string(), art::SEA);
+            }
             "/crew" => self.pager("Crew", tools::crew(&self.ctx)),
             "/unravel" => {
                 let report = tools::unravel(&self.ctx, 1);
@@ -650,6 +690,7 @@ impl App {
         let mut reply: Option<(String, bool, bool)> = None;
         let mut pick: Option<(usize, bool)> = None;
         let mut open: Option<usize> = None;
+        let mut said: Option<(String, String)> = None;
         match &mut self.overlay {
             Overlay::None => {}
             Overlay::Palette { query, sel } => match key.code {
@@ -690,6 +731,15 @@ impl App {
                 KeyCode::PageDown => *scroll = (*scroll + 10).min(lines.len().saturating_sub(1)),
                 _ => {}
             },
+            Overlay::Question { id, options, sel, .. } => match key.code {
+                KeyCode::Up => *sel = sel.saturating_sub(1),
+                KeyCode::Down => *sel = (*sel + 1).min(options.len().saturating_sub(1)),
+                KeyCode::Enter => said = Some((id.clone(), options.get(*sel).cloned().unwrap_or_default())),
+                KeyCode::Char(c) if c.is_ascii_digit() && (c as usize - '0' as usize) >= 1 && (c as usize - '0' as usize) <= options.len() =>
+                    said = Some((id.clone(), options[c as usize - '1' as usize].clone())),
+                KeyCode::Esc => said = Some((id.clone(), String::new())),
+                _ => {}
+            },
             Overlay::Sessions { sel } => match key.code {
                 KeyCode::Esc | KeyCode::Char('q') => close = true,
                 KeyCode::Up => *sel = sel.saturating_sub(1),
@@ -721,6 +771,10 @@ impl App {
             }
             close = true;
         }
+        if let Some((id, text)) = said {
+            self.answer_text(&id, &text);
+            close = true;
+        }
         if let Some(index) = open {
             self.overlay = Overlay::None;
             self.open_tab(index);
@@ -745,7 +799,7 @@ impl App {
             return;
         }
         if !matches!(self.overlay, Overlay::None) {
-            if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) && !matches!(self.overlay, Overlay::Approve { .. }) {
+            if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) && !matches!(self.overlay, Overlay::Approve { .. } | Overlay::Question { .. }) {
                 self.overlay = Overlay::None;
                 return;
             }

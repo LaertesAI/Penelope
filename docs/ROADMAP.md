@@ -1,12 +1,12 @@
 # Penelope roadmap
 
-Every part of the plan with its state on 2026-11-24, version 0.6.0. Earlier names: Kate until 0.3.0, Strix Forgery in 0.4.0.
+Every part of the plan with its state on 2026-11-24, version 0.7.0. Earlier names: Kate until 0.3.0, Strix Forgery in 0.4.0.
 
 ## Built
 
 | Part | Where | Evidence |
 |---|---|---|
-| Command `penelope` in Rust | `cli/` | 25 tests |
+| Command `penelope` in Rust | `cli/` | 26 tests |
 | Full screen terminal interface | `cli/src/tui/` | 7 tests, 5 real turns |
 | Text that appears piece by piece | `cli/src/backend.rs`, `cli/src/tui/mod.rs` | 1 test, 15 words arrived in 7 pieces |
 | Privacy filter for the request and for tool output, level `pii` for e-mail addresses and IBANs | `cli/src/privacy.rs`, `cli/src/tools.rs` | 4 tests, a made-up token stayed hidden in 4 real turns |
@@ -16,6 +16,10 @@ Every part of the plan with its state on 2026-11-24, version 0.6.0. Earlier name
 | File tools read, write, edit, find, grep | `cli/src/files.rs` | 3 tests, 1 real change after a yes |
 | Plan of the running task in the side panel | `cli/src/tools.rs`, `cli/src/tui/view.rs` | 1 real run |
 | Setup with seven questions | `cli/src/setup.rs` | 1 test |
+| Lessons from tool calls, filed under `tools` and given to every later turn | `cli/src/tools.rs`, `cli/src/backend.rs` | 2 tests, 1 real lesson |
+| Scout settings: `delegate` with four values, `/scout`, own model | `cli/src/mcp.rs`, `cli/src/scout.rs` | 1 real switch |
+| Row of search sources with handover | `cli/src/search.rs` | claude and DuckDuckGo tried |
+| Tools `tree`, `outline`, `ask_user` | `cli/src/files.rs`, `cli/src/tools.rs` | 1 test, 1 real question |
 | Unravel: take back the last notes | `cli/src/memory.rs` | 1 test |
 | Crew in the side panel (lead, aiolos, outis) and `penelope crew` | `cli/src/tui/view.rs`, `cli/src/tools.rs` | shown in every screen picture |
 | Woven mark with six moods in the interface | `cli/src/tui/art.rs` | built from `brand/term-weave.svg`, the loose thread takes the colour of the mood |
@@ -41,6 +45,8 @@ Every part of the plan with its state on 2026-11-24, version 0.6.0. Earlier name
 | Scout with a local model | one run of `scout` against an OpenAI-compatible endpoint, the code path exists and is untested |
 | Several sessions running at once | one process per tab, today one turn runs at a time |
 | A tool that starts and watches training runs | first on Qwen2.5-0.5B on this PC, with a yes before every run on rented hardware |
+| Lessons from the scout's own tool calls | the scout reports its failed calls, today only the calls of the main model are read |
+| A check that a lesson helps | count the tool calls of the same request before and after the lesson |
 | Diff in the question "Change this file?" | show the changed lines, today the dialog names file, line and line counts |
 | Outis as a model next to the rules | the first trained Outis 1 Mini behind the same `guard_count` call |
 | Test of ScreenCodec inside the harness | one request that opens a local page |
@@ -69,6 +75,8 @@ Every part of the plan with its state on 2026-11-24, version 0.6.0. Earlier name
 - A session stored before 0.6.0 has no transcript. Its tab opens with one line that names it.
 - DuckDuckGo's HTML page refused automated searches after 2 queries. The search tool of the claude command took 15 s per query.
 - `grep` finds plain text. It has no regular expressions.
+- A lesson is written by the weaker model and is not checked. A wrong lesson stays until `penelope memory unravel` takes it back.
+- Whether lessons shorten later turns is not measured.
 - A scout cannot run commands outside the safe list and cannot change files.
 - A question about an unsafe command exists in the full screen interface only. Every other caller gets a refusal.
 - The interface was run in tmux with 124 columns and 40 rows. Other terminals are untested.

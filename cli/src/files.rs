@@ -226,6 +226,71 @@ pub fn grep(ctx: &Ctx, text: &str, dir: &str, files: &str, cwd: &str) -> String 
             if total > 80 { ", the first 80 follow" } else { "" }, shown)
 }
 
+/// Folders and files below a folder as an indented list. `depth` is the number of levels, 2 when 0. Deeper folders show their file count.
+pub fn tree(dir: &str, depth: usize, cwd: &str) -> String {
+    fn count(dir: &Path) -> usize {
+        fs::read_dir(dir).map(|d| d.flatten().map(|e| match e.file_type() {
+            Ok(t) if t.is_dir() && !SKIP.contains(&e.file_name().to_string_lossy().as_ref()) => count(&e.path()),
+            Ok(t) if t.is_file() => 1,
+            _ => 0,
+        }).sum()).unwrap_or(0)
+    }
+    fn go(dir: &Path, level: usize, depth: usize, out: &mut Vec<String>) {
+        let mut entries: Vec<(bool, String, PathBuf)> = fs::read_dir(dir).map(|d| d.flatten()
+            .map(|e| (e.file_type().map(|t| t.is_dir()).unwrap_or(false), e.file_name().to_string_lossy().to_string(), e.path())).collect()).unwrap_or_default();
+        entries.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+        for (is_dir, name, path) in entries {
+            if out.len() >= 300 {
+                return;
+            }
+            let pad = "  ".repeat(level);
+            if !is_dir {
+                out.push(format!("{}{}", pad, name));
+            } else if SKIP.contains(&name.as_str()) {
+                out.push(format!("{}{}/ (not listed)", pad, name));
+            } else if level + 1 >= depth {
+                out.push(format!("{}{}/ ({} files)", pad, name, count(&path)));
+            } else {
+                out.push(format!("{}{}/", pad, name));
+                go(&path, level + 1, depth, out);
+            }
+        }
+    }
+    let root = resolve(if dir.is_empty() { "." } else { dir }, cwd);
+    if !root.is_dir() {
+        return format!("{} is no folder", show(&root));
+    }
+    let mut out = Vec::new();
+    go(&root, 0, if depth == 0 { 2 } else { depth.min(6) }, &mut out);
+    format!("{}{}\n{}", show(&root), if out.len() >= 300 { ", the first 300 entries" } else { "" }, out.join("\n"))
+}
+
+/// Words a line starts with when it opens a function, a type, a class or a module.
+const OPENERS: &[&str] = &["fn ", "pub fn ", "pub(crate) fn ", "async fn ", "pub async fn ", "struct ", "pub struct ", "enum ", "pub enum ", "trait ", "pub trait ",
+    "impl ", "impl<", "mod ", "pub mod ", "const ", "pub const ", "static ", "def ", "async def ", "class ", "function ", "async function ", "export ", "interface ",
+    "func ", "public ", "private ", "protected ", "object ", "package "];
+
+/// The outline of a file: the lines that open a function, a type, a class or a section, with their line numbers. At most 200.
+pub fn outline(ctx: &Ctx, path: &str, cwd: &str) -> String {
+    let p = resolve(path, cwd);
+    let text = match fs::read_to_string(&p) {
+        Ok(t) => t,
+        Err(e) => return format!("cannot read {}: {}", show(&p), e),
+    };
+    let markdown = matches!(p.extension().and_then(|e| e.to_str()), Some("md") | Some("markdown") | Some("txt"));
+    let hits: Vec<String> = text.lines().enumerate().filter(|(_, l)| {
+        let t = l.trim_start();
+        let indent = l.len() - t.len();
+        if markdown { t.starts_with('#') } else { indent <= 8 && OPENERS.iter().any(|o| t.starts_with(o)) }
+    }).map(|(i, l)| format!("{:>5}  {}", i + 1, l.trim_end().chars().take(160).collect::<String>())).collect();
+    if hits.is_empty() {
+        return format!("{} has {} lines and no line that opens a function, a type or a section", show(&p), text.lines().count());
+    }
+    let (shown, _) = crate::tools::guard_count(ctx, &hits.iter().take(200).cloned().collect::<Vec<_>>().join("\n"));
+    format!("{} · {} lines, {} entries{}. Read a part with read, offset and limit.\n{}", show(&p), text.lines().count(), hits.len(),
+            if hits.len() > 200 { ", the first 200 follow" } else { "" }, shown)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,6 +325,11 @@ mod tests {
         let hits = grep(&ctx, "zwei", "", "*.txt", &cwd);
         assert!(hits.contains("src/a.txt:2: zwei") && hits.starts_with("1 lines in 1 files"), "{}", hits);
         assert!(grep(&ctx, "token", "", "", &cwd).contains("[masked:secret]"));
+        assert!(write(&ctx, "src/deep/b.rs", "use x;\n\npub fn one() {\n    let fn_like = 1;\n}\n\nstruct Two;\n", &cwd).starts_with("done"));
+        let listing = tree("", 2, &cwd);
+        assert!(listing.contains("src/\n") && listing.contains("  deep/ (1 files)") && listing.contains("  a.txt"), "{}", listing);
+        let lines = outline(&ctx, "src/deep/b.rs", &cwd);
+        assert!(lines.contains("7 lines, 2 entries") && lines.contains("    3  pub fn one() {") && lines.contains("    7  struct Two;"), "{}", lines);
         let _ = fs::remove_dir_all(&dir);
     }
 

@@ -32,6 +32,12 @@ pub fn tool_specs() -> Value {
         {"name": "grep", "description": "Find lines that hold a piece of text in the files below a folder. Plain text, no regular expression. Lower case text ignores case.",
          "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}, "dir": {"type": "string"},
              "files": {"type": "string", "description": "Name or path pattern of the files to look into, for example *.rs."}, "cwd": {"type": "string"}}, "required": ["text"]}},
+        {"name": "tree", "description": "Folders and files below a folder as an indented list, 2 levels deep unless depth says otherwise. Use it first in a project you do not know.",
+         "inputSchema": {"type": "object", "properties": {"dir": {"type": "string"}, "depth": {"type": "integer"}, "cwd": {"type": "string"}}}},
+        {"name": "outline", "description": "The outline of a file: every line that opens a function, a type, a class or a section, with its line number. Cheaper than read for a long file.",
+         "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}, "cwd": {"type": "string"}}, "required": ["path"]}},
+        {"name": "ask_user", "description": "Ask the user one question with 2 to 6 answers to choose from. Use it when two readings of the request lead to different work, before you guess.",
+         "inputSchema": {"type": "object", "properties": {"question": {"type": "string"}, "options": {"type": "array", "items": {"type": "string"}}}, "required": ["question", "options"]}},
         {"name": "scout", "description": "Hand a lookup or research task to a weaker model. It searches the web, reads pages and files, runs read-only commands and returns a short report. Its tool calls cost you nothing. Give the full question and say what you need back.",
          "inputSchema": {"type": "object", "properties": {"task": {"type": "string"}, "cwd": {"type": "string"}}, "required": ["task"]}},
         {"name": "plan", "description": "Store the steps of the running task, each with a state: pending, doing or done. Send the whole list every time. The user sees it next to the conversation.",
@@ -49,12 +55,15 @@ pub fn tool_specs() -> Value {
 }
 
 /// The tools the main model may call. With "delegate": "auto" every search belongs to the scout, so web_search, fetch,
-/// find and grep are missing here. "offer" keeps all tools next to the scout, "off" has no scout.
+/// find and grep are missing here. "web" sends only web research to the scout. "offer" keeps all tools next to the
+/// scout, "off" has no scout.
 pub fn main_tools(ctx: &Ctx) -> Vec<&'static str> {
-    let all = ["run", "run_detail", "fetch", "web_search", "read", "write", "edit", "find", "grep", "scout", "plan", "memory_go", "memory_note", "memory_map", "skill"];
+    let all = ["run", "run_detail", "fetch", "web_search", "read", "write", "edit", "find", "grep", "tree", "outline", "scout", "plan", "ask_user",
+               "memory_go", "memory_note", "memory_map", "skill"];
     let hidden: &[&str] = match ctx.cfg["delegate"].as_str().unwrap_or("auto") {
         "off" => &["scout"],
         "offer" => &[],
+        "web" => &["web_search", "fetch"],
         _ => &["web_search", "fetch", "find", "grep"],
     };
     all.into_iter().filter(|t| !hidden.contains(t)).collect()
@@ -83,6 +92,9 @@ pub fn call(ctx: &Ctx, name: &str, a: &Value) -> Result<String, String> {
         "find" => Ok(crate::files::find(&s("pattern"), &s("dir"), &s("cwd"))),
         "grep" => Ok(crate::files::grep(ctx, &s("text"), &s("dir"), &s("files"), &s("cwd"))),
         "scout" => Ok(crate::scout::run(ctx, &s("task"), &s("cwd"))),
+        "tree" => Ok(crate::files::tree(&s("dir"), n("depth"), &s("cwd"))),
+        "outline" => Ok(crate::files::outline(ctx, &s("path"), &s("cwd"))),
+        "ask_user" => Ok(tools::ask_user(&s("question"), &a["options"])),
         "plan" => Ok(tools::plan(ctx, &a["items"])),
         "run" => Ok(tools::run(ctx, &s("command"), &s("question"), &s("cwd"))),
         "run_detail" => Ok(tools::run_detail(ctx, a["id"].as_u64().unwrap_or(0), &s("pattern"))),

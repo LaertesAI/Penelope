@@ -158,6 +158,9 @@ fn answer(ctx: &config::Ctx, chat: &mut backend::Chat, text: &str) {
                 for id in tools::learn(ctx, text, &a) {
                     loom::say(&format!("learned: {}", id));
                 }
+                for id in tools::learn_tools(ctx, text, &chat.trace) {
+                    loom::say(&format!("lesson from the tool calls: {}", id));
+                }
             }
         }
         Err(e) => loom::warn(&e),
@@ -210,6 +213,7 @@ pub fn doctor_text(ctx: &config::Ctx) -> String {
     line("delegate (who searches)", true, format!("{}: {}", ctx.cfg["delegate"].as_str().unwrap_or("auto"), match ctx.cfg["delegate"].as_str().unwrap_or("auto") {
         "off" => "the main model searches itself",
         "offer" => "the main model may search itself or send a scout",
+        "web" => "web research runs on the scout, the main model searches files itself",
         _ => "every search runs on the weaker model as scout",
     }));
     line("web search", true, search::kind(ctx).to_string());

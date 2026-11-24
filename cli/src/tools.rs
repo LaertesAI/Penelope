@@ -86,7 +86,7 @@ pub fn crew(ctx: &Ctx) -> String {
     let rows: [(&str, &str, String); 8] = [
         ("Nostos", "tool calling", match ctx.cfg["delegate"].as_str().unwrap_or("auto") {
             "off" => format!("main model {} writes every tool call", model("main")),
-            mode => format!("stand-in {} runs lookups as scout (delegate {})", model("weak"), mode),
+            mode => format!("stand-in {} runs lookups as scout (delegate {})", crate::scout::model(ctx)["model"].as_str().unwrap_or("?"), mode),
         }),
         ("Teiresias", "router and decisions", "fixed rules: safe list for commands, walk through the memory map".to_string()),
         ("Outis", "privacy and PII detection", privacy),
@@ -155,6 +155,83 @@ pub fn ask_person(command: &str, cwd: &str, kind: &str) -> Option<bool> {
     }
     let _ = fs::remove_file(&req);
     Some(false)
+}
+
+/// Puts a question with fixed answers to the person at the interface. Returns the chosen answer, an empty text if the
+/// person closed the question, or None if nobody can answer. No answer within 5 minutes counts as closed.
+fn ask_choice(question: &str, options: &[String]) -> Option<String> {
+    let dir = std::path::PathBuf::from(std::env::var("PENELOPE_APPROVE_DIR").ok().filter(|d| !d.is_empty())?);
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let id = format!("{}-{}", std::process::id(), nanos);
+    let (req, ans, tmp) = (dir.join(format!("{}.req", id)), dir.join(format!("{}.ans", id)), dir.join(format!("{}.tmp", id)));
+    fs::write(&tmp, serde_json::json!({"kind": "question", "command": question, "options": options, "cwd": ""}).to_string()).ok()?;
+    fs::rename(&tmp, &req).ok()?;
+    for _ in 0..1500 {
+        if let Ok(answer) = fs::read_to_string(&ans) {
+            let _ = fs::remove_file(&ans);
+            let _ = fs::remove_file(&req);
+            return Some(answer.trim().to_string());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    let _ = fs::remove_file(&req);
+    Some(String::new())
+}
+
+/// The tool ask_user: the main model asks before it guesses.
+pub fn ask_user(question: &str, options: &serde_json::Value) -> String {
+    if crate::scout::inside() {
+        return "a scout cannot ask the user. Report what is unclear.".to_string();
+    }
+    let options: Vec<String> = options.as_array().map(|a| a.iter().filter_map(|o| o.as_str().map(|s| s.chars().take(70).collect())).take(6).collect()).unwrap_or_default();
+    if question.trim().is_empty() || options.len() < 2 {
+        return "give a question and 2 to 6 answers to choose from".to_string();
+    }
+    match ask_choice(question, &options) {
+        Some(a) if !a.is_empty() => format!("the user chose: {}", a),
+        Some(_) => "the user closed the question without an answer. Go on with the most careful choice and say which one you took.".to_string(),
+        None => "nobody can answer outside the full screen interface. Go on with the most careful choice and say which one you took.".to_string(),
+    }
+}
+
+/// One tool call of a turn: name, the argument shown to the person, whether it worked, the first line of its result.
+pub type Call = (String, String, bool, String);
+
+/// True if a turn holds something to learn from: a call that failed or was refused, or a long row of calls.
+pub fn worth_a_lesson(trace: &[Call]) -> bool {
+    let trouble = ["NOT ", "cannot ", "does not occur", " occurs ", "no file matches", "no line holds", "failed", "unknown tool", "could not"];
+    trace.len() >= 8 || trace.iter().any(|(_, _, ok, summary)| !ok || trouble.iter().any(|t| summary.contains(t)))
+}
+
+/// Learning from tool use: the weaker model reads the tool calls of one turn and files what would make the next turn
+/// shorter. The lessons live under the waypoint `tools` and reach the main model at the start of every turn.
+pub fn learn_tools(ctx: &Ctx, request: &str, trace: &[Call]) -> Vec<String> {
+    if !ctx.cfg["auto_learn"].as_bool().unwrap_or(true) || !worth_a_lesson(trace) {
+        return Vec::new();
+    }
+    let system = "You improve how a coding agent uses its tools. You get the tool calls of one turn in order, each with its result. Find what \
+would make the next turn shorter: a call that failed and the call that worked instead, a wrong assumption about the project, a step that was \
+not needed. Write one line per lesson in the form path | lesson. The path is tools/NAME for a lesson about one tool, or tools/project for a \
+fact about this project that the calls revealed (where things are, which command builds or tests it). The lesson is one short sentence in the \
+imperative that names the concrete thing. At most 3 lessons. Lessons that any agent already knows are not kept. If nothing is to learn, write NONE.";
+    let mut lines = vec![format!("Request: {}", request.chars().take(300).collect::<String>())];
+    for (i, (name, detail, ok, summary)) in trace.iter().take(40).enumerate() {
+        lines.push(format!("{}. {} {} -> {}{}", i + 1, name, detail.chars().take(160).collect::<String>(), if *ok { "" } else { "FAILED: " }, summary.chars().take(200).collect::<String>()));
+    }
+    let Ok(text) = weak::ask(&ctx.cfg["weak"], system, &guard(ctx, &lines.join("\n"))) else { return Vec::new() };
+    let mut out = Vec::new();
+    let mut m = Memory::open(&ctx.root);
+    let known = m.branch("tools", 4000);
+    for line in text.lines().take(3) {
+        if let Some((path, lesson)) = line.split_once('|') {
+            let (path, lesson) = (path.trim().trim_start_matches('-').trim(), lesson.trim());
+            let ok_path = path.starts_with("tools/") && path.len() <= 40 && path.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '/' || c == '-' || c == '_');
+            if ok_path && lesson.len() > 12 && lesson.len() < 240 && !known.contains(lesson) {
+                out.push(m.note(path, lesson));
+            }
+        }
+    }
+    out
 }
 
 /// Runs a shell command. Short output comes back as it is. Long output is stored and condensed by the weaker model.
@@ -342,4 +419,17 @@ pub fn plan(ctx: &Ctx, items: &serde_json::Value) -> String {
     let done = out.iter().filter(|i| i["state"] == "done").count();
     let _ = fs::write(ctx.root.join("plan.json"), serde_json::to_string_pretty(&out).unwrap());
     if out.is_empty() { "plan cleared".to_string() } else { format!("plan stored: {} steps, {} done", out.len(), done) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_failed_call_is_worth_a_lesson() {
+        let ok: Call = ("run".into(), "ls".into(), true, "exit code 0".into());
+        let bad: Call = ("edit".into(), "a.rs".into(), true, "the old text does not occur in a.rs".into());
+        assert!(!worth_a_lesson(&[ok.clone()]) && worth_a_lesson(&[ok.clone(), bad]) && worth_a_lesson(&vec![ok; 8]));
+        assert!(ask_user("Which?", &serde_json::json!(["a"])).starts_with("give a question"));
+    }
 }

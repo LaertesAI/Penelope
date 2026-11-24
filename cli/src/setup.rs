@@ -56,6 +56,7 @@ pub fn wizard(input: &mut dyn BufRead, out: &mut dyn Write, mut cfg: Value) -> V
     let cur = |cfg: &Value, key: &str, default: &str| cfg[key].as_str().unwrap_or(default).to_string();
     cfg["delegate"] = json!(choose(input, out, "Who searches (web, files, the project)?",
         &[("auto", "always the weaker model as scout, the main model has no search tools"),
+          ("web", "web research goes to the scout, the main model searches files itself"),
           ("offer", "the main model may search itself or send a scout"), ("off", "the main model searches itself")], &cur(&cfg, "delegate", "auto")));
     cfg["privacy"] = json!(choose(input, out, "What does the privacy filter mask before a model reads a text?",
         &[("rules", "keys, passwords, tokens, private key blocks"), ("pii", "the same plus e-mail addresses and IBANs"), ("off", "nothing")], &cur(&cfg, "privacy", "rules")));
@@ -85,7 +86,7 @@ mod tests {
         let start = crate::config::default_config();
         let mut out = Vec::new();
         // main: claude-cli, opus. weaker: openai with three texts. delegate offer, privacy pii, run kept, edit all, search searxng with an address.
-        let answers = "1\n2\n2\nhttp://localhost:1234/v1\nqwen2.5:0.5b\n\n2\n2\n\n2\n4\nhttp://localhost:8888\n";
+        let answers = "1\n2\n2\nhttp://localhost:1234/v1\nqwen2.5:0.5b\n\n3\n2\n\n2\n4\nhttp://localhost:8888\n";
         let cfg = wizard(&mut answers.as_bytes(), &mut out, start.clone());
         assert_eq!(cfg["main"], json!({"kind": "claude-cli", "model": "opus"}));
         assert_eq!(cfg["weak"], json!({"kind": "openai", "base_url": "http://localhost:1234/v1", "model": "qwen2.5:0.5b", "api_key_env": ""}));

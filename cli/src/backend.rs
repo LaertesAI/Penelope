@@ -39,7 +39,7 @@ fn tool_detail(input: &Value) -> String {
         let now = items.iter().find(|i| i["state"] == "doing").or_else(|| items.iter().find(|i| i["state"] == "pending"));
         return format!("{} of {} done{}", done, items.len(), now.and_then(|i| i["text"].as_str()).map(|t| format!(" · {}", t)).unwrap_or_default());
     }
-    for key in ["command", "url", "query", "task", "path", "name", "text", "ref", "pattern"] {
+    for key in ["command", "url", "query", "task", "question", "path", "name", "text", "ref", "pattern"] {
         if let Some(s) = input[key].as_str().filter(|s| !s.is_empty()) {
             return s.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(160).collect();
         }
@@ -60,9 +60,11 @@ pub fn rules(ctx: &Ctx) -> String {
         "off" => "2. Use web_search to find pages and fetch to read one. Use find, grep and read to look at files.",
         "offer" => "2. Hand every lookup that needs more than one step to scout: research on the web, the question where something is in the \
 project. scout runs on a weaker model with its own tools and returns a short report. For a single quick lookup use web_search, fetch, find, grep or read yourself.",
+        "web" => "2. Research on the web goes to scout: give it the full question and say what you need back. scout runs on a weaker model with \
+its own tools and returns a short report. You have no web tools of your own. For files use tree, find, grep, outline and read yourself.",
         _ => "2. Every search goes to scout: research on the web, reading pages, finding files, the question where something is in the project. \
 Give scout the full question and say what you need back. scout runs on a weaker model with its own tools and returns a short report. \
-You have no search tools of your own.",
+You have no search tools of your own, only tree and outline for a first look.",
     };
     let home = std::env::var("HOME").unwrap_or_default();
     let cwd = std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_default();
@@ -78,7 +80,9 @@ above it holds a repository. Paths are relative to it, and ~ stands for the home
 4. For a task with three steps or more, keep the list of steps current with plan. \
 5. When the user states a rule, a preference or a fact to keep, store it with memory_note. At the start of a task, look up the topic with memory_go. \
 6. To look at a web page as it is drawn or at a picture use the screencodec tools, never a screenshot. \
-7. Answer briefly.", look, cwd = cwd)
+7. When two readings of a request lead to different work, ask with ask_user before you guess. \
+8. Answer briefly. Today is {today} (UTC).", look, cwd = cwd,
+            today = &crate::sessions::stamp(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0))[..10])
 }
 
 pub struct Chat {
@@ -91,12 +95,14 @@ pub struct Chat {
     pub cancel: Arc<AtomicBool>,
     /// Process id of the running claude command, 0 when none runs.
     pub pid: Arc<AtomicU32>,
+    /// The tool calls of the last turn, for the lessons the weaker model draws from them.
+    pub trace: Vec<crate::tools::Call>,
 }
 
 impl Chat {
     pub fn new() -> Chat {
         Chat { session: None, history: Vec::new(), input_tokens: 0, output_tokens: 0, turns: 0,
-               cancel: Arc::new(AtomicBool::new(false)), pid: Arc::new(AtomicU32::new(0)) }
+               cancel: Arc::new(AtomicBool::new(false)), pid: Arc::new(AtomicU32::new(0)), trace: Vec::new() }
     }
 
     /// Goes on with a stored conversation of the claude command.
@@ -126,10 +132,32 @@ impl Chat {
         if !skills.is_empty() {
             system.push_str(&format!("\n\nInstalled skills (read one with the tool skill before you use it):\n{}", skills));
         }
-        let out = match ctx.cfg["main"]["kind"].as_str().unwrap_or("claude-cli") {
-            "openai" => self.turn_openai(ctx, user, &system, on),
-            _ => self.turn_claude(ctx, user, &system, on),
+        let lessons = crate::memory::Memory::open(&ctx.root).branch("tools", 900);
+        if !lessons.is_empty() {
+            system.push_str(&format!("\n\nLessons from earlier tool use, learned in this folder:\n{}", lessons));
+        }
+        let (mut trace, mut ids): (Vec<crate::tools::Call>, Vec<String>) = (Vec::new(), Vec::new());
+        let mut watch = |e: Event| {
+            match &e {
+                Event::ToolStart { id, name, detail } => {
+                    trace.push((name.clone(), detail.clone(), true, String::new()));
+                    ids.push(id.clone());
+                }
+                Event::ToolEnd { id, ok, summary } => {
+                    if let Some(i) = ids.iter().position(|x| x == id) {
+                        trace[i].2 = *ok;
+                        trace[i].3 = summary.clone();
+                    }
+                }
+                _ => {}
+            }
+            on(e)
         };
+        let out = match ctx.cfg["main"]["kind"].as_str().unwrap_or("claude-cli") {
+            "openai" => self.turn_openai(ctx, user, &system, &mut watch),
+            _ => self.turn_claude(ctx, user, &system, &mut watch),
+        };
+        self.trace = trace;
         if out.is_ok() {
             self.turns += 1;
             if let Some(id) = &self.session {

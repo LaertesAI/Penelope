@@ -1,6 +1,6 @@
 [package]
 name = "penelope"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 description = "Penelope: a small agent harness with a memory map, routed tool output and ScreenCodec as its eyes"
 license = "MIT"

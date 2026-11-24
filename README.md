@@ -7,7 +7,7 @@ comes from the weaver of the Odyssey, who undid part of her work every night: th
 notes back the same way. Earlier names of the project: Kate with the command `katecli` (until 0.3.0), Strix Forgery
 with the command `strix` (0.4.0).
 
-Status: version 0.6.0, private. Fourteen real runs so far.
+Status: version 0.7.0, private. Seventeen real runs so far.
 
 <p align="center"><img src="docs/screens/chat.png" alt="penelope: transcript on the left, the woven mark and the session numbers on the right" width="100%"></p>
 
@@ -34,12 +34,14 @@ The marks are drawn by a script in the Polytrope folder (`brand/build/` there). 
 | Memory map | Notes live at waypoints of a tree under `.penelope/memory/`. A lookup follows signposts from the start, one level at a time, and never searches all notes. Finished walks are stored, the same request jumps to its waypoint the next time. | works |
 | Eyes | If `screencodec-mcp` is installed, Penelope connects it: pages and pictures come as text, never as screenshots. | wired, not tested inside the harness |
 | Main model | The official `claude` command with the user's own login, or any OpenAI-compatible endpoint (API key or local model). | claude tested, OpenAI-compatible written and untested |
-| MCP server | `penelope mcp` offers all 15 tools to any MCP client: `run`, `run_detail`, `fetch`, `web_search`, `read`, `write`, `edit`, `find`, `grep`, `scout`, `plan`, `memory_go`, `memory_note`, `memory_map`, `skill`. | works |
+| MCP server | `penelope mcp` offers all 18 tools to any MCP client: `run`, `run_detail`, `fetch`, `web_search`, `read`, `write`, `edit`, `find`, `grep`, `tree`, `outline`, `scout`, `plan`, `ask_user`, `memory_go`, `memory_note`, `memory_map`, `skill`. | works |
 | Auto-learning | After each answer the weaker model reads the exchange and files lasting rules of the user at a waypoint. | works, 2 runs |
 | Plugins | `penelope plugin add DIR` registers a plugin folder of Claude Code: skills by name and description, MCP servers for the main model. | works, 1 plugin tried (9 skills, 7 servers) |
-| Scout | With `"delegate": "auto"` the main model has no search tools. Every search goes to the tool `scout`: the weaker model gets the task, calls `web_search`, `fetch`, `find`, `grep`, `read` and safe commands itself and returns a report of at most 15 lines. Its tokens never reach the main model. | works, 3 real tasks |
-| Web search | `web_search` asks the search tool of the `claude` command (run by the weaker model), DuckDuckGo's HTML page, a SearXNG instance or the Brave API. The query passes the privacy filter first. | claude and DuckDuckGo tried, SearXNG and Brave written and untested |
-| File tools | `read` with line numbers, `find` by name or path pattern, `grep` for plain text, `write` and `edit`. A change opens the question "Change this file?" in the interface. | works, 3 tests, 1 real change |
+| Scout | `delegate` decides who searches: `auto`, `web`, `offer` or `off`. `/scout` changes it in the interface, the setting `scout` gives the scout its own model. With `"delegate": "auto"` the main model has no search tools. Every search goes to the tool `scout`: the weaker model gets the task, calls `web_search`, `fetch`, `find`, `grep`, `read` and safe commands itself and returns a report of at most 15 lines. Its tokens never reach the main model. | works, 3 real tasks |
+| Web search | `web_search` tries a row of sources and takes the first that answers: the search tool of the `claude` command (run by the weaker model), a SearXNG instance if an address is set, the Brave API if a key is set, DuckDuckGo's HTML page last. The query passes the privacy filter first. | claude and DuckDuckGo tried, SearXNG and Brave written and untested |
+| Lessons from tool calls | After a turn with a failed or refused call, or with 8 calls and more, the weaker model reads the calls and files up to 3 lessons under the waypoint `tools`. Every later turn gets these lessons in its system prompt. | works, 2 tests, 1 real lesson filed and read back |
+| Question to the user | The tool `ask_user` opens a dialog with 2 to 6 answers. The main model asks before it guesses. | works, 1 real question |
+| File tools | `tree` for the folders, `outline` for the functions and sections of a file, `read` with line numbers, `find` by name or path pattern, `grep` for plain text, `write` and `edit`. A change opens the question "Change this file?" in the interface. | works, 3 tests, 1 real change |
 | Plan | The main model keeps the steps of a task with the tool `plan`. The side panel shows them with a mark per state. | works, 1 real run |
 | Sessions as tabs | Every conversation through the `claude` command is stored with its transcript. The top row shows the sessions as tabs, `f2` opens the list, `f3` and `f4` change the tab, `penelope chat --resume N` opens one from the command line. | works, 1 test, 2 real sessions |
 | Setup | `penelope setup` asks seven questions with numbered answers: both models, who searches, privacy, both policies, the search source. `/setup` does the same from the interface. | works, 1 test |
@@ -53,7 +55,7 @@ The marks are drawn by a script in the Polytrope folder (`brand/build/` there). 
 cd cli
 cargo build --release
 ./target/release/penelope doctor
-cargo test                      # 25 tests, no model call
+cargo test                      # 26 tests, no model call
 ```
 
 ## The full screen interface
@@ -82,7 +84,7 @@ or output selects the plain chat by itself.
 | `f12` | save the screen as an SVG picture under `.penelope/screens/` |
 | `ctrl+c` | empty the input, leave when it is empty |
 
-Commands: `/new`, `/models`, `/sessions`, `/setup`, `/crew`, `/map`, `/go TEXT`, `/note TEXT`, `/unravel`, `/stats`, `/plugins`,
+Commands: `/new`, `/models`, `/sessions`, `/setup`, `/scout [auto|web|offer|off]`, `/crew`, `/map`, `/go TEXT`, `/note TEXT`, `/unravel`, `/stats`, `/plugins`,
 `/doctor`, `/copy`, `/shot`, `/sidebar`, `/help`, `/quit`.
 
 The side panel shows the woven square. Its loose thread at the lower right takes the colour of the mood:
@@ -144,9 +146,12 @@ penelope mcp                                      # for other MCP clients
 - `run_policy: "safe"` runs read-only and build commands without shell operators. Every other command needs a yes in
   the interface. Outside the interface it is refused. `"all"` runs every command without a question.
 - `edit_policy: "ask"` asks before every change to a file. `"all"` changes files without a question.
-- `delegate: "auto"` sends every search to the scout on the weaker model. `"offer"` lets the main model choose, `"off"` has no scout.
-- `search.kind`: `auto` (the search tool of the `claude` command if the weaker model runs there, else DuckDuckGo), `claude`,
-  `duckduckgo`, `searxng` with `url`, `brave` with `api_key_env`, `off`. DuckDuckGo's page refused after 2 queries in a test.
+- `delegate: "auto"` sends every search to the scout on the weaker model. `"web"` sends web research only, the main model
+  keeps `find` and `grep`. `"offer"` lets the main model choose, `"off"` has no scout.
+- `scout: {"kind": ..., "model": ...}` gives the scout a model of its own, for example a local one. Without it the scout uses `weak`.
+- `search.kind`: `auto` tries claude, SearXNG (if `url` is set), Brave (if the key is in the environment) and DuckDuckGo in
+  this order. A single source: `claude`, `duckduckgo`, `searxng` with `url`, `brave` with `api_key_env`. `off` switches it off.
+  DuckDuckGo's page refused after 2 queries in a test. A user without the claude command needs SearXNG or a Brave key.
 - `privacy: "rules"` masks secrets in the request and in tool output. `"pii"` also masks e-mail addresses and IBANs.
   `"off"` passes everything unchanged.
 - A Claude subscription is used through the official `claude` command only. Penelope has no login of its own.
@@ -208,6 +213,14 @@ Runs of version 0.6.0 (2026-11-24), main model Claude Sonnet, weaker model Claud
 - A second session with one question, then `f3`: the first session came back with its whole transcript.
 - `penelope scout` from the command line answered a web question and a file question in 15 s with 4 steps.
 - A run before the fix sent the scout to the folder above the working directory. The rules now name the working directory.
+
+Runs of version 0.7.0 (2026-11-24):
+
+- `penelope ask` with a piped command: the command was refused outside the interface. After the turn the weaker
+  model filed one lesson at `tools/project`. A later request quoted that lesson from its system prompt word for word.
+- Request "ask me with ask_user which function to rename": the dialog showed `main` and `helper`, the key `2`
+  answered, the model reported `helper`.
+- `/scout web` changed the setting and stored it in `config.json`.
 
 ## The crew
 
