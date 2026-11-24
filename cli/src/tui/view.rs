@@ -2,6 +2,7 @@
 
 use super::art::{self, col, Mood, CLAY, ASH, DIM, INK, NIGHT, PAPER, RAISED, RED, SEA};
 use super::text::{clip, input_rows, markdown, width, wrap_plain};
+use super::picture;
 use super::{App, Item, Overlay, ToolState};
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
@@ -60,6 +61,7 @@ fn model_line(app: &App, weak: bool) -> (String, String) {
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
+    picture::cancel();
     fill(f, area, INK);
     f.buffer_mut().set_style(area, on(PAPER, INK));
     if area.width < 30 || area.height < 8 {
@@ -78,6 +80,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         chat(f, app, body);
     }
     overlay(f, app, body);
+    if !matches!(app.overlay, Overlay::None) {
+        picture::cancel();                       // a dialog may lie over the picture, so the picture leaves for that time
+    }
 }
 
 /// A path with the home folder written as `~`, so that no screen picture shows the name of the account.
@@ -245,37 +250,38 @@ fn slash_popup(f: &mut Frame, app: &App, x: u16, bottom: u16, w: u16, top_limit:
 fn home(f: &mut Frame, app: &App, area: Rect) {
     let w = area.width.saturating_sub(8).min(84).max(26);
     let x = area.x + (area.width - w) / 2;
-    let (word, loom) = (art::wordmark(), art::peek());
-    let show_word = area.height >= 32 && w >= 82;
-    let show_loom = area.height >= 22 && w >= 44;
-    let stack = if show_word { word.rows() + 3 } else { 3 } + if show_loom { loom.rows() } else { 1 } + 4 + 2;
+    let show_side = area.height >= 22 && w >= 44;
+    // The painted picture stands at the right where the terminal shows pictures: 24 columns and 12 rows,
+    // or 32 columns and 16 rows on a tall screen. No terminal gets a picture made of large pixels.
+    let (pw, ph): (u16, u16) = if !(show_side && picture::on()) { (0, 0) } else if area.height >= 40 { (32, 16) } else { (24, 12) };
+    let block = if show_side { ph.max(5) } else { 1 };
+    let stack = 3 + block + 4 + 2;
     let mut y = area.y + area.height.saturating_sub(stack) / 2;
-    if show_word {
-        word.draw(f.buffer_mut(), x + (w - word.w as u16) / 2, y, area);
-        y += word.rows() + 1;
-    } else {
-        put(f, area, x + (w.saturating_sub(8)) / 2, y, "penelope", bold(CLAY));
-        y += 1;
-    }
+    let name = if w >= 44 { "P E N E L O P E" } else { "penelope" };
+    put(f, area, x + w.saturating_sub(width(name) as u16) / 2, y, name, bold(CLAY));
+    y += 1;
     let tagline = "A command line harness that remembers the way.";
     put(f, area, x + w.saturating_sub(width(tagline) as u16) / 2, y, tagline, fg(ASH));
     y += 2;
-    if show_loom {
-        loom.draw(f.buffer_mut(), x + w - loom.w as u16 - 4, y, area);
+    if show_side {
+        if ph > 0 {
+            picture::want(Rect::new(x + w - pw - 4, y, pw, ph));
+        }
         let side = [format!("{} waypoints in the memory map", app.side.waypoints), format!("{} stored walks", app.side.walks),
                     if app.side.screencodec { "ScreenCodec connected".to_string() } else { "ScreenCodec not installed".to_string() },
                     format!("{} plugins", app.side.plugins)];
+        let lw = w.saturating_sub(pw + 6);
         for (i, line) in side.iter().enumerate() {
-            let ly = y + loom.rows() - 5 + i as u16;
-            put(f, Rect::new(x, ly, w.saturating_sub(loom.w as u16 + 6), 1), x + 2, ly, "◆", fg(SEA));
-            put(f, Rect::new(x, ly, w.saturating_sub(loom.w as u16 + 6), 1), x + 4, ly, line, fg(DIM));
+            let ly = y + block - 5 + i as u16;
+            put(f, Rect::new(x, ly, lw, 1), x + 2, ly, "◆", fg(SEA));
+            put(f, Rect::new(x, ly, lw, 1), x + 4, ly, line, fg(DIM));
         }
-        y += loom.rows();
+        y += block;
     } else {
         y += 1;
     }
     let bottom = (y + 4 + (input_rows(&app.input, app.cursor, (w as usize).saturating_sub(4)).0.len().min(8) as u16 - 1)).min(area.bottom() - 1);
-    let top = input_box(f, app, x, bottom, w, area.y, !show_loom);
+    let top = input_box(f, app, x, bottom, w, area.y, !show_side);
     hints(f, app, Rect::new(x, bottom, w, 1));
     slash_popup(f, app, x, top, w, area.y);
 }
@@ -368,10 +374,11 @@ fn sidebar(f: &mut Frame, app: &App, area: Rect) {
     let inner = Rect::new(x, area.y, w, area.height);
     let mood = app.mood();
     let mut y = area.y + 1;
-    if area.height >= 34 {
-        let head = art::head(mood, app.tick % 50 < 2);
-        head.draw(f.buffer_mut(), area.x + (area.width - head.w as u16) / 2, y, area);
-        y += head.rows() + 1;
+    if area.height >= 34 && picture::on() {
+        // the painted picture, 22 columns wide, where the terminal shows pictures
+        let (pw, ph) = (22u16, 11u16);
+        picture::want(Rect::new(area.x + (area.width - pw) / 2, y, pw, ph));
+        y += ph + 1;
     }
     let state = if app.busy.is_some() { format!("{} {}", mood.name(), spinner(app)) } else { mood.name().to_string() };
     let label = format!("Penelope {} {}", mood.face(), state);

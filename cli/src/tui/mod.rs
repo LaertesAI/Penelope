@@ -3,6 +3,7 @@
 //! One thread draws and reads keys. A turn of the main model runs in a second thread and reports through a channel.
 
 mod art;
+mod picture;
 mod text;
 mod view;
 
@@ -939,6 +940,8 @@ fn help_text() -> String {
 /// Runs the interface until the person leaves it.
 pub fn run(ctx: Ctx, resume: Option<serde_json::Value>) -> Result<(), String> {
     art::detect_colour();
+    picture::detect();
+    let mut painter = picture::Painter::default();
     let mut app = App::new(ctx);
     if let Some(entry) = resume {
         app.open_session(&entry);
@@ -956,12 +959,14 @@ pub fn run(ctx: Ctx, resume: Option<serde_json::Value>) -> Result<(), String> {
                 let svg = art::buffer_svg(frame.buffer);
                 app.save_shot(svg);
             }
+            let _ = painter.sync(&mut std::io::stdout());
             if app.quit {
                 app.save_session();
                 return Ok(());
             }
             if app.setup {                       // the setup asks on the plain terminal, then the interface comes back
                 app.setup = false;
+                painter.end(&mut std::io::stdout());
                 let _ = execute!(std::io::stdout(), DisableMouseCapture, DisableBracketedPaste);
                 ratatui::restore();
                 app.ctx.cfg = crate::setup::wizard(&mut std::io::stdin().lock(), &mut std::io::stdout(), app.ctx.cfg.clone());
@@ -977,6 +982,7 @@ pub fn run(ctx: Ctx, resume: Option<serde_json::Value>) -> Result<(), String> {
                     match event::read().map_err(|e| e.to_string())? {
                         Event::Key(k) if k.kind != KeyEventKind::Release => app.key(k),
                         Event::Paste(s) => app.insert(&s.replace("\r\n", "\n").replace('\r', "\n")),
+                        Event::Resize(..) => painter.reset(&mut std::io::stdout()),
                         Event::Mouse(m) => match m.kind {
                             MouseEventKind::ScrollUp => app.scroll += 3,
                             MouseEventKind::ScrollDown => app.scroll = app.scroll.saturating_sub(3),
@@ -995,6 +1001,7 @@ pub fn run(ctx: Ctx, resume: Option<serde_json::Value>) -> Result<(), String> {
     if app.busy.is_some() {
         app.stop_turn();
     }
+    painter.end(&mut std::io::stdout());
     let _ = execute!(std::io::stdout(), DisableMouseCapture, DisableBracketedPaste);
     ratatui::restore();
     result

@@ -109,7 +109,7 @@ penelope provider use openai --base-url http://localhost:9000/v1 --model NAME
 | Auto-learning | After each answer the weaker model files lasting rules of the user at a waypoint. | 0.2 | 2 runs |
 | Plugins | `penelope plugin add DIR` registers a plugin folder of Claude Code with its skills and MCP servers. | 0.2 | 1 plugin, 9 skills, 7 servers |
 | Statistic | `penelope stats` counts the characters kept away from the main model and the masked items. | 0.2 | yes |
-| Full screen interface | Transcript, input box, side panel with the woven mark, command list on `/`, palette on `ctrl+p`. | 0.3 | 12 turns |
+| Full screen interface | Transcript, input box, side panel with the painted picture, command list on `/`, palette on `ctrl+p`. | 0.3 | 12 turns |
 | Approval | A command outside the safe list asks: run once, allow all in this session, or refuse. | 0.3 | 3 commands |
 | Privacy filter | Known key formats, values behind names such as `password` or `token`, and private key blocks become `[masked:...]`. The level `pii` adds e-mail addresses and IBANs. | 0.4 | 5 turns |
 | Text piece by piece | The answer appears while the model writes. | 0.4 | 15 words in 7 pieces |
@@ -138,7 +138,11 @@ The 22 tools: `run`, `run_detail`, `job_start`, `job_read`, `job_stop`, `fetch`,
 
 ## The full screen interface
 
-<p align="center"><img src="docs/screens/home.png" alt="Start screen of penelope with the name, the woven mark and the input box" width="80%"></p>
+<p align="center"><img src="docs/screens/home.png" alt="Start screen of penelope in kitty with the name, the painted picture of Penelope at the loom and the input box" width="80%"></p>
+
+The painted picture is a real picture, sent through the graphics protocol of kitty. It shows in kitty, Ghostty, WezTerm and Konsole.
+Other terminals and tmux show the name alone. `PENELOPE_PICTURE=off` switches it off, `PENELOPE_PICTURE=on` forces it.
+The start screen above is a picture of kitty on a virtual display. The other three screens are from version 0.9.0 and show the earlier woven mark.
 
 `penelope` without arguments opens it. `penelope chat --plain` keeps the line by line chat. A pipe on standard input
 or output selects the plain chat by itself.
