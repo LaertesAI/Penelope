@@ -1,4 +1,4 @@
-//! penelope: the Polytrope harness on the command line.
+//! penelope: the Laertes harness on the command line.
 
 mod backend;
 mod loom;

@@ -1,13 +1,14 @@
-<p align="center"><img src="brand/lockup.png" alt="Penelope, the harness of Polytrope" width="70%"></p>
+<p align="center"><img src="brand/lockup.png" alt="Penelope, the harness of Laertes" width="70%"></p>
 
 # Penelope
 
-A command line harness that remembers the way. Penelope is the harness of Polytrope, an AI research agency. The name
-comes from the weaver of the Odyssey, who undid part of her work every night: the memory map of the harness can take
+A command line harness that remembers the way. Penelope is the harness of Laertes, an AI research agency. In the
+Odyssey Penelope weaves a shroud for Laertes and undoes part of it every night: the memory map of the harness can take
 notes back the same way. Earlier names of the project: Kate with the command `katecli` (until 0.3.0), Strix Forgery
-with the command `strix` (0.4.0).
+with the command `strix` (0.4.0). The agency was called VeeAI and Polytrope before. The model families Utis, Klea,
+Tiresias and Telemach were called Outis, Kleia, Teiresias and Phaiax until 0.7.0.
 
-Status: version 0.7.0, private. Seventeen real runs so far.
+Status: version 0.8.0, private. Seventeen real runs so far.
 
 <p align="center"><img src="docs/screens/chat.png" alt="penelope: transcript on the left, the woven mark and the session numbers on the right" width="100%"></p>
 
@@ -20,7 +21,7 @@ Status: version 0.7.0, private. Seventeen real runs so far.
 | [`brand/build/`](brand/build) | `term_art.sh` turns the SVG files into the pictures the interface draws |
 | [`docs/`](docs) | [`ROADMAP.md`](docs/ROADMAP.md) with every planned part and its state, screen pictures |
 
-The marks are drawn by a script in the Polytrope folder (`brand/build/` there). This folder holds a copy of the results.
+The marks are drawn by a script in the Laertes folder (`brand/build/` there). This folder holds a copy of the results.
 
 ## What it does
 
@@ -46,7 +47,7 @@ The marks are drawn by a script in the Polytrope folder (`brand/build/` there). 
 | Sessions as tabs | Every conversation through the `claude` command is stored with its transcript. The top row shows the sessions as tabs, `f2` opens the list, `f3` and `f4` change the tab, `penelope chat --resume N` opens one from the command line. | works, 1 test, 2 real sessions |
 | Setup | `penelope setup` asks seven questions with numbered answers: both models, who searches, privacy, both policies, the search source. `/setup` does the same from the interface. | works, 1 test |
 | Unravel | `penelope memory unravel [N]` takes back the last N notes of the memory map. A journal keeps the order of the notes. | works, 1 test |
-| Crew | `penelope crew` lists the eight model families of Polytrope and what does each job today. | works |
+| Crew | `penelope crew` lists the eight model families of Laertes and what does each job today. | works |
 | Statistic | `penelope stats` counts how many characters of tool output stayed away from the main model and how many items the filter masked. | works |
 
 ## Build
@@ -99,7 +100,7 @@ The side panel shows the woven square. Its loose thread at the lower right takes
 | asleep | `[#.#]` | grey | no key for 3 minutes |
 
 Below the mark: tokens and turns of the session, the crew (lead model, the stand-in for Aiolos that condenses tool
-output, the rules of Outis with their count), the way through the memory map, the share of tool output that stayed
+output, the rules of Utis with their count), the way through the memory map, the share of tool output that stayed
 away from the main model, ScreenCodec, plugins and the run policy. A terminal under 100 columns hides the panel and
 shows the face as text in the input box. A terminal without 24 bit colour gets the nearest of 216 colours.
 Paths on the screen show the home folder as `~`.
@@ -224,17 +225,17 @@ Runs of version 0.7.0 (2026-11-24):
 
 ## The crew
 
-Polytrope plans one small model family per job. `penelope crew` prints this table with the settings of the folder:
+Laertes plans one small model family per job. `penelope crew` prints this table with the settings of the folder:
 
 | Family | Job | Today in Penelope |
 |---|---|---|
 | Nostos | tool calling | the weaker model runs lookups as scout, the main model writes the other tool calls |
-| Teiresias | router and decisions | fixed rules: safe list for commands, walk through the memory map |
-| Outis | privacy and PII detection | fixed rules in `cli/src/privacy.rs` |
+| Tiresias | router and decisions | fixed rules: safe list for commands, walk through the memory map |
+| Utis | privacy and PII detection | fixed rules in `cli/src/privacy.rs` |
 | Aiolos | compression and summaries | the weaker model condenses long tool output |
 | Argos | judge and scoring | not in use |
-| Kleia | data filter | not in use |
-| Phaiax | coding and agents | the main model |
+| Klea | data filter | not in use |
+| Telemach | coding and agents | the main model |
 | Proteus | ML engineering, MoE conversion | not in use |
 
 None of the eight families is trained yet. The research folder of each family is `../models/NAME/research/`.

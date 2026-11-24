@@ -153,7 +153,7 @@ pub struct App {
 }
 
 /// Labels and icons of status lines, so that a stored transcript finds its fixed texts again.
-const NOTE_KINDS: &[(&str, &str)] = &[("memory", "◆"), ("learned", "✦"), ("outis", "◆"), ("resumed", "↺"), ("unravel", "↺"), ("stopped", "■"), ("lesson", "✦"), ("scout", "◆"), ("note", "◆")];
+const NOTE_KINDS: &[(&str, &str)] = &[("memory", "◆"), ("learned", "✦"), ("utis", "◆"), ("resumed", "↺"), ("unravel", "↺"), ("stopped", "■"), ("lesson", "✦"), ("scout", "◆"), ("note", "◆")];
 
 fn item_json(item: &Item) -> serde_json::Value {
     use serde_json::json;
@@ -425,7 +425,7 @@ impl App {
                     self.scroll = 0;
                 }
                 Msg::Turn(TurnEvent::Masked(n)) => {
-                    self.note("◆", "outis", format!("{} masked in the request before the model read it", if n == 1 { "1 item".to_string() } else { format!("{} items", n) }), art::SEA);
+                    self.note("◆", "utis", format!("{} masked in the request before the model read it", if n == 1 { "1 item".to_string() } else { format!("{} items", n) }), art::SEA);
                     self.refresh_side();
                 }
                 Msg::Turn(TurnEvent::ToolStart { id, name, detail }) => {
@@ -1061,7 +1061,7 @@ mod tests {
         a.items.push(Item::Reply("Three files: **a**, `b` and c.".into()));
         let chat = screen(&mut a, 120, 40);
         assert!(chat.contains("list the files") && chat.contains("Three files: a, b and c."), "{}", chat);
-        assert!(chat.contains("MEMORY") && chat.contains("awake") && chat.contains("CREW") && chat.contains("outis"), "{}", chat);
+        assert!(chat.contains("MEMORY") && chat.contains("awake") && chat.contains("CREW") && chat.contains("utis"), "{}", chat);
         let narrow = screen(&mut a, 70, 24);
         assert!(!narrow.contains("MEMORY") && narrow.contains("[#|#]"), "{}", narrow);
     }

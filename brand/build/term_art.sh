@@ -1,6 +1,6 @@
 #!/bin/sh
 # Renders the small pictures of the terminal interface as raw bytes. Usage: sh brand/build/term_art.sh (from the harness folder)
-# The SVG files come from the brand build of the Polytrope folder (brand/build/brand_build.py there).
+# The SVG files come from the brand build of the Laertes folder (brand/build/brand_build.py there).
 set -e
 out=cli/art
 tmp=$(mktemp -d)

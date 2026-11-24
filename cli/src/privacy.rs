@@ -1,5 +1,5 @@
 //! The privacy filter. It masks secrets in requests and tool output before any model reads the text. Today it works
-//! with fixed rules. An Outis model takes this place later. The level "pii" also masks e-mail addresses and IBANs.
+//! with fixed rules. An Utis model takes this place later. The level "pii" also masks e-mail addresses and IBANs.
 
 const KEY_NAMES: &[&str] = &["password", "passwd", "secret", "token", "api_key", "apikey", "api-key", "access_key", "private_key", "authorization"];
 /// Prefix of a known key format and the shortest length that counts.

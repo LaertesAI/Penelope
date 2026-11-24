@@ -1,6 +1,6 @@
 # Penelope roadmap
 
-Every part of the plan with its state on 2026-11-24, version 0.7.0. Earlier names: Kate until 0.3.0, Strix Forgery in 0.4.0.
+Every part of the plan with its state on 2026-11-24, version 0.8.0. Earlier names: Kate until 0.3.0, Strix Forgery in 0.4.0.
 
 ## Built
 
@@ -21,7 +21,7 @@ Every part of the plan with its state on 2026-11-24, version 0.7.0. Earlier name
 | Row of search sources with handover | `cli/src/search.rs` | claude and DuckDuckGo tried |
 | Tools `tree`, `outline`, `ask_user` | `cli/src/files.rs`, `cli/src/tools.rs` | 1 test, 1 real question |
 | Unravel: take back the last notes | `cli/src/memory.rs` | 1 test |
-| Crew in the side panel (lead, aiolos, outis) and `penelope crew` | `cli/src/tui/view.rs`, `cli/src/tools.rs` | shown in every screen picture |
+| Crew in the side panel (lead, aiolos, utis) and `penelope crew` | `cli/src/tui/view.rs`, `cli/src/tools.rs` | shown in every screen picture |
 | Woven mark with six moods in the interface | `cli/src/tui/art.rs` | built from `brand/term-weave.svg`, the loose thread takes the colour of the mood |
 | Routed tool output through a weaker model | `cli/src/tools.rs`, `cli/src/weak.rs` | 6,947 characters became 168 in one run |
 | Approval question for unsafe commands | `cli/src/tools.rs`, `cli/src/tui/mod.rs` | 2 real commands answered with yes |
@@ -48,7 +48,7 @@ Every part of the plan with its state on 2026-11-24, version 0.7.0. Earlier name
 | Lessons from the scout's own tool calls | the scout reports its failed calls, today only the calls of the main model are read |
 | A check that a lesson helps | count the tool calls of the same request before and after the lesson |
 | Diff in the question "Change this file?" | show the changed lines, today the dialog names file, line and line counts |
-| Outis as a model next to the rules | the first trained Outis 1 Mini behind the same `guard_count` call |
+| Utis as a model next to the rules | the first trained Utis 1 Mini behind the same `guard_count` call |
 | Test of ScreenCodec inside the harness | one request that opens a local page |
 | Comparison run without condensing | same request with `run_policy` unchanged and the weaker model switched off |
 
@@ -56,7 +56,7 @@ Every part of the plan with its state on 2026-11-24, version 0.7.0. Earlier name
 
 | Part | Open question |
 |---|---|
-| The eight model families (Nostos, Teiresias, Outis, Aiolos, Argos, Kleia, Phaiax, Proteus) | none is trained, each has a brief under `../models/NAME/research/` |
+| The eight model families (Nostos, Tiresias, Utis, Aiolos, Argos, Klea, Telemach, Proteus) | none is trained, each has a brief under `../models/NAME/research/` |
 | Scheduled tasks with a list in the interface | timer inside the harness or systemd user timers |
 | Bots (chat services) | which service first |
 | Hugging Face model browser and download | where models are stored, which runtime loads them |

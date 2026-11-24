@@ -74,7 +74,7 @@ fn guard(ctx: &Ctx, text: &str) -> String {
     guard_count(ctx, text).0
 }
 
-/// The eight model families of Polytrope and what does each job in Penelope today.
+/// The eight model families of Laertes and what does each job in Penelope today.
 pub fn crew(ctx: &Ctx) -> String {
     let model = |key: &str| format!("{} ({})", ctx.cfg[key]["model"].as_str().unwrap_or("?"), ctx.cfg[key]["kind"].as_str().unwrap_or("?"));
     let masked = fs::read_to_string(ctx.root.join("stats.json")).ok().and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
@@ -88,19 +88,19 @@ pub fn crew(ctx: &Ctx) -> String {
             "off" => format!("main model {} writes every tool call", model("main")),
             mode => format!("stand-in {} runs lookups as scout (delegate {})", crate::scout::model(ctx)["model"].as_str().unwrap_or("?"), mode),
         }),
-        ("Teiresias", "router and decisions", "fixed rules: safe list for commands, walk through the memory map".to_string()),
-        ("Outis", "privacy and PII detection", privacy),
+        ("Tiresias", "router and decisions", "fixed rules: safe list for commands, walk through the memory map".to_string()),
+        ("Utis", "privacy and PII detection", privacy),
         ("Aiolos", "compression and summaries", format!("stand-in {} condenses long tool output", model("weak"))),
         ("Argos", "judge and scoring", "not in use yet".to_string()),
-        ("Kleia", "data filter", "not in use yet".to_string()),
-        ("Phaiax", "coding and agents", format!("main model {}", model("main"))),
+        ("Klea", "data filter", "not in use yet".to_string()),
+        ("Telemach", "coding and agents", format!("main model {}", model("main"))),
         ("Proteus", "ML engineering, MoE conversion", "not in use yet".to_string()),
     ];
     let mut out = format!("{:<10} {:<31} {}\n", "family", "role", "today in Penelope");
     for (name, role, today) in rows {
         out.push_str(&format!("{:<10} {:<31} {}\n", name, role, today));
     }
-    out.push_str("\nNo Polytrope model is trained yet. A row changes when a model replaces its stand-in.\n");
+    out.push_str("\nNo Laertes model is trained yet. A row changes when a model replaces its stand-in.\n");
     out
 }
 

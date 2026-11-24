@@ -400,7 +400,7 @@ fn sidebar(f: &mut Frame, app: &App, area: Rect) {
     ]);
     let (main, mkind) = model_line(app, false);
     let (weak, _) = model_line(app, true);
-    // The crew: the lead model answers, the stand-in for Aiolos condenses tool output, the rules of Outis guard secrets.
+    // The crew: the lead model answers, the stand-in for Aiolos condenses tool output, the rules of Utis guard secrets.
     let privacy = match app.ctx.cfg["privacy"].as_str().unwrap_or("rules") {
         "off" => "off".to_string(),
         level => format!("{} · {} masked", level, app.side.masked),
@@ -412,7 +412,7 @@ fn sidebar(f: &mut Frame, app: &App, area: Rect) {
             mode => format!("{} · scout {}", crate::scout::model(&app.ctx)["model"].as_str().unwrap_or("?"), mode),
         }, PAPER),
         ("aiolos".into(), format!("{} · stand-in", weak), PAPER),
-        ("outis".into(), privacy, PAPER),
+        ("utis".into(), privacy, PAPER),
     ]);
     if !app.side.plan.is_empty() {
         let rows = app.side.plan.iter().take(8).map(|(text, state)| {

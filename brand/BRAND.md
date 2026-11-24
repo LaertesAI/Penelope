@@ -1,17 +1,19 @@
 # Penelope brand
 
-The mark of the harness is a woven square with one loose thread, drawn by hand in terracotta `#C4623E`. Penelope wove
-by day and undid part of the work at night. The loose thread stands for that: the memory map can take notes back.
+The mark of the harness is a woven square with one loose thread, painted in cream on terracotta `#C4623E`. Penelope wove
+the shroud for Laertes by day and undid part of the work at night. The loose thread stands for that: the memory map can
+take notes back.
 
 <img src="lockup.png" alt="Penelope lockup" width="60%">
 
-The files in this folder are a copy of `brand/penelope/` in the Polytrope folder. The script there draws them
-(`brand/build/brand_build.py`). The whole set of ten marks and the rules for it are described in the Polytrope `BRAND.md`.
+The files in this folder are a copy of `brand/penelope/` in the Laertes folder. The script there draws them
+(`brand/build/brand_build.py`). The whole set of ten marks and the rules for it are described in the Laertes `BRAND.md`.
 
 | File | Use |
 |---|---|
 | `mark.svg`, `mark-ink.svg`, `mark-paper.svg` | the weave in colour and in one colour |
-| `logo.svg`, `logo.png` | the weave on a paper tile, 512 pixels |
+| `logo.png` | the painted tile, 1024 pixels |
+| `logo.svg` | the flat tile as a vector file |
 | `lockup.svg`, `lockup.png` | weave, name and the word Harness |
 | `wordmark.svg` | the name in drawn capitals |
 | `favicon.svg`, `favicon-32.png`, `favicon-16.png` | small sizes |
