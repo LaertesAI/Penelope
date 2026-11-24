@@ -12,7 +12,8 @@ The files in this folder are a copy of `brand/penelope/` in the Laertes folder. 
 | File | Use |
 |---|---|
 | `mark.svg`, `mark-ink.svg`, `mark-paper.svg` | the weave in colour and in one colour |
-| `logo.png` | the painted tile, 1024 pixels |
+| `logo.png` | the emblem: a weaver at her loom in a dot screen, the woven sign as seal, 1024 pixels |
+| `symbol.png` | the painted sign alone, 1024 pixels |
 | `logo.svg` | the flat tile as a vector file |
 | `lockup.svg`, `lockup.png` | weave, name and the word Harness |
 | `wordmark.svg` | the name in drawn capitals |
