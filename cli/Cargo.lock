@@ -693,16 +693,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "katecli"
-version = "0.3.0"
-dependencies = [
- "ratatui",
- "serde_json",
- "unicode-width",
- "ureq",
-]
-
-[[package]]
 name = "lab"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1552,6 +1542,16 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "strix-forgery"
+version = "0.4.0"
+dependencies = [
+ "ratatui",
+ "serde_json",
+ "unicode-width",
+ "ureq",
+]
 
 [[package]]
 name = "strsim"

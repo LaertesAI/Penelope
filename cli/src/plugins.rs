@@ -1,5 +1,5 @@
 //! Plugins in the format of Claude Code: a folder with `.claude-plugin/plugin.json`, `skills/<name>/SKILL.md` and
-//! `.mcp.json`. Kate registers the folder, offers the MCP servers to the main model and lists the skills by name
+//! `.mcp.json`. Strix registers the folder, offers the MCP servers to the main model and lists the skills by name
 //! and description. The body of a skill is read only when the model asks for it.
 
 use crate::config::Ctx;

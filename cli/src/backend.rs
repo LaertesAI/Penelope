@@ -11,17 +11,19 @@ use std::sync::Arc;
 
 /// What happens inside one turn, reported while it runs.
 pub enum Event {
-    /// Text the main model wrote, also between two tool calls.
+    /// A few characters of text, as the main model writes them.
+    Delta(String),
+    /// A finished block of text the main model wrote, also between two tool calls. It replaces the deltas before it.
     Text(String),
     ToolStart { id: String, name: String, detail: String },
     ToolEnd { id: String, ok: bool, summary: String },
 }
 
-/// `mcp__kate__run` becomes `run`, `mcp__screencodec__open` becomes `screen open`.
+/// `mcp__strix__run` becomes `run`, `mcp__screencodec__open` becomes `screen open`.
 fn short_name(name: &str) -> String {
     let rest = name.strip_prefix("mcp__").unwrap_or(name);
     match rest.split_once("__") {
-        Some(("kate", tool)) => tool.to_string(),
+        Some(("strix", tool)) => tool.to_string(),
         Some(("screencodec", tool)) => format!("screen {}", tool),
         Some((server, tool)) => format!("{} {}", server, tool),
         None => rest.to_string(),
@@ -45,7 +47,7 @@ fn first_line(text: &str) -> String {
     text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("").chars().take(160).collect()
 }
 
-pub const RULES: &str = "You work inside Kate, a small agent harness. Rules: \
+pub const RULES: &str = "You work inside Strix Forgery, a small agent harness. Rules: \
 1. Use the tool run for every shell command. Long output comes back condensed by a weaker model. Ask run_detail for raw lines only when you need them. \
 2. Use fetch for web pages and give it the question you want answered. \
 3. When the user states a rule, a preference or a fact to keep, store it with memory_note. At the start of a task, look up the topic with memory_go. \
@@ -94,11 +96,11 @@ impl Chat {
 
     fn turn_claude(&mut self, ctx: &Ctx, user: &str, system: &str, on: &mut dyn FnMut(Event)) -> Result<String, String> {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let mut servers = json!({"kate": {"command": exe.to_string_lossy(), "args": ["mcp", "--root", ctx.root.to_string_lossy()]}});
-        if let Ok(dir) = std::env::var("KATE_APPROVE_DIR") {
-            servers["kate"]["env"] = json!({"KATE_APPROVE_DIR": dir});       // the interface answers questions about unsafe commands
+        let mut servers = json!({"strix": {"command": exe.to_string_lossy(), "args": ["mcp", "--root", ctx.root.to_string_lossy()]}});
+        if let Ok(dir) = std::env::var("STRIX_APPROVE_DIR") {
+            servers["strix"]["env"] = json!({"STRIX_APPROVE_DIR": dir});       // the interface answers questions about unsafe commands
         }
-        let mut allowed: Vec<String> = ["run", "run_detail", "fetch", "memory_go", "memory_note", "memory_map", "skill"].iter().map(|t| format!("mcp__kate__{}", t)).collect();
+        let mut allowed: Vec<String> = ["run", "run_detail", "fetch", "memory_go", "memory_note", "memory_map", "skill"].iter().map(|t| format!("mcp__strix__{}", t)).collect();
         if let Some(obj) = crate::plugins::servers(ctx).as_object() {
             for (k, s) in obj {
                 servers[k] = s.clone();        // tools of plugin servers are not on the allow list: the model sees them, a call is refused
@@ -115,7 +117,7 @@ impl Chat {
         }
         let cfg = json!({"mcpServers": servers}).to_string();
         let mut cmd = Command::new("claude");
-        cmd.args(["-p", user, "--output-format", "stream-json", "--verbose", "--model", ctx.cfg["main"]["model"].as_str().unwrap_or("sonnet"),
+        cmd.args(["-p", user, "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--model", ctx.cfg["main"]["model"].as_str().unwrap_or("sonnet"),
                   "--append-system-prompt", system, "--strict-mcp-config", "--mcp-config", &cfg, "--tools", "", "--allowedTools", &allowed.join(",")]);
         if let Some(s) = &self.session {
             cmd.args(["--resume", s]);
@@ -154,6 +156,14 @@ impl Chat {
                             };
                             on(Event::ToolEnd { id: c["tool_use_id"].as_str().unwrap_or("").to_string(),
                                                 ok: !c["is_error"].as_bool().unwrap_or(false), summary: first_line(&text) });
+                        }
+                    }
+                }
+                "stream_event" => {
+                    let e = &v["event"];
+                    if e["type"].as_str() == Some("content_block_delta") && e["delta"]["type"].as_str() == Some("text_delta") {
+                        if let Some(t) = e["delta"]["text"].as_str().filter(|t| !t.is_empty()) {
+                            on(Event::Delta(t.to_string()));
                         }
                     }
                 }

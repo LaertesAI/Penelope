@@ -1,4 +1,4 @@
-//! Where Kate keeps its files and which models it talks to.
+//! Where Strix keeps its files and which models it talks to.
 
 use serde_json::{json, Value};
 use std::fs;
@@ -15,26 +15,42 @@ pub fn default_config() -> Value {
         "main": {"kind": "claude-cli", "model": "sonnet"},
         "weak": {"kind": "claude-cli", "model": "haiku"},
         "run_policy": "safe",
+        "privacy": "rules",
         "auto_learn": true,
         "screencodec": {"command": "", "hosts": "", "images": ""}
     })
 }
 
-/// The nearest `.kate` folder upwards from the working directory, else `~/.kate`.
+/// The nearest `.strix` folder upwards from the working directory, else `~/.strix`.
 pub fn find_root(explicit: Option<&str>) -> PathBuf {
     if let Some(p) = explicit {
         return PathBuf::from(p);
     }
     let mut dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     loop {
+        if dir.join(".strix").is_dir() {
+            return dir.join(".strix");
+        }
         if dir.join(".kate").is_dir() {
-            return dir.join(".kate");
+            return adopt(&dir);
         }
         if !dir.pop() {
             break;
         }
     }
-    PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into())).join(".kate")
+    let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()));
+    if !home.join(".strix").is_dir() && home.join(".kate").is_dir() {
+        return adopt(&home);
+    }
+    home.join(".strix")
+}
+
+/// A folder `.kate` from versions before 0.4.0 becomes `.strix`. If the rename fails, the old folder stays in use.
+fn adopt(dir: &Path) -> PathBuf {
+    match fs::rename(dir.join(".kate"), dir.join(".strix")) {
+        Ok(()) => dir.join(".strix"),
+        Err(_) => dir.join(".kate"),
+    }
 }
 
 pub fn load(root: &Path) -> Ctx {

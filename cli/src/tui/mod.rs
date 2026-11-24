@@ -1,4 +1,4 @@
-//! The full screen interface of katecli: a transcript, an input box, a side panel with the cat and its mood.
+//! The full screen interface of strix: a transcript, an input box, a side panel with the owl and its mood.
 //!
 //! One thread draws and reads keys. A turn of the main model runs in a second thread and reports through a channel.
 
@@ -33,7 +33,7 @@ pub enum ToolState {
 
 pub enum Item {
     User(String),
-    Kate(String),
+    Reply(String),
     Tool { id: String, name: String, detail: String, state: ToolState, summary: String },
     /// A status line of the harness: the way through the memory map, a stored note.
     Note { icon: &'static str, label: &'static str, text: String, colour: art::Rgb },
@@ -64,12 +64,12 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd { name: "/note", help: "store a rule or a fact in the memory map", key: "", takes_text: true },
     Cmd { name: "/stats", help: "how much tool output stayed away from the main model", key: "", takes_text: false },
     Cmd { name: "/plugins", help: "list the registered plugins", key: "", takes_text: false },
-    Cmd { name: "/doctor", help: "check the programs and models Kate needs", key: "", takes_text: false },
+    Cmd { name: "/doctor", help: "check the programs and models Strix needs", key: "", takes_text: false },
     Cmd { name: "/copy", help: "copy the last answer to the clipboard", key: "", takes_text: false },
-    Cmd { name: "/shot", help: "save the screen as a picture under .kate/screens", key: "f12", takes_text: false },
+    Cmd { name: "/shot", help: "save the screen as a picture under .strix/screens", key: "f12", takes_text: false },
     Cmd { name: "/sidebar", help: "show or hide the side panel", key: "ctrl+b", takes_text: false },
     Cmd { name: "/help", help: "keys and commands", key: "f1", takes_text: false },
-    Cmd { name: "/quit", help: "leave Kate", key: "ctrl+c", takes_text: false },
+    Cmd { name: "/quit", help: "leave Strix", key: "ctrl+c", takes_text: false },
 ];
 
 enum Msg {
@@ -79,7 +79,7 @@ enum Msg {
     Learned(Vec<String>),
 }
 
-/// Numbers of the side panel that come from files under `.kate`.
+/// Numbers of the side panel that come from files under `.strix`.
 #[derive(Default)]
 pub struct Side {
     pub waypoints: usize,
@@ -88,6 +88,8 @@ pub struct Side {
     pub routed: [(u64, u64); 2],
     pub screencodec: bool,
     pub plugins: usize,
+    /// Secrets the privacy filter masked in tool output.
+    pub masked: u64,
 }
 
 pub struct App {
@@ -101,6 +103,8 @@ pub struct App {
     pub slash_sel: usize,
     pub busy: Option<Instant>,
     pub learning: bool,
+    /// True while the last transcript item is a reply that still grows.
+    streaming: bool,
     /// Lines between the lower edge of the view and the end of the transcript.
     pub scroll: usize,
     pub page: usize,
@@ -143,7 +147,7 @@ impl App {
         let history = history[history.len().saturating_sub(200)..].to_vec();
         let mut app = App {
             ctx, items: Vec::new(), input: Vec::new(), cursor: 0, history, hist_at: None, overlay: Overlay::None, slash_sel: 0,
-            busy: None, learning: false, scroll: 0, page: 10, sidebar: true, tick: 0, last_key: Instant::now(), flash: None, toast: None,
+            busy: None, learning: false, streaming: false, scroll: 0, page: 10, sidebar: true, tick: 0, last_key: Instant::now(), flash: None, toast: None,
             chat: Some(Chat::new()), cancel: Arc::new(AtomicBool::new(false)), pid: Arc::new(AtomicU32::new(0)), tx, rx,
             tokens: (0, 0), turns: 0, tool_calls: 0, trail: Vec::new(), learned: Vec::new(), side: Side::default(),
             approve_dir, allow_all: false, seen: HashSet::new(), shot: false, quit: false,
@@ -162,6 +166,7 @@ impl App {
             let (raw, sent) = (stats[tool]["raw_chars"].as_u64().unwrap_or(0), stats[tool]["sent_chars"].as_u64().unwrap_or(0));
             self.side.routed[i] = (stats[tool]["calls"].as_u64().unwrap_or(0), if raw > 0 { 100 - (sent * 100 / raw).min(100) } else { 0 });
         }
+        self.side.masked = stats["privacy"]["masked"].as_u64().unwrap_or(0);
         self.side.screencodec = self.ctx.cfg["screencodec"]["command"].as_str().map(|c| !c.is_empty()).unwrap_or(false)
             || crate::config::which("screencodec-mcp").is_some();
         self.side.plugins = plugins::load(&self.ctx)["plugins"].as_array().map(|a| a.len()).unwrap_or(0);
@@ -286,12 +291,25 @@ impl App {
                     self.trail = trail;
                     self.note("◆", "memory", way, art::TEAL);
                 }
+                Msg::Turn(TurnEvent::Delta(t)) => {
+                    match self.items.last_mut() {
+                        Some(Item::Reply(text)) if self.streaming => text.push_str(&t),
+                        _ => self.items.push(Item::Reply(t.trim_start().to_string())),
+                    }
+                    self.streaming = true;
+                    self.scroll = 0;
+                }
                 Msg::Turn(TurnEvent::Text(t)) => {
-                    self.items.push(Item::Kate(t));
+                    match self.items.last_mut() {
+                        Some(Item::Reply(text)) if self.streaming => *text = t,        // the finished block replaces its pieces
+                        _ => self.items.push(Item::Reply(t)),
+                    }
+                    self.streaming = false;
                     self.scroll = 0;
                 }
                 Msg::Turn(TurnEvent::ToolStart { id, name, detail }) => {
                     self.tool_calls += 1;
+                    self.streaming = false;
                     self.items.push(Item::Tool { id, name, detail, state: ToolState::Running, summary: String::new() });
                     self.scroll = 0;
                 }
@@ -317,6 +335,7 @@ impl App {
                     self.turns = chat.turns;
                     self.chat = Some(*chat);
                     self.busy = None;
+                    self.streaming = false;
                     let failed = result.is_err();
                     for item in self.items.iter_mut() {
                         if let Item::Tool { state, .. } = item {
@@ -327,9 +346,9 @@ impl App {
                     }
                     match result {
                         Ok(answer) => {
-                            let shown = matches!(self.items.last(), Some(Item::Kate(t)) if t.trim() == answer.trim());
+                            let shown = matches!(self.items.last(), Some(Item::Reply(t)) if t.trim() == answer.trim());
                             if !shown && !answer.is_empty() {
-                                self.items.push(Item::Kate(answer));
+                                self.items.push(Item::Reply(answer));
                             }
                             self.learning = self.ctx.cfg["auto_learn"].as_bool().unwrap_or(true);
                         }
@@ -383,7 +402,7 @@ impl App {
     }
 
     fn copy_last(&mut self) {
-        let Some(text) = self.items.iter().rev().find_map(|i| if let Item::Kate(t) = i { Some(t.clone()) } else { None }) else {
+        let Some(text) = self.items.iter().rev().find_map(|i| if let Item::Reply(t) = i { Some(t.clone()) } else { None }) else {
             self.toast("no answer to copy yet".to_string());
             return;
         };
@@ -451,7 +470,7 @@ impl App {
             return;
         }
         if !text.starts_with('/') && self.busy.is_some() {
-            self.toast("Kate still works on the last request. esc stops it.".to_string());
+            self.toast("Strix still works on the last request. esc stops it.".to_string());
             return;
         }
         self.set_input("");
@@ -677,7 +696,7 @@ fn help_text() -> String {
         up, down         earlier and later requests\n\
         page up, down    scroll the transcript (also the mouse wheel)\n\
         esc              stop the running turn, or empty the input\n\
-        ctrl+c           empty the input, leave Kate when it is empty\n\
+        ctrl+c           empty the input, leave Strix when it is empty\n\
         shift+drag       mark text with the mouse\n\nCommands\n");
     for c in COMMANDS {
         out.push_str(&format!("{:<10} {:<8} {}\n", c.name, c.key, c.help));
@@ -690,7 +709,7 @@ fn help_text() -> String {
 pub fn run(ctx: Ctx) -> Result<(), String> {
     art::detect_colour();
     let mut app = App::new(ctx);
-    std::env::set_var("KATE_APPROVE_DIR", &app.approve_dir);
+    std::env::set_var("STRIX_APPROVE_DIR", &app.approve_dir);
     let mut terminal = ratatui::init();
     let _ = execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste);
     let result = (|| -> Result<(), String> {
@@ -741,7 +760,7 @@ mod tests {
     use ratatui::Terminal;
 
     fn app() -> App {
-        let root = std::env::temp_dir().join(format!("kate-test-{}-{:?}", std::process::id(), std::thread::current().id()));
+        let root = std::env::temp_dir().join(format!("strix-test-{}-{:?}", std::process::id(), std::thread::current().id()));
         let _ = fs::remove_dir_all(&root);
         App::new(crate::config::load(&root))
     }
@@ -771,7 +790,7 @@ mod tests {
         }
         a.items.push(Item::User("how do commits work in this repo?".into()));
         a.items.push(Item::Tool { id: "1".into(), name: "run".into(), detail: "git log --oneline".into(), state: ToolState::Running, summary: String::new() });
-        a.items.push(Item::Kate("# Commits\n\n- English\n- no emojis\n\n```\ngit commit -m \"text\"\n```".into()));
+        a.items.push(Item::Reply("# Commits\n\n- English\n- no emojis\n\n```\ngit commit -m \"text\"\n```".into()));
         a.items.push(Item::Error("the claude command ended without a result".into()));
         a.busy = Some(Instant::now());
         for overlay in 0..5 {
@@ -789,17 +808,31 @@ mod tests {
     }
 
     #[test]
+    fn text_grows_piece_by_piece_and_the_finished_block_replaces_it() {
+        let mut a = app();
+        for piece in [" Two", " files", ": a"] {
+            a.tx.send(Msg::Turn(TurnEvent::Delta(piece.into()))).unwrap();
+        }
+        a.drain();
+        assert!(matches!(a.items.as_slice(), [Item::Reply(t)] if t == "Two files: a"));
+        a.tx.send(Msg::Turn(TurnEvent::Text("Two files: a and b.".into()))).unwrap();
+        a.tx.send(Msg::Turn(TurnEvent::Delta("Next".into()))).unwrap();
+        a.drain();
+        assert!(matches!(a.items.as_slice(), [Item::Reply(t), Item::Reply(n)] if t == "Two files: a and b." && n == "Next"));
+    }
+
+    #[test]
     fn home_shows_the_input_and_chat_shows_the_transcript() {
         let mut a = app();
         let home = screen(&mut a, 120, 40);
-        assert!(home.contains("Ask Kate anything"), "{}", home);
+        assert!(home.contains("Ask Strix anything"), "{}", home);
         a.items.push(Item::User("list the files".into()));
-        a.items.push(Item::Kate("Three files: **a**, `b` and c.".into()));
+        a.items.push(Item::Reply("Three files: **a**, `b` and c.".into()));
         let chat = screen(&mut a, 120, 40);
         assert!(chat.contains("list the files") && chat.contains("Three files: a, b and c."), "{}", chat);
-        assert!(chat.contains("MEMORY") && chat.contains("awake"), "{}", chat);
+        assert!(chat.contains("MEMORY") && chat.contains("awake") && chat.contains("FORMATION") && chat.contains("privacy"), "{}", chat);
         let narrow = screen(&mut a, 70, 24);
-        assert!(!narrow.contains("MEMORY") && narrow.contains("( o.o )"), "{}", narrow);
+        assert!(!narrow.contains("MEMORY") && narrow.contains("{ o,o }"), "{}", narrow);
     }
 
     #[test]

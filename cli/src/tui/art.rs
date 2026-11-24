@@ -75,7 +75,7 @@ impl Bitmap {
     }
 }
 
-/// The cat looks over an edge: 40 columns, 12 rows.
+/// The owl looks over an edge: 40 columns, 12 rows.
 pub fn peek() -> Bitmap {
     Bitmap::from_rgb(40, 24, include_bytes!("../../art/peek_40x24.rgb"))
 }
@@ -110,23 +110,23 @@ impl Mood {
     /// The face as text, for narrow terminals and the plain command line.
     pub fn face(self) -> &'static str {
         match self {
-            Mood::Awake => "( o.o )",
-            Mood::Thinking => "( -.o )",
-            Mood::Working => "( >.< )",
-            Mood::Asking => "( O.O )",
-            Mood::Learned => "( ^.^ )",
-            Mood::Asleep => "( -.- )",
+            Mood::Awake => "{ o,o }",
+            Mood::Thinking => "{ -,o }",
+            Mood::Working => "{ >,< }",
+            Mood::Asking => "{ O,O }",
+            Mood::Learned => "{ ^,^ }",
+            Mood::Asleep => "{ -,- }",
         }
     }
 }
 
-const OPEN: [&str; 4] = [".XX", ".XX", ".XX", ".XX"];
+const OPEN: [&str; 4] = [".X.", "XXX", "XXX", ".X."];
 const SHUT: [&str; 4] = ["...", "...", "XXX", "..."];
-const SQUEEZE: [&str; 4] = ["X..", ".XX", ".XX", "X.."];
+const SQUEEZE: [&str; 4] = ["X..", ".X.", ".X.", "X.."];
 const WIDE: [&str; 4] = ["XXX", "XoX", "XXX", "XXX"];
 const HAPPY: [&str; 4] = ["...", ".X.", "X.X", "..."];
 
-/// The head of the cat, 22 columns and 11 rows, with the eyes of a mood. `blink` shuts open eyes for one frame.
+/// The head of the owl, 22 columns and 11 rows, with the eyes of a mood. `blink` shuts open eyes for one frame.
 pub fn head(mood: Mood, blink: bool) -> Bitmap {
     let mut bm = Bitmap::from_rgb(22, 22, include_bytes!("../../art/head_22x22.rgb"));
     let (left, right) = match mood {
@@ -138,7 +138,7 @@ pub fn head(mood: Mood, blink: bool) -> Bitmap {
         Mood::Learned => (HAPPY, HAPPY),
         Mood::Asleep => (SHUT, SHUT),
     };
-    for (rows, x0, mirror) in [(left, 6usize, false), (right, 13usize, true)] {
+    for (rows, x0, mirror) in [(left, 5usize, false), (right, 14usize, true)] {      // pupils on the amber eyes
         for (dy, row) in rows.iter().enumerate() {
             for (dx, c) in row.chars().enumerate() {
                 let x = x0 + if mirror { 2 - dx } else { dx };

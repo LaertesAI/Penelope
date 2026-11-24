@@ -1,6 +1,6 @@
 //! Persistent memory as a map of waypoints.
 //!
-//! The map is a tree under `.kate/memory/`. Every node is a waypoint with a title, signpost words and a note file.
+//! The map is a tree under `.strix/memory/`. Every node is a waypoint with a title, signpost words and a note file.
 //! A lookup starts at the root and follows the child whose signposts match the request best, one level at a time.
 //! It never searches all notes. Every finished walk is stored in `paths.json`: the same request jumps to its
 //! node the next time without walking.

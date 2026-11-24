@@ -1,9 +1,8 @@
 # Design canvas
 
-The brand of Kate lives on one Claude Design canvas with seven artboards: Logo, Marks with lockups and sizes, Mascot
-and moods, Colour and type, In the terminal, Social preview, Six drawings.
+The canvas at https://claude.ai/artifact/LJFbJ3vLm3p3RnLmncXTqa (private, opens for the owner only) still shows the
+brand of Kate with the cat, as published on 2026-11-23. The project was renamed to Strix Forgery on 2026-11-24. The
+canvas has not been redrawn for the owl.
 
-- Canvas: https://claude.ai/artifact/LJFbJ3vLm3p3RnLmncXTqa (private, opens for the owner only)
-- `canvas/` holds a copy of the artboard sources (`*.dc.html`) and the index `canvas.json` as published on 2026-11-23.
-- Pictures on the artboards are uploads of the canvas (`/_blob/...`). Their sources are the files in `../brand/` and
-  `../docs/screens/`.
+- `canvas/` holds a copy of the seven Kate artboards (`*.dc.html`) and the index `canvas.json`.
+- The current brand files are in `../brand/`, the current screen pictures in `../docs/screens/`.

@@ -63,7 +63,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     fill(f, area, INK);
     f.buffer_mut().set_style(area, on(PAPER, INK));
     if area.width < 30 || area.height < 8 {
-        put(f, area, 0, 0, "Kate needs 30 columns and 8 rows.", fg(ASH));
+        put(f, area, 0, 0, "Strix needs 30 columns and 8 rows.", fg(ASH));
         return;
     }
     let body = Rect::new(area.x, area.y, area.width, area.height - 1);
@@ -80,7 +80,7 @@ fn footer(f: &mut Frame, app: &App, area: Rect) {
     let home = std::env::var("HOME").unwrap_or_default();
     let cwd = std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_default();
     let cwd = if !home.is_empty() && cwd.starts_with(&home) { format!("~{}", &cwd[home.len()..]) } else { cwd };
-    let right = format!("kate {}", env!("CARGO_PKG_VERSION"));
+    let right = format!("strix forgery {}", env!("CARGO_PKG_VERSION"));
     put(f, area, area.x + 2, area.y, &clip(&cwd, (area.width as usize).saturating_sub(width(&right) + 6)), fg(DIM));
     put(f, area, area.right().saturating_sub(width(&right) as u16 + 2), area.y, &right, fg(DIM));
     let _ = app;
@@ -101,7 +101,7 @@ fn input_box(f: &mut Frame, app: &App, x: u16, bottom: u16, w: u16, top_limit: u
         put(f, rect, x, y, "┃", on(AMBER, NIGHT));
     }
     if app.input.is_empty() {
-        put(f, rect, x + 2, top + 1, "Ask Kate anything", on(DIM, NIGHT));
+        put(f, rect, x + 2, top + 1, "Ask Strix anything", on(DIM, NIGHT));
     }
     for (i, row) in rows.iter().skip(first).take(shown).enumerate() {
         put(f, rect, x + 2, top + 1 + i as u16, row, on(PAPER, NIGHT));
@@ -110,7 +110,7 @@ fn input_box(f: &mut Frame, app: &App, x: u16, bottom: u16, w: u16, top_limit: u
     let (weak, _) = model_line(app, true);
     let meta = bottom - 1;
     let mut cx = x + 2;
-    for (text, style) in [("Kate".to_string(), bold(AMBER).bg(col(NIGHT))), (format!("  {}", main), on(PAPER, NIGHT)),
+    for (text, style) in [("Strix".to_string(), bold(AMBER).bg(col(NIGHT))), (format!("  {}", main), on(PAPER, NIGHT)),
                           (format!(" {}", kind), on(DIM, NIGHT)), (format!("  ·  weaker {}", weak), on(DIM, NIGHT))] {
         put(f, rect, cx, meta, &text, style);
         cx += width(&text) as u16;
@@ -146,7 +146,7 @@ fn hints(f: &mut Frame, app: &App, area: Rect) {
         used = width(&text) + 4;
     } else if let Some(since) = app.busy {
         let working = app.mood() == Mood::Working;
-        let text = format!("{} {} {}s", spinner(app), if working { "a tool runs" } else { "Kate thinks" }, since.elapsed().as_secs());
+        let text = format!("{} {} {}s", spinner(app), if working { "a tool runs" } else { "Strix thinks" }, since.elapsed().as_secs());
         put(f, area, area.x + 2, area.y, &text, fg(TEAL));
         put(f, area, area.x + 4 + width(&text) as u16, area.y, "esc stops", fg(DIM));
         used = width(&text) + 15;
@@ -195,38 +195,41 @@ fn slash_popup(f: &mut Frame, app: &App, x: u16, bottom: u16, w: u16, top_limit:
 fn home(f: &mut Frame, app: &App, area: Rect) {
     let w = area.width.saturating_sub(8).min(84).max(26);
     let x = area.x + (area.width - w) / 2;
-    let (word, cat) = (art::wordmark(), art::peek());
+    let (word, owl) = (art::wordmark(), art::peek());
     let show_word = area.height >= 34 && w >= 62;
-    let show_cat = area.height >= 22 && w >= 44;
-    let stack = if show_word { word.rows() + 3 } else { 3 } + if show_cat { cat.rows() } else { 1 } + 4 + 2;
+    let show_owl = area.height >= 22 && w >= 44;
+    let stack = if show_word { word.rows() + 4 } else { 3 } + if show_owl { owl.rows() } else { 1 } + 4 + 2;
     let mut y = area.y + area.height.saturating_sub(stack) / 2;
     if show_word {
         word.draw(f.buffer_mut(), x + (w - word.w as u16) / 2, y, area);
-        y += word.rows() + 1;
+        y += word.rows();
+        put(f, area, x + (w.saturating_sub(13)) / 2, y, "f o r g e r y", bold(AMBER));
+        y += 2;
     } else {
-        put(f, area, x + (w.saturating_sub(5)) / 2, y, "kate", bold(PAPER));
-        put(f, area, x + (w.saturating_sub(5)) / 2 + 4, y, "▌", fg(AMBER));
+        let nx = x + (w.saturating_sub(13)) / 2;
+        put(f, area, nx, y, "strix", bold(PAPER));
+        put(f, area, nx + 6, y, "forgery", bold(AMBER));
         y += 1;
     }
     let tagline = "A command line harness that remembers the way.";
     put(f, area, x + w.saturating_sub(width(tagline) as u16) / 2, y, tagline, fg(ASH));
     y += 2;
-    if show_cat {
-        cat.draw(f.buffer_mut(), x + w - cat.w as u16 - 4, y, area);
+    if show_owl {
+        owl.draw(f.buffer_mut(), x + w - owl.w as u16 - 4, y, area);
         let side = [format!("{} waypoints in the memory map", app.side.waypoints), format!("{} stored walks", app.side.walks),
                     if app.side.screencodec { "ScreenCodec connected".to_string() } else { "ScreenCodec not installed".to_string() },
                     format!("{} plugins", app.side.plugins)];
         for (i, line) in side.iter().enumerate() {
-            let ly = y + cat.rows() - 5 + i as u16;
-            put(f, Rect::new(x, ly, w.saturating_sub(cat.w as u16 + 6), 1), x + 2, ly, "◆", fg(TEAL));
-            put(f, Rect::new(x, ly, w.saturating_sub(cat.w as u16 + 6), 1), x + 4, ly, line, fg(DIM));
+            let ly = y + owl.rows() - 5 + i as u16;
+            put(f, Rect::new(x, ly, w.saturating_sub(owl.w as u16 + 6), 1), x + 2, ly, "◆", fg(TEAL));
+            put(f, Rect::new(x, ly, w.saturating_sub(owl.w as u16 + 6), 1), x + 4, ly, line, fg(DIM));
         }
-        y += cat.rows();
+        y += owl.rows();
     } else {
         y += 1;
     }
     let bottom = (y + 4 + (input_rows(&app.input, app.cursor, (w as usize).saturating_sub(4)).0.len().min(8) as u16 - 1)).min(area.bottom() - 1);
-    let top = input_box(f, app, x, bottom, w, area.y, !show_cat);
+    let top = input_box(f, app, x, bottom, w, area.y, !show_owl);
     hints(f, app, Rect::new(x, bottom, w, 1));
     slash_popup(f, app, x, top, w, area.y);
 }
@@ -279,7 +282,7 @@ fn transcript(app: &App, w: usize) -> Vec<Line<'static>> {
                 }
                 out.push(blank);
             }
-            Item::Kate(text) => {
+            Item::Reply(text) => {
                 for mut line in markdown(text, w.saturating_sub(4).max(1)) {
                     line.spans.insert(0, Span::raw("  "));
                     out.push(line);
@@ -325,9 +328,9 @@ fn sidebar(f: &mut Frame, app: &App, area: Rect) {
         y += head.rows() + 1;
     }
     let state = if app.busy.is_some() { format!("{} {}", mood.name(), spinner(app)) } else { mood.name().to_string() };
-    let label = format!("Kate {} {}", mood.face(), state);
-    put(f, inner, area.x + (area.width.saturating_sub(width(&label) as u16)) / 2, y, "Kate", bold(PAPER).bg(col(NIGHT)));
-    put(f, inner, area.x + (area.width.saturating_sub(width(&label) as u16)) / 2 + 5, y, &format!("{} {}", mood.face(), state), on(mood_colour(mood), NIGHT));
+    let label = format!("Strix {} {}", mood.face(), state);
+    put(f, inner, area.x + (area.width.saturating_sub(width(&label) as u16)) / 2, y, "Strix", bold(PAPER).bg(col(NIGHT)));
+    put(f, inner, area.x + (area.width.saturating_sub(width(&label) as u16)) / 2 + 6, y, &format!("{} {}", mood.face(), state), on(mood_colour(mood), NIGHT));
     y += 2;
 
     let section = |f: &mut Frame, y: &mut u16, title: &str, rows: Vec<(String, String, art::Rgb)>| {
@@ -351,9 +354,12 @@ fn sidebar(f: &mut Frame, app: &App, area: Rect) {
     ]);
     let (main, mkind) = model_line(app, false);
     let (weak, wkind) = model_line(app, true);
-    section(f, &mut y, "MODELS", vec![
-        ("main".into(), format!("{} · {}", main, mkind), PAPER),
-        ("weaker".into(), format!("{} · {}", weak, wkind), PAPER),
+    // The formation: the lead model answers, the model behind it reads tool output, the filter guards secrets.
+    let privacy = if app.ctx.cfg["privacy"].as_str() == Some("off") { "off".to_string() } else { format!("rules · {} masked", app.side.masked) };
+    section(f, &mut y, "FORMATION", vec![
+        ("lead".into(), format!("{} · {}", main, mkind), PAPER),
+        ("tools".into(), format!("{} · {}", weak, wkind), PAPER),
+        ("privacy".into(), privacy, PAPER),
     ]);
     let mut memory = Vec::new();
     let way = if app.trail.is_empty() { "start".to_string() } else { format!("start › {}", app.trail.last().unwrap().replace('/', " › ")) };
@@ -428,7 +434,7 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
                 put(f, inner, inner.x + 2, y, name, on(PAPER, bg));
                 put(f, inner, inner.x + 2 + width(name) as u16 + 2, y, &kind, on(DIM, bg));
             }
-            let note = if kind == "openai" { "Other endpoints and models: .kate/config.json" } else { "Models of the claude command, with the login of the user" };
+            let note = if kind == "openai" { "Other endpoints and models: .strix/config.json" } else { "Models of the claude command, with the login of the user" };
             put(f, inner, inner.x, inner.y + 3 + choices.len() as u16, note, on(DIM, RAISED));
             put(f, inner, inner.x, inner.y + 4 + choices.len() as u16, "tab switches · enter chooses", on(DIM, RAISED));
         }
@@ -453,7 +459,7 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
             let w = 76u16.min(area.width.saturating_sub(4)).max(10);
             let rows = wrap_plain(command, (w as usize).saturating_sub(8).max(1));
             let inner = dialog(f, area, "Run this command?", w, rows.len() as u16 + 10);
-            put(f, inner, inner.x, inner.y, "The command is outside the safe list. Kate waits for an answer.", on(ASH, RAISED));
+            put(f, inner, inner.x, inner.y, "The command is outside the safe list. Strix waits for an answer.", on(ASH, RAISED));
             let mut y = inner.y + 2;
             for row in rows.iter().take(inner.height.saturating_sub(5) as usize) {
                 fill(f, Rect::new(inner.x, y, inner.width, 1), INK);
