@@ -1,4 +1,4 @@
-//! Where Strix keeps its files and which models it talks to.
+//! Where Penelope keeps its files and which models it talks to.
 
 use serde_json::{json, Value};
 use std::fs;
@@ -21,36 +21,43 @@ pub fn default_config() -> Value {
     })
 }
 
-/// The nearest `.strix` folder upwards from the working directory, else `~/.strix`.
+/// The nearest `.penelope` folder upwards from the working directory, else `~/.penelope`.
 pub fn find_root(explicit: Option<&str>) -> PathBuf {
     if let Some(p) = explicit {
         return PathBuf::from(p);
     }
     let mut dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     loop {
-        if dir.join(".strix").is_dir() {
-            return dir.join(".strix");
+        if dir.join(".penelope").is_dir() {
+            return dir.join(".penelope");
         }
-        if dir.join(".kate").is_dir() {
-            return adopt(&dir);
+        if let Some(old) = adopt(&dir) {
+            return old;
         }
         if !dir.pop() {
             break;
         }
     }
     let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()));
-    if !home.join(".strix").is_dir() && home.join(".kate").is_dir() {
-        return adopt(&home);
+    if !home.join(".penelope").is_dir() {
+        if let Some(old) = adopt(&home) {
+            return old;
+        }
     }
-    home.join(".strix")
+    home.join(".penelope")
 }
 
-/// A folder `.kate` from versions before 0.4.0 becomes `.strix`. If the rename fails, the old folder stays in use.
-fn adopt(dir: &Path) -> PathBuf {
-    match fs::rename(dir.join(".kate"), dir.join(".strix")) {
-        Ok(()) => dir.join(".strix"),
-        Err(_) => dir.join(".kate"),
+/// A folder `.strix` or `.kate` from versions before 0.5.0 becomes `.penelope`. If the rename fails, the old folder stays in use.
+fn adopt(dir: &Path) -> Option<PathBuf> {
+    for old in [".strix", ".kate"] {
+        if dir.join(old).is_dir() {
+            return Some(match fs::rename(dir.join(old), dir.join(".penelope")) {
+                Ok(()) => dir.join(".penelope"),
+                Err(_) => dir.join(old),
+            });
+        }
     }
+    None
 }
 
 pub fn load(root: &Path) -> Ctx {

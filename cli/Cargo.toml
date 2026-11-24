@@ -1,12 +1,12 @@
 [package]
-name = "strix-forgery"
-version = "0.4.0"
+name = "penelope"
+version = "0.5.0"
 edition = "2021"
-description = "Strix Forgery: a small agent harness with a memory map, routed tool output and ScreenCodec as its eyes"
+description = "Penelope: a small agent harness with a memory map, routed tool output and ScreenCodec as its eyes"
 license = "MIT"
 
 [[bin]]
-name = "strix"
+name = "penelope"
 path = "src/main.rs"
 
 [dependencies]

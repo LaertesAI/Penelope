@@ -1,4 +1,4 @@
-//! Strix Forgery's own tools. Long output goes through the weaker model before the main model sees it.
+//! Penelope's own tools. Long output goes through the weaker model before the main model sees it.
 
 use crate::config::Ctx;
 use crate::memory::Memory;
@@ -35,7 +35,7 @@ pub fn is_safe(command: &str) -> bool {
     }
 }
 
-/// Adds one condensed call to .strix/stats.json: how many characters the tool produced and how many went to the main model.
+/// Adds one condensed call to .penelope/stats.json: how many characters the tool produced and how many went to the main model.
 fn count(ctx: &Ctx, tool: &str, raw: usize, sent: usize) {
     let path = ctx.root.join("stats.json");
     let mut v: serde_json::Value = fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(serde_json::json!({}));
@@ -48,19 +48,66 @@ fn count(ctx: &Ctx, tool: &str, raw: usize, sent: usize) {
     let _ = fs::write(path, serde_json::to_string_pretty(&v).unwrap());
 }
 
-/// Tool output on its way to a model: secrets are masked unless the config says "privacy": "off". The count goes to stats.json.
-fn guard(ctx: &Ctx, text: &str) -> String {
-    if ctx.cfg["privacy"].as_str() == Some("off") {
-        return text.to_string();
+/// Text on its way to a model: secrets are masked unless the config says "privacy": "off". The level "pii" also masks
+/// e-mail addresses and IBANs. Returns the text and the number of masked items. The count goes to stats.json.
+pub fn guard_count(ctx: &Ctx, text: &str) -> (String, usize) {
+    let level = ctx.cfg["privacy"].as_str().unwrap_or("rules");
+    if level == "off" {
+        return (text.to_string(), 0);
     }
-    let (masked, hits) = crate::privacy::mask(text);
+    let (mut masked, mut hits) = crate::privacy::mask(text);
+    if level == "pii" {
+        let (more, n) = crate::privacy::mask_pii(&masked);
+        masked = more;
+        hits += n;
+    }
     if hits > 0 {
         let path = ctx.root.join("stats.json");
         let mut v: serde_json::Value = fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(serde_json::json!({}));
         v["privacy"] = serde_json::json!({"masked": v["privacy"]["masked"].as_u64().unwrap_or(0) + hits as u64});
         let _ = fs::write(path, serde_json::to_string_pretty(&v).unwrap());
     }
-    masked
+    (masked, hits)
+}
+
+fn guard(ctx: &Ctx, text: &str) -> String {
+    guard_count(ctx, text).0
+}
+
+/// The eight model families of Polytrope and what does each job in Penelope today.
+pub fn crew(ctx: &Ctx) -> String {
+    let model = |key: &str| format!("{} ({})", ctx.cfg[key]["model"].as_str().unwrap_or("?"), ctx.cfg[key]["kind"].as_str().unwrap_or("?"));
+    let masked = fs::read_to_string(ctx.root.join("stats.json")).ok().and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .map(|v| v["privacy"]["masked"].as_u64().unwrap_or(0)).unwrap_or(0);
+    let privacy = match ctx.cfg["privacy"].as_str().unwrap_or("rules") {
+        "off" => "switched off in config.json".to_string(),
+        level => format!("fixed rules, level {}, {} items masked so far", level, masked),
+    };
+    let rows: [(&str, &str, String); 8] = [
+        ("Nostos", "tool calling", format!("main model {} writes the tool calls", model("main"))),
+        ("Teiresias", "router and decisions", "fixed rules: safe list for commands, walk through the memory map".to_string()),
+        ("Outis", "privacy and PII detection", privacy),
+        ("Aiolos", "compression and summaries", format!("stand-in {} condenses long tool output", model("weak"))),
+        ("Argos", "judge and scoring", "not in use yet".to_string()),
+        ("Kleia", "data filter", "not in use yet".to_string()),
+        ("Phaiax", "coding and agents", format!("main model {}", model("main"))),
+        ("Proteus", "ML engineering, MoE conversion", "not in use yet".to_string()),
+    ];
+    let mut out = format!("{:<10} {:<31} {}\n", "family", "role", "today in Penelope");
+    for (name, role, today) in rows {
+        out.push_str(&format!("{:<10} {:<31} {}\n", name, role, today));
+    }
+    out.push_str("\nNo Polytrope model is trained yet. A row changes when a model replaces its stand-in.\n");
+    out
+}
+
+/// Takes back the last notes of the memory map, newest first.
+pub fn unravel(ctx: &Ctx, n: usize) -> String {
+    let gone = Memory::open(&ctx.root).unravel(n.max(1));
+    if gone.is_empty() {
+        return "nothing to take back: the journal of notes is empty".to_string();
+    }
+    gone.iter().map(|(id, line)| format!("taken back at {}: {}", id, line)).collect::<Vec<_>>().join("\n")
 }
 
 pub fn stats(ctx: &Ctx) -> String {
@@ -81,10 +128,10 @@ fn next_run_id(ctx: &Ctx) -> u64 {
 }
 
 /// Asks the person at the terminal interface whether a command outside the safe list may run. The interface names a
-/// folder in STRIX_APPROVE_DIR. The question is a file `ID.req` there, the answer a file `ID.ans` with `yes` or `no`.
+/// folder in PENELOPE_APPROVE_DIR. The question is a file `ID.req` there, the answer a file `ID.ans` with `yes` or `no`.
 /// Without that folder nobody can answer: None. No answer within 120 seconds counts as no.
 fn ask_person(command: &str, cwd: &str) -> Option<bool> {
-    let dir = std::path::PathBuf::from(std::env::var("STRIX_APPROVE_DIR").ok().filter(|d| !d.is_empty())?);
+    let dir = std::path::PathBuf::from(std::env::var("PENELOPE_APPROVE_DIR").ok().filter(|d| !d.is_empty())?);
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     let id = format!("{}-{}", std::process::id(), nanos);
     let (req, ans) = (dir.join(format!("{}.req", id)), dir.join(format!("{}.ans", id)));
@@ -110,7 +157,7 @@ pub fn run(ctx: &Ctx, command: &str, question: &str, cwd: &str) -> String {
             Some(true) => {}
             Some(false) => return "NOT run. The user declined this command.".to_string(),
             None => return "NOT run. The command is not on the safe list (read-only and build commands without shell operators). \
-                            The user can allow every command with \"run_policy\": \"all\" in .strix/config.json.".to_string(),
+                            The user can allow every command with \"run_policy\": \"all\" in .penelope/config.json.".to_string(),
         }
     }
     let mut cmd = Command::new("sh");

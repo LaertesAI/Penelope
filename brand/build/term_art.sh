@@ -1,19 +1,15 @@
 #!/bin/sh
-# Renders the small pictures of the terminal interface as raw RGB bytes. Usage: sh brand/build/term_art.sh (from the harness folder)
+# Renders the small pictures of the terminal interface as raw bytes. Usage: sh brand/build/term_art.sh (from the harness folder)
+# The SVG files come from the brand build of the Polytrope folder (brand/build/brand_build.py there).
 set -e
 out=cli/art
 tmp=$(mktemp -d)
-# The head without pupils on the Night ground. The view box puts the pupils on columns 5 to 7 and 14 to 16, rows 9 to 12.
-python3 - brand/mark.svg "$tmp/head.svg" <<'PY'
-import re, sys
-text = open(sys.argv[1]).read()
-text = re.sub(r'<g id="pupils".*?</g>', "", text, flags=re.S)
-open(sys.argv[2], "w").write(text.replace('viewBox="112 135 800 800"', 'viewBox="112 153 800 800"'))
-PY
-rsvg-convert -w 22 -h 22 -b "#1E1B28" "$tmp/head.svg" -o "$tmp/head.png"
-rsvg-convert -w 40 -h 24 -b "#15131C" brand/peek.svg -o "$tmp/peek.png"
-rsvg-convert -w 60 -h 20 -b "#15131C" brand/wordmark-short.svg -o "$tmp/word.png"
-magick "$tmp/head.png" -depth 8 "rgb:$out/head_22x22.rgb"
-magick "$tmp/peek.png" -depth 8 "rgb:$out/peek_40x24.rgb"
-magick "$tmp/word.png" -depth 8 "rgb:$out/word_60x20.rgb"
+rsvg-convert -w 22 -h 22 -b "#1E1B28" brand/term-weave.svg -o "$tmp/weave.png"      # side panel, on the Night ground
+rsvg-convert -w 22 -h 22 -b "#000000" brand/term-thread.svg -o "$tmp/thread.png"    # the loose thread as a mask
+rsvg-convert -w 24 -h 24 -b "#15131C" brand/term-mark.svg -o "$tmp/mark.png"        # start screen
+rsvg-convert -w 80 -h 16 -b "#15131C" brand/term-word.svg -o "$tmp/word.png"
+magick "$tmp/weave.png" -alpha off -depth 8 "rgb:$out/weave_22x22.rgb"
+magick "$tmp/thread.png" -alpha off -colorspace Gray -depth 8 "gray:$out/thread_22x22.gray"
+magick "$tmp/mark.png" -alpha off -depth 8 "rgb:$out/mark_24x24.rgb"
+magick "$tmp/word.png" -alpha off -depth 8 "rgb:$out/word_80x16.rgb"
 rm -r "$tmp"

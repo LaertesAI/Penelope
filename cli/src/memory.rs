@@ -1,6 +1,6 @@
 //! Persistent memory as a map of waypoints.
 //!
-//! The map is a tree under `.strix/memory/`. Every node is a waypoint with a title, signpost words and a note file.
+//! The map is a tree under `.penelope/memory/`. Every node is a waypoint with a title, signpost words and a note file.
 //! A lookup starts at the root and follows the child whose signposts match the request best, one level at a time.
 //! It never searches all notes. Every finished walk is stored in `paths.json`: the same request jumps to its
 //! node the next time without walking.
@@ -129,6 +129,10 @@ impl Memory {
         let line = text.trim().replace('\n', " ");
         if !body.contains(&line) {
             body.push_str(&format!("- {}\n", line));
+            let mut journal = self.journal();
+            journal.push(json!({"id": id, "line": line}));
+            let from = journal.len().saturating_sub(500);
+            let _ = fs::write(self.dir.join("journal.json"), serde_json::to_string_pretty(&journal[from..]).unwrap());
         }
         let _ = fs::write(&file, body);
         let mut signs: Vec<String> = self.map[&id]["signs"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
@@ -141,6 +145,39 @@ impl Memory {
         self.paths = json!({}); // the map changed: stored walks may end too early now
         self.save();
         id
+    }
+
+    /// Every note in the order it was written, at most the last 500.
+    fn journal(&self) -> Vec<Value> {
+        fs::read_to_string(self.dir.join("journal.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+    }
+
+    /// Takes back the last `n` notes, newest first. Returns waypoint and text of each note removed. The waypoint and its
+    /// signpost words stay in the map. Notes written before version 0.5.0 are not in the journal.
+    pub fn unravel(&mut self, n: usize) -> Vec<(String, String)> {
+        let mut journal = self.journal();
+        let mut out = Vec::new();
+        for _ in 0..n {
+            let Some(entry) = journal.pop() else { break };
+            let (id, line) = (entry["id"].as_str().unwrap_or("").to_string(), entry["line"].as_str().unwrap_or("").to_string());
+            let file = self.note_file(&id);
+            let Ok(body) = fs::read_to_string(&file) else { continue };
+            let target = format!("- {}", line);
+            let mut removed = false;
+            let kept: Vec<&str> = body.lines().filter(|l| {
+                let hit = !removed && *l == target;
+                removed |= hit;
+                !hit
+            }).collect();
+            if removed {
+                let _ = fs::write(&file, kept.join("\n") + "\n");
+                out.push((id, line));
+            }
+        }
+        let _ = fs::write(self.dir.join("journal.json"), serde_json::to_string_pretty(&journal).unwrap());
+        self.paths = json!({});
+        self.save();
+        out
     }
 
     fn score(&self, id: &str, query: &[String]) -> usize {
@@ -247,5 +284,25 @@ impl Memory {
         let n = self.paths.as_object().map(|m| m.len()).unwrap_or(0);
         out.push_str(&format!("{} stored walks\n", n));
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unravel_takes_back_the_newest_note() {
+        let root = std::env::temp_dir().join(format!("penelope-memory-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let mut m = Memory::open(&root);
+        let id = m.note("rust/errors", "Use anyhow for errors.");
+        m.note("rust/errors", "No unwrap in library code.");
+        assert_eq!(m.unravel(1), vec![(id.clone(), "No unwrap in library code.".to_string())]);
+        let (text, _, _) = m.recall("rust errors", 800);
+        assert!(text.contains("anyhow") && !text.contains("unwrap"), "{}", text);
+        assert_eq!(m.unravel(5).len(), 1);
+        assert!(m.unravel(1).is_empty());
+        let _ = fs::remove_dir_all(&root);
     }
 }

@@ -1,6 +1,6 @@
 //! Draws the interface: the start screen, the transcript with the input box, the side panel and the dialogs.
 
-use super::art::{self, col, Mood, AMBER, ASH, DIM, INK, NIGHT, PAPER, RAISED, RED, TEAL};
+use super::art::{self, col, Mood, CLAY, ASH, DIM, INK, NIGHT, PAPER, RAISED, RED, SEA};
 use super::text::{clip, input_rows, markdown, width, wrap_plain};
 use super::{App, Item, Overlay, ToolState};
 use ratatui::layout::{Position, Rect};
@@ -63,7 +63,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     fill(f, area, INK);
     f.buffer_mut().set_style(area, on(PAPER, INK));
     if area.width < 30 || area.height < 8 {
-        put(f, area, 0, 0, "Strix needs 30 columns and 8 rows.", fg(ASH));
+        put(f, area, 0, 0, "Penelope needs 30 columns and 8 rows.", fg(ASH));
         return;
     }
     let body = Rect::new(area.x, area.y, area.width, area.height - 1);
@@ -76,11 +76,15 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     overlay(f, app, body);
 }
 
-fn footer(f: &mut Frame, app: &App, area: Rect) {
+/// A path with the home folder written as `~`, so that no screen picture shows the name of the account.
+fn tilde(path: &str) -> String {
     let home = std::env::var("HOME").unwrap_or_default();
-    let cwd = std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_default();
-    let cwd = if !home.is_empty() && cwd.starts_with(&home) { format!("~{}", &cwd[home.len()..]) } else { cwd };
-    let right = format!("strix forgery {}", env!("CARGO_PKG_VERSION"));
+    if !home.is_empty() && path.starts_with(&home) { format!("~{}", &path[home.len()..]) } else { path.to_string() }
+}
+
+fn footer(f: &mut Frame, app: &App, area: Rect) {
+    let cwd = tilde(&std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_default());
+    let right = format!("penelope {}", env!("CARGO_PKG_VERSION"));
     put(f, area, area.x + 2, area.y, &clip(&cwd, (area.width as usize).saturating_sub(width(&right) + 6)), fg(DIM));
     put(f, area, area.right().saturating_sub(width(&right) as u16 + 2), area.y, &right, fg(DIM));
     let _ = app;
@@ -98,10 +102,10 @@ fn input_box(f: &mut Frame, app: &App, x: u16, bottom: u16, w: u16, top_limit: u
     let rect = Rect::new(x, top, w, h);
     fill(f, rect, NIGHT);
     for y in top..bottom {
-        put(f, rect, x, y, "┃", on(AMBER, NIGHT));
+        put(f, rect, x, y, "┃", on(CLAY, NIGHT));
     }
     if app.input.is_empty() {
-        put(f, rect, x + 2, top + 1, "Ask Strix anything", on(DIM, NIGHT));
+        put(f, rect, x + 2, top + 1, "Ask Penelope anything", on(DIM, NIGHT));
     }
     for (i, row) in rows.iter().skip(first).take(shown).enumerate() {
         put(f, rect, x + 2, top + 1 + i as u16, row, on(PAPER, NIGHT));
@@ -110,7 +114,7 @@ fn input_box(f: &mut Frame, app: &App, x: u16, bottom: u16, w: u16, top_limit: u
     let (weak, _) = model_line(app, true);
     let meta = bottom - 1;
     let mut cx = x + 2;
-    for (text, style) in [("Strix".to_string(), bold(AMBER).bg(col(NIGHT))), (format!("  {}", main), on(PAPER, NIGHT)),
+    for (text, style) in [("Penelope".to_string(), bold(CLAY).bg(col(NIGHT))), (format!("  {}", main), on(PAPER, NIGHT)),
                           (format!(" {}", kind), on(DIM, NIGHT)), (format!("  ·  weaker {}", weak), on(DIM, NIGHT))] {
         put(f, rect, cx, meta, &text, style);
         cx += width(&text) as u16;
@@ -130,8 +134,8 @@ fn input_box(f: &mut Frame, app: &App, x: u16, bottom: u16, w: u16, top_limit: u
 
 fn mood_colour(mood: Mood) -> art::Rgb {
     match mood {
-        Mood::Awake | Mood::Learned => AMBER,
-        Mood::Thinking | Mood::Working => TEAL,
+        Mood::Awake | Mood::Learned => CLAY,
+        Mood::Thinking | Mood::Working => SEA,
         Mood::Asking => RED,
         Mood::Asleep => DIM,
     }
@@ -146,8 +150,8 @@ fn hints(f: &mut Frame, app: &App, area: Rect) {
         used = width(&text) + 4;
     } else if let Some(since) = app.busy {
         let working = app.mood() == Mood::Working;
-        let text = format!("{} {} {}s", spinner(app), if working { "a tool runs" } else { "Strix thinks" }, since.elapsed().as_secs());
-        put(f, area, area.x + 2, area.y, &text, fg(TEAL));
+        let text = format!("{} {} {}s", spinner(app), if working { "a tool runs" } else { "Penelope thinks" }, since.elapsed().as_secs());
+        put(f, area, area.x + 2, area.y, &text, fg(SEA));
         put(f, area, area.x + 4 + width(&text) as u16, area.y, "esc stops", fg(DIM));
         used = width(&text) + 15;
     } else if app.learning {
@@ -182,8 +186,8 @@ fn slash_popup(f: &mut Frame, app: &App, x: u16, bottom: u16, w: u16, top_limit:
         let rect = Rect::new(x, y, w, 1);
         let chosen = first + i == sel;
         f.render_widget(Clear, rect);
-        fill(f, rect, if chosen { AMBER } else { RAISED });
-        let (name, help) = if chosen { (on(INK, AMBER).add_modifier(Modifier::BOLD), on(INK, AMBER)) } else { (on(AMBER, RAISED), on(ASH, RAISED)) };
+        fill(f, rect, if chosen { CLAY } else { RAISED });
+        let (name, help) = if chosen { (on(INK, CLAY).add_modifier(Modifier::BOLD), on(INK, CLAY)) } else { (on(CLAY, RAISED), on(ASH, RAISED)) };
         put(f, rect, x + 2, y, cmd.name, name);
         put(f, rect, x + 14, y, cmd.help, help);
         if !cmd.key.is_empty() && w as usize > 30 + cmd.help.len() + cmd.key.len() {
@@ -195,41 +199,37 @@ fn slash_popup(f: &mut Frame, app: &App, x: u16, bottom: u16, w: u16, top_limit:
 fn home(f: &mut Frame, app: &App, area: Rect) {
     let w = area.width.saturating_sub(8).min(84).max(26);
     let x = area.x + (area.width - w) / 2;
-    let (word, owl) = (art::wordmark(), art::peek());
-    let show_word = area.height >= 34 && w >= 62;
-    let show_owl = area.height >= 22 && w >= 44;
-    let stack = if show_word { word.rows() + 4 } else { 3 } + if show_owl { owl.rows() } else { 1 } + 4 + 2;
+    let (word, loom) = (art::wordmark(), art::peek());
+    let show_word = area.height >= 32 && w >= 82;
+    let show_loom = area.height >= 22 && w >= 44;
+    let stack = if show_word { word.rows() + 3 } else { 3 } + if show_loom { loom.rows() } else { 1 } + 4 + 2;
     let mut y = area.y + area.height.saturating_sub(stack) / 2;
     if show_word {
         word.draw(f.buffer_mut(), x + (w - word.w as u16) / 2, y, area);
-        y += word.rows();
-        put(f, area, x + (w.saturating_sub(13)) / 2, y, "f o r g e r y", bold(AMBER));
-        y += 2;
+        y += word.rows() + 1;
     } else {
-        let nx = x + (w.saturating_sub(13)) / 2;
-        put(f, area, nx, y, "strix", bold(PAPER));
-        put(f, area, nx + 6, y, "forgery", bold(AMBER));
+        put(f, area, x + (w.saturating_sub(8)) / 2, y, "penelope", bold(CLAY));
         y += 1;
     }
     let tagline = "A command line harness that remembers the way.";
     put(f, area, x + w.saturating_sub(width(tagline) as u16) / 2, y, tagline, fg(ASH));
     y += 2;
-    if show_owl {
-        owl.draw(f.buffer_mut(), x + w - owl.w as u16 - 4, y, area);
+    if show_loom {
+        loom.draw(f.buffer_mut(), x + w - loom.w as u16 - 4, y, area);
         let side = [format!("{} waypoints in the memory map", app.side.waypoints), format!("{} stored walks", app.side.walks),
                     if app.side.screencodec { "ScreenCodec connected".to_string() } else { "ScreenCodec not installed".to_string() },
                     format!("{} plugins", app.side.plugins)];
         for (i, line) in side.iter().enumerate() {
-            let ly = y + owl.rows() - 5 + i as u16;
-            put(f, Rect::new(x, ly, w.saturating_sub(owl.w as u16 + 6), 1), x + 2, ly, "◆", fg(TEAL));
-            put(f, Rect::new(x, ly, w.saturating_sub(owl.w as u16 + 6), 1), x + 4, ly, line, fg(DIM));
+            let ly = y + loom.rows() - 5 + i as u16;
+            put(f, Rect::new(x, ly, w.saturating_sub(loom.w as u16 + 6), 1), x + 2, ly, "◆", fg(SEA));
+            put(f, Rect::new(x, ly, w.saturating_sub(loom.w as u16 + 6), 1), x + 4, ly, line, fg(DIM));
         }
-        y += owl.rows();
+        y += loom.rows();
     } else {
         y += 1;
     }
     let bottom = (y + 4 + (input_rows(&app.input, app.cursor, (w as usize).saturating_sub(4)).0.len().min(8) as u16 - 1)).min(area.bottom() - 1);
-    let top = input_box(f, app, x, bottom, w, area.y, !show_owl);
+    let top = input_box(f, app, x, bottom, w, area.y, !show_loom);
     hints(f, app, Rect::new(x, bottom, w, 1));
     slash_popup(f, app, x, top, w, area.y);
 }
@@ -256,7 +256,7 @@ fn chat(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(Paragraph::new(lines[start..end].to_vec()), Rect::new(view.x, view.y + offset as u16, view.width, (end - start) as u16));
     if app.scroll > 0 && view.height > 0 {
         let more = format!(" {} more lines below · page down ", app.scroll);
-        put(f, view, view.right().saturating_sub(width(&more) as u16), view.bottom() - 1, &more, on(INK, AMBER));
+        put(f, view, view.right().saturating_sub(width(&more) as u16), view.bottom() - 1, &more, on(INK, CLAY));
     }
     slash_popup(f, app, x, top, w, main.y + 1);
 }
@@ -273,7 +273,7 @@ fn transcript(app: &App, w: usize) -> Vec<Line<'static>> {
         match item {
             Item::User(text) => {
                 let inner = w.saturating_sub(3).max(1);
-                let bar = Span::styled("┃", on(AMBER, NIGHT));
+                let bar = Span::styled("┃", on(CLAY, NIGHT));
                 let blank = Line::from(vec![bar.clone(), Span::styled(" ".repeat(w.saturating_sub(1)), on(PAPER, NIGHT))]);
                 out.push(blank.clone());
                 for row in wrap_plain(text, inner) {
@@ -290,8 +290,8 @@ fn transcript(app: &App, w: usize) -> Vec<Line<'static>> {
             }
             Item::Tool { name, detail, state, summary, .. } => {
                 let (icon, colour) = match state {
-                    ToolState::Running => (spinner(app), AMBER),
-                    ToolState::Done => ("●", TEAL),
+                    ToolState::Running => (spinner(app), CLAY),
+                    ToolState::Done => ("●", SEA),
                     ToolState::Failed => ("●", RED),
                 };
                 let room = w.saturating_sub(width(name) + 8);
@@ -328,9 +328,9 @@ fn sidebar(f: &mut Frame, app: &App, area: Rect) {
         y += head.rows() + 1;
     }
     let state = if app.busy.is_some() { format!("{} {}", mood.name(), spinner(app)) } else { mood.name().to_string() };
-    let label = format!("Strix {} {}", mood.face(), state);
-    put(f, inner, area.x + (area.width.saturating_sub(width(&label) as u16)) / 2, y, "Strix", bold(PAPER).bg(col(NIGHT)));
-    put(f, inner, area.x + (area.width.saturating_sub(width(&label) as u16)) / 2 + 6, y, &format!("{} {}", mood.face(), state), on(mood_colour(mood), NIGHT));
+    let label = format!("Penelope {} {}", mood.face(), state);
+    put(f, inner, area.x + (area.width.saturating_sub(width(&label) as u16)) / 2, y, "Penelope", bold(PAPER).bg(col(NIGHT)));
+    put(f, inner, area.x + (area.width.saturating_sub(width(&label) as u16)) / 2 + 9, y, &format!("{} {}", mood.face(), state), on(mood_colour(mood), NIGHT));
     y += 2;
 
     let section = |f: &mut Frame, y: &mut u16, title: &str, rows: Vec<(String, String, art::Rgb)>| {
@@ -353,22 +353,25 @@ fn sidebar(f: &mut Frame, app: &App, area: Rect) {
         ("turns".into(), format!("{} · {} tool calls", app.turns, app.tool_calls), PAPER),
     ]);
     let (main, mkind) = model_line(app, false);
-    let (weak, wkind) = model_line(app, true);
-    // The formation: the lead model answers, the model behind it reads tool output, the filter guards secrets.
-    let privacy = if app.ctx.cfg["privacy"].as_str() == Some("off") { "off".to_string() } else { format!("rules · {} masked", app.side.masked) };
-    section(f, &mut y, "FORMATION", vec![
+    let (weak, _) = model_line(app, true);
+    // The crew: the lead model answers, the stand-in for Aiolos condenses tool output, the rules of Outis guard secrets.
+    let privacy = match app.ctx.cfg["privacy"].as_str().unwrap_or("rules") {
+        "off" => "off".to_string(),
+        level => format!("{} · {} masked", level, app.side.masked),
+    };
+    section(f, &mut y, "CREW", vec![
         ("lead".into(), format!("{} · {}", main, mkind), PAPER),
-        ("tools".into(), format!("{} · {}", weak, wkind), PAPER),
-        ("privacy".into(), privacy, PAPER),
+        ("aiolos".into(), format!("{} · stand-in", weak), PAPER),
+        ("outis".into(), privacy, PAPER),
     ]);
     let mut memory = Vec::new();
     let way = if app.trail.is_empty() { "start".to_string() } else { format!("start › {}", app.trail.last().unwrap().replace('/', " › ")) };
     for row in wrap_plain(&way, w as usize) {
-        memory.push((String::new(), row, TEAL));
+        memory.push((String::new(), row, SEA));
     }
     memory.push((String::new(), format!("{} waypoints · {} stored walks", app.side.waypoints, app.side.walks), PAPER));
     for id in app.learned.iter().rev().take(3) {
-        memory.push(("learned".into(), id.clone(), AMBER));
+        memory.push(("learned".into(), id.clone(), CLAY));
     }
     section(f, &mut y, "MEMORY", memory);
     let routed = |i: usize| {
@@ -377,7 +380,7 @@ fn sidebar(f: &mut Frame, app: &App, area: Rect) {
     };
     section(f, &mut y, "ROUTED OUTPUT", vec![("run".into(), routed(0), PAPER), ("fetch".into(), routed(1), PAPER)]);
     section(f, &mut y, "EYES AND PLUGINS", vec![
-        ("screen".into(), if app.side.screencodec { "● ScreenCodec".into() } else { "○ not installed".into() }, if app.side.screencodec { TEAL } else { DIM }),
+        ("screen".into(), if app.side.screencodec { "● ScreenCodec".into() } else { "○ not installed".into() }, if app.side.screencodec { SEA } else { DIM }),
         ("plugins".into(), format!("{}", app.side.plugins), PAPER),
         ("policy".into(), app.ctx.cfg["run_policy"].as_str().unwrap_or("safe").to_string(), PAPER),
     ]);
@@ -402,7 +405,7 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
         Overlay::Palette { query, sel } => {
             let matches = App::palette_matches(query);
             let inner = dialog(f, area, "Commands", 64, matches.len() as u16 + 7);
-            put(f, inner, inner.x, inner.y, ">", on(AMBER, RAISED));
+            put(f, inner, inner.x, inner.y, ">", on(CLAY, RAISED));
             put(f, inner, inner.x + 2, inner.y, if query.is_empty() { "type to search" } else { query }, on(if query.is_empty() { DIM } else { PAPER }, RAISED));
             f.set_cursor_position(Position::new((inner.x + 2 + width(query) as u16).min(inner.right().saturating_sub(1)), inner.y));
             let rows = inner.height.saturating_sub(2) as usize;
@@ -410,7 +413,7 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
             for (i, cmd) in matches.iter().skip(first).take(rows).enumerate() {
                 let y = inner.y + 2 + i as u16;
                 let chosen = first + i == *sel;
-                let (bg, name, help) = if chosen { (AMBER, INK, INK) } else { (RAISED, AMBER, ASH) };
+                let (bg, name, help) = if chosen { (CLAY, INK, INK) } else { (RAISED, CLAY, ASH) };
                 let row = Rect::new(inner.x.saturating_sub(1), y, inner.width + 2, 1);
                 fill(f, row, bg);
                 put(f, row, inner.x, y, cmd.name, on(name, bg).add_modifier(Modifier::BOLD));
@@ -421,7 +424,7 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
         Overlay::Models { sel, weak } => {
             let choices = app.model_choices(*weak);
             let inner = dialog(f, area, "Models", 64, choices.len() as u16 + 9);
-            let tab = |active: bool| if active { on(INK, AMBER).add_modifier(Modifier::BOLD) } else { on(ASH, RAISED) };
+            let tab = |active: bool| if active { on(INK, CLAY).add_modifier(Modifier::BOLD) } else { on(ASH, RAISED) };
             put(f, inner, inner.x, inner.y, " main model ", tab(!*weak));
             put(f, inner, inner.x + 13, inner.y, " weaker model ", tab(*weak));
             let (current, kind) = model_line(app, *weak);
@@ -430,11 +433,11 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
                 let chosen = i == (*sel).min(choices.len().saturating_sub(1));
                 let bg = if chosen { NIGHT } else { RAISED };
                 fill(f, Rect::new(inner.x.saturating_sub(1), y, inner.width + 2, 1), bg);
-                put(f, inner, inner.x, y, if *name == current { "●" } else { "○" }, on(if *name == current { TEAL } else { DIM }, bg));
+                put(f, inner, inner.x, y, if *name == current { "●" } else { "○" }, on(if *name == current { SEA } else { DIM }, bg));
                 put(f, inner, inner.x + 2, y, name, on(PAPER, bg));
                 put(f, inner, inner.x + 2 + width(name) as u16 + 2, y, &kind, on(DIM, bg));
             }
-            let note = if kind == "openai" { "Other endpoints and models: .strix/config.json" } else { "Models of the claude command, with the login of the user" };
+            let note = if kind == "openai" { "Other endpoints and models: .penelope/config.json" } else { "Models of the claude command, with the login of the user" };
             put(f, inner, inner.x, inner.y + 3 + choices.len() as u16, note, on(DIM, RAISED));
             put(f, inner, inner.x, inner.y + 4 + choices.len() as u16, "tab switches · enter chooses", on(DIM, RAISED));
         }
@@ -459,21 +462,21 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
             let w = 76u16.min(area.width.saturating_sub(4)).max(10);
             let rows = wrap_plain(command, (w as usize).saturating_sub(8).max(1));
             let inner = dialog(f, area, "Run this command?", w, rows.len() as u16 + 10);
-            put(f, inner, inner.x, inner.y, "The command is outside the safe list. Strix waits for an answer.", on(ASH, RAISED));
+            put(f, inner, inner.x, inner.y, "The command is outside the safe list. Penelope waits for an answer.", on(ASH, RAISED));
             let mut y = inner.y + 2;
             for row in rows.iter().take(inner.height.saturating_sub(5) as usize) {
                 fill(f, Rect::new(inner.x, y, inner.width, 1), INK);
-                put(f, inner, inner.x + 1, y, "$", on(AMBER, INK));
+                put(f, inner, inner.x + 1, y, "$", on(CLAY, INK));
                 put(f, inner, inner.x + 3, y, row, on(PAPER, INK));
                 y += 1;
             }
             if !cwd.is_empty() {
-                put(f, inner, inner.x, y, &format!("in {}", clip(cwd, (inner.width as usize).saturating_sub(4))), on(DIM, RAISED));
+                put(f, inner, inner.x, y, &format!("in {}", clip(&tilde(cwd), (inner.width as usize).saturating_sub(4))), on(DIM, RAISED));
             }
             y += 2;
             let mut x = inner.x;
             for (key, text) in [("y", "run it once"), ("a", "allow all in this session"), ("n", "refuse")] {
-                put(f, inner, x, y, &format!(" {} ", key), on(INK, AMBER).add_modifier(Modifier::BOLD));
+                put(f, inner, x, y, &format!(" {} ", key), on(INK, CLAY).add_modifier(Modifier::BOLD));
                 put(f, inner, x + 4, y, text, on(PAPER, RAISED));
                 x += 4 + text.len() as u16 + 3;
             }

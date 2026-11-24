@@ -11,8 +11,8 @@ pub const INK: Rgb = (0x15, 0x13, 0x1C);
 pub const NIGHT: Rgb = (0x1E, 0x1B, 0x28);
 pub const RAISED: Rgb = (0x2B, 0x27, 0x39);
 pub const PAPER: Rgb = (0xF6, 0xF3, 0xEC);
-pub const AMBER: Rgb = (0xFF, 0xB4, 0x3A);
-pub const TEAL: Rgb = (0x2D, 0xD4, 0xBF);
+pub const CLAY: Rgb = (0xE8, 0x82, 0x5A);
+pub const SEA: Rgb = (0x5F, 0xB3, 0xE4);
 pub const ASH: Rgb = (0xB5, 0xB1, 0xC2);
 pub const DIM: Rgb = (0x7C, 0x77, 0x8C);
 pub const RED: Rgb = (0xFF, 0x6B, 0x6B);
@@ -75,14 +75,14 @@ impl Bitmap {
     }
 }
 
-/// The owl looks over an edge: 40 columns, 12 rows.
+/// The woven mark for the start screen: 24 columns, 12 rows.
 pub fn peek() -> Bitmap {
-    Bitmap::from_rgb(40, 24, include_bytes!("../../art/peek_40x24.rgb"))
+    Bitmap::from_rgb(24, 24, include_bytes!("../../art/mark_24x24.rgb"))
 }
 
-/// The drawn name with its cursor block: 60 columns, 10 rows.
+/// The name in tall letters: 80 columns, 8 rows.
 pub fn wordmark() -> Bitmap {
-    Bitmap::from_rgb(60, 20, include_bytes!("../../art/word_60x20.rgb"))
+    Bitmap::from_rgb(80, 16, include_bytes!("../../art/word_80x16.rgb"))
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -110,44 +110,34 @@ impl Mood {
     /// The face as text, for narrow terminals and the plain command line.
     pub fn face(self) -> &'static str {
         match self {
-            Mood::Awake => "{ o,o }",
-            Mood::Thinking => "{ -,o }",
-            Mood::Working => "{ >,< }",
-            Mood::Asking => "{ O,O }",
-            Mood::Learned => "{ ^,^ }",
-            Mood::Asleep => "{ -,- }",
+            Mood::Awake => "[#|#]",
+            Mood::Thinking => "[#~#]",
+            Mood::Working => "[#>#]",
+            Mood::Asking => "[#?#]",
+            Mood::Learned => "[#+#]",
+            Mood::Asleep => "[#.#]",
         }
     }
 }
 
-const OPEN: [&str; 4] = [".X.", "XXX", "XXX", ".X."];
-const SHUT: [&str; 4] = ["...", "...", "XXX", "..."];
-const SQUEEZE: [&str; 4] = ["X..", ".X.", ".X.", "X.."];
-const WIDE: [&str; 4] = ["XXX", "XoX", "XXX", "XXX"];
-const HAPPY: [&str; 4] = ["...", ".X.", "X.X", "..."];
-
-/// The head of the owl, 22 columns and 11 rows, with the eyes of a mood. `blink` shuts open eyes for one frame.
+/// The woven square, 22 columns and 11 rows. The loose thread at the lower right takes the colour of the mood.
+/// `blink` dims the thread for one frame while Penelope is awake.
 pub fn head(mood: Mood, blink: bool) -> Bitmap {
-    let mut bm = Bitmap::from_rgb(22, 22, include_bytes!("../../art/head_22x22.rgb"));
-    let (left, right) = match mood {
-        Mood::Awake if blink => (SHUT, SHUT),
-        Mood::Awake => (OPEN, OPEN),
-        Mood::Thinking => (SHUT, OPEN),
-        Mood::Working => (SQUEEZE, SQUEEZE),
-        Mood::Asking => (WIDE, WIDE),
-        Mood::Learned => (HAPPY, HAPPY),
-        Mood::Asleep => (SHUT, SHUT),
+    let mut bm = Bitmap::from_rgb(22, 22, include_bytes!("../../art/weave_22x22.rgb"));
+    let mask = include_bytes!("../../art/thread_22x22.gray");
+    let thread = match mood {
+        Mood::Awake if blink => DIM,
+        Mood::Awake => CLAY,
+        Mood::Thinking | Mood::Working => SEA,
+        Mood::Asking => RED,
+        Mood::Learned => PAPER,
+        Mood::Asleep => DIM,
     };
-    for (rows, x0, mirror) in [(left, 5usize, false), (right, 14usize, true)] {      // pupils on the amber eyes
-        for (dy, row) in rows.iter().enumerate() {
-            for (dx, c) in row.chars().enumerate() {
-                let x = x0 + if mirror { 2 - dx } else { dx };
-                match c {
-                    'X' => bm.set(x, 9 + dy, INK),
-                    'o' => bm.set(x, 9 + dy, PAPER),
-                    _ => {}
-                }
-            }
+    for (i, a) in mask.iter().take(22 * 22).enumerate() {
+        if *a > 0 {
+            let (a, base) = (*a as u32, bm.px[i]);
+            let mix = |t: u8, b: u8| ((t as u32 * a + b as u32 * (255 - a)) / 255) as u8;
+            bm.set(i % 22, i / 22, (mix(thread.0, base.0), mix(thread.1, base.1), mix(thread.2, base.2)));
         }
     }
     bm

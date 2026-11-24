@@ -17,13 +17,15 @@ pub enum Event {
     Text(String),
     ToolStart { id: String, name: String, detail: String },
     ToolEnd { id: String, ok: bool, summary: String },
+    /// The privacy filter masked this many items in the request before the main model read it.
+    Masked(usize),
 }
 
-/// `mcp__strix__run` becomes `run`, `mcp__screencodec__open` becomes `screen open`.
+/// `mcp__penelope__run` becomes `run`, `mcp__screencodec__open` becomes `screen open`.
 fn short_name(name: &str) -> String {
     let rest = name.strip_prefix("mcp__").unwrap_or(name);
     match rest.split_once("__") {
-        Some(("strix", tool)) => tool.to_string(),
+        Some(("penelope", tool)) => tool.to_string(),
         Some(("screencodec", tool)) => format!("screen {}", tool),
         Some((server, tool)) => format!("{} {}", server, tool),
         None => rest.to_string(),
@@ -47,7 +49,7 @@ fn first_line(text: &str) -> String {
     text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("").chars().take(160).collect()
 }
 
-pub const RULES: &str = "You work inside Strix Forgery, a small agent harness. Rules: \
+pub const RULES: &str = "You work inside Penelope, a small agent harness. Rules: \
 1. Use the tool run for every shell command. Long output comes back condensed by a weaker model. Ask run_detail for raw lines only when you need them. \
 2. Use fetch for web pages and give it the question you want answered. \
 3. When the user states a rule, a preference or a fact to keep, store it with memory_note. At the start of a task, look up the topic with memory_go. \
@@ -72,6 +74,16 @@ impl Chat {
                cancel: Arc::new(AtomicBool::new(false)), pid: Arc::new(AtomicU32::new(0)) }
     }
 
+    /// Goes on with a stored conversation of the claude command.
+    pub fn resume(entry: &Value) -> Chat {
+        let mut chat = Chat::new();
+        chat.session = entry["id"].as_str().map(String::from);
+        chat.turns = entry["turns"].as_u64().unwrap_or(0);
+        chat.input_tokens = entry["in"].as_u64().unwrap_or(0);
+        chat.output_tokens = entry["out"].as_u64().unwrap_or(0);
+        chat
+    }
+
     pub fn turn(&mut self, ctx: &Ctx, user: &str, memory: &str) -> Result<String, String> {
         self.turn_with(ctx, user, memory, &mut |_| {})
     }
@@ -79,6 +91,11 @@ impl Chat {
     /// One turn. `on` receives the text and the tool calls while the turn runs.
     pub fn turn_with(&mut self, ctx: &Ctx, user: &str, memory: &str, on: &mut dyn FnMut(Event)) -> Result<String, String> {
         self.cancel.store(false, Ordering::SeqCst);
+        let (user, masked) = crate::tools::guard_count(ctx, user);
+        let user = user.as_str();
+        if masked > 0 {
+            on(Event::Masked(masked));
+        }
         let mut system = if memory.is_empty() { RULES.to_string() } else { format!("{}\n\nNotes from the memory map for this request:\n{}", RULES, memory) };
         let skills = crate::plugins::skill_index(ctx);
         if !skills.is_empty() {
@@ -90,17 +107,20 @@ impl Chat {
         };
         if out.is_ok() {
             self.turns += 1;
+            if let Some(id) = &self.session {
+                crate::sessions::record(ctx, id, user, self.turns, (self.input_tokens, self.output_tokens));
+            }
         }
         out
     }
 
     fn turn_claude(&mut self, ctx: &Ctx, user: &str, system: &str, on: &mut dyn FnMut(Event)) -> Result<String, String> {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let mut servers = json!({"strix": {"command": exe.to_string_lossy(), "args": ["mcp", "--root", ctx.root.to_string_lossy()]}});
-        if let Ok(dir) = std::env::var("STRIX_APPROVE_DIR") {
-            servers["strix"]["env"] = json!({"STRIX_APPROVE_DIR": dir});       // the interface answers questions about unsafe commands
+        let mut servers = json!({"penelope": {"command": exe.to_string_lossy(), "args": ["mcp", "--root", ctx.root.to_string_lossy()]}});
+        if let Ok(dir) = std::env::var("PENELOPE_APPROVE_DIR") {
+            servers["penelope"]["env"] = json!({"PENELOPE_APPROVE_DIR": dir});       // the interface answers questions about unsafe commands
         }
-        let mut allowed: Vec<String> = ["run", "run_detail", "fetch", "memory_go", "memory_note", "memory_map", "skill"].iter().map(|t| format!("mcp__strix__{}", t)).collect();
+        let mut allowed: Vec<String> = ["run", "run_detail", "fetch", "memory_go", "memory_note", "memory_map", "skill"].iter().map(|t| format!("mcp__penelope__{}", t)).collect();
         if let Some(obj) = crate::plugins::servers(ctx).as_object() {
             for (k, s) in obj {
                 servers[k] = s.clone();        // tools of plugin servers are not on the allow list: the model sees them, a call is refused

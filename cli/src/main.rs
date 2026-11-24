@@ -1,33 +1,38 @@
-//! strix: Strix on the command line.
+//! penelope: the Polytrope harness on the command line.
 
 mod backend;
-mod owl;
+mod loom;
 mod config;
 mod mcp;
 mod memory;
 mod plugins;
 mod privacy;
+mod sessions;
 mod tools;
 mod tui;
 mod weak;
 
 use std::io::{BufRead, IsTerminal, Write};
 
-const HELP: &str = "strix                      chat with Strix in the full screen interface
-strix chat --plain         chat line by line, without the full screen interface
-strix ask \"TEXT\"           one question, one answer
-strix init                 create a .strix folder in this directory
-strix memory map           show the memory map
-strix memory go QUERY      follow the map to a waypoint and print the notes on the way
-strix memory note [--path a/b] TEXT
-                             store a rule or fact at a waypoint (without --path: filed by language or topic)
-strix run [--ask QUESTION] COMMAND
-                             run a command, long output condensed by the weaker model
-strix plugin add DIR       register a plugin folder in the format of Claude Code (skills and MCP servers)
-strix plugin list          show the registered plugins
-strix stats                how much tool output the weaker model kept away from the main model
-strix mcp [--root DIR]     serve Strix Forgery's tools as an MCP server on stdin and stdout
-strix doctor               check the programs and models Strix needs";
+const HELP: &str = "penelope                      chat with Penelope in the full screen interface
+penelope chat --plain         chat line by line, without the full screen interface
+penelope chat --resume N      go on with session N of the list
+penelope ask \"TEXT\"           one question, one answer
+penelope init                 create a .penelope folder in this directory
+penelope sessions             list the stored sessions, newest first
+penelope crew                 the eight model families and what does each job today
+penelope memory map           show the memory map
+penelope memory go QUERY      follow the map to a waypoint and print the notes on the way
+penelope memory note [--path a/b] TEXT
+                              store a rule or fact at a waypoint (without --path: filed by language or topic)
+penelope memory unravel [N]   take back the last note, or the last N notes
+penelope run [--ask QUESTION] COMMAND
+                              run a command, long output condensed by the weaker model
+penelope plugin add DIR       register a plugin folder in the format of Claude Code (skills and MCP servers)
+penelope plugin list          show the registered plugins
+penelope stats                how much tool output the weaker model kept away from the main model
+penelope mcp [--root DIR]     serve Penelope's tools as an MCP server on stdin and stdout
+penelope doctor               check the programs and models Penelope needs";
 
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
@@ -44,10 +49,10 @@ fn main() {
         return;
     }
     if cmd == "init" {
-        let root = std::env::current_dir().unwrap().join(".strix");
+        let root = std::env::current_dir().unwrap().join(".penelope");
         let ctx = config::load(&root);
         memory::Memory::open(&ctx.root);
-        owl::say(&format!("ready: {}", root.display()));
+        loom::say(&format!("ready: {}", root.display()));
         return;
     }
     let ctx = config::load(&config::find_root(root_arg.as_deref()));
@@ -69,22 +74,35 @@ fn main() {
             answer(&ctx, &mut chat, &text);
         }
         "doctor" => doctor(&ctx),
+        "crew" => print!("{}", tools::crew(&ctx)),
+        "sessions" => print!("{}", sessions::list(&ctx)),
         "stats" => print!("{}", tools::stats(&ctx)),
         "plugin" => match args.get(1).map(String::as_str) {
             Some("add") if args.len() >= 3 => println!("{}", plugins::add(&ctx, &args[2])),
             _ => print!("{}", plugins::list(&ctx)),
         },
         "chat" => {
+            let mut resume = None;
+            if let Some(i) = args.iter().position(|a| a == "--resume") {
+                let key = args.get(i + 1).cloned().unwrap_or_default();
+                match sessions::pick(&ctx, &key) {
+                    Some(entry) => resume = Some((backend::Chat::resume(&entry), entry["title"].as_str().unwrap_or("").to_string())),
+                    None => {
+                        loom::warn(&format!("no session {} in the list (penelope sessions)", key));
+                        std::process::exit(2);
+                    }
+                }
+            }
             let plain = args.iter().any(|a| a == "--plain") || !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal();
             if plain {
-                repl(&ctx);
-            } else if let Err(e) = tui::run(ctx) {
-                owl::warn(&e);
+                repl(&ctx, resume.map(|(chat, _)| chat));
+            } else if let Err(e) = tui::run(ctx, resume) {
+                loom::warn(&e);
                 std::process::exit(1);
             }
         }
         other => {
-            owl::warn(&format!("unknown command: {}", other));
+            loom::warn(&format!("unknown command: {}", other));
             println!("{}", HELP);
             std::process::exit(2);
         }
@@ -104,35 +122,36 @@ fn memory_cmd(ctx: &config::Ctx, args: &[String]) {
             }
             println!("{}", tools::memory_note(ctx, &path, &rest.join(" ")));
         }
-        Some(other) => owl::warn(&format!("unknown memory command: {}", other)),
+        Some("unravel") => println!("{}", tools::unravel(ctx, args.get(1).and_then(|n| n.parse().ok()).unwrap_or(1))),
+        Some(other) => loom::warn(&format!("unknown memory command: {}", other)),
     }
 }
 
 fn answer(ctx: &config::Ctx, chat: &mut backend::Chat, text: &str) {
     let (notes, trail, cached) = memory::Memory::open(&ctx.root).recall(text, 1600);
     if !trail.is_empty() {
-        owl::say(&format!("memory: start / {}{}", trail.last().unwrap().replace('/', " / "), if cached { " (stored walk)" } else { "" }));
+        loom::say(&format!("memory: start / {}{}", trail.last().unwrap().replace('/', " / "), if cached { " (stored walk)" } else { "" }));
     }
     match chat.turn(ctx, text, &notes) {
         Ok(a) => {
             println!("{}", a);
-            owl::say(&format!("tokens so far: {} in, {} out", chat.input_tokens, chat.output_tokens));
+            loom::say(&format!("tokens so far: {} in, {} out", chat.input_tokens, chat.output_tokens));
             if ctx.cfg["auto_learn"].as_bool().unwrap_or(true) {
                 for id in tools::learn(ctx, text, &a) {
-                    owl::say(&format!("learned: {}", id));
+                    loom::say(&format!("learned: {}", id));
                 }
             }
         }
-        Err(e) => owl::warn(&e),
+        Err(e) => loom::warn(&e),
     }
 }
 
-fn repl(ctx: &config::Ctx) {
-    owl::banner(&format!("main model: {} ({})   weaker model: {} ({})",
+fn repl(ctx: &config::Ctx, resume: Option<backend::Chat>) {
+    loom::banner(&format!("main model: {} ({})   weaker model: {} ({})",
         ctx.cfg["main"]["model"].as_str().unwrap_or("?"), ctx.cfg["main"]["kind"].as_str().unwrap_or("?"),
         ctx.cfg["weak"]["model"].as_str().unwrap_or("?"), ctx.cfg["weak"]["kind"].as_str().unwrap_or("?")));
     println!("Type a request. /map shows the memory map, /quit ends.");
-    let mut chat = backend::Chat::new();
+    let mut chat = resume.unwrap_or_else(backend::Chat::new);
     let stdin = std::io::stdin();
     loop {
         print!("you> ");
@@ -149,15 +168,15 @@ fn repl(ctx: &config::Ctx) {
             _ => answer(ctx, &mut chat, line),
         }
     }
-    owl::say("bye");
+    loom::say("bye");
 }
 
 fn doctor(ctx: &config::Ctx) {
-    owl::banner("doctor");
+    loom::banner("doctor");
     print!("{}", doctor_text(ctx));
 }
 
-/// One line per program or setting Strix depends on.
+/// One line per program or setting Penelope depends on.
 pub fn doctor_text(ctx: &config::Ctx) -> String {
     let mut out = String::new();
     let mut line = |name: &str, ok: bool, detail: String| {
@@ -167,7 +186,7 @@ pub fn doctor_text(ctx: &config::Ctx) -> String {
     let claude = config::which("claude");
     line("claude command (login of the user, main and weaker model)", claude.is_some(), claude.map(|p| p.display().to_string()).unwrap_or_else(|| "not on the PATH".into()));
     let sc = ctx.cfg["screencodec"]["command"].as_str().filter(|c| !c.is_empty()).map(std::path::PathBuf::from).or_else(|| config::which("screencodec-mcp"));
-    line("screencodec-mcp (eyes: pages and pictures as text)", sc.is_some(), sc.map(|p| p.display().to_string()).unwrap_or_else(|| "not on the PATH, Strix runs without it".into()));
+    line("screencodec-mcp (eyes: pages and pictures as text)", sc.is_some(), sc.map(|p| p.display().to_string()).unwrap_or_else(|| "not on the PATH, Penelope runs without it".into()));
     line("run policy", true, ctx.cfg["run_policy"].as_str().unwrap_or("safe").to_string());
     line("memory map", true, format!("{} lines", tools::memory_map(ctx).lines().count()));
     out

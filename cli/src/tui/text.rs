@@ -1,6 +1,6 @@
 //! Text for the terminal interface: word wrap of styled runs, a small Markdown reader and the layout of the input box.
 
-use super::art::{col, AMBER, ASH, NIGHT, PAPER, TEAL};
+use super::art::{col, CLAY, ASH, NIGHT, PAPER, SEA};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -111,7 +111,7 @@ fn inline(text: &str, base: Style) -> Vec<Run> {
                     plain.clear();
                 }
                 let code: String = chars[i + 1..i + 1 + len].iter().collect();
-                out.push(run(&code, Style::default().fg(col(TEAL))));
+                out.push(run(&code, Style::default().fg(col(SEA))));
                 i += len + 2;
                 continue;
             }
@@ -181,7 +181,7 @@ pub fn markdown(text: &str, max: usize) -> Vec<Line<'static>> {
         let lead = line.len() - trimmed.len();
         let hashes = trimmed.chars().take_while(|c| *c == '#').count();
         if (1..=6).contains(&hashes) && trimmed[hashes..].starts_with(' ') {
-            let style = Style::default().fg(col(AMBER)).add_modifier(Modifier::BOLD);
+            let style = Style::default().fg(col(CLAY)).add_modifier(Modifier::BOLD);
             for l in wrap(&inline(trimmed[hashes..].trim(), style), max) {
                 out.push(to_line("", l));
             }
@@ -205,7 +205,7 @@ pub fn markdown(text: &str, max: usize) -> Vec<Line<'static>> {
         let indent = " ".repeat(width(&first));
         for (i, l) in wrap(&inline(body, body_style), max.saturating_sub(width(&first))).into_iter().enumerate() {
             if i == 0 || quote {
-                let mut spans = vec![Span::styled(first.clone(), Style::default().fg(col(AMBER)))];
+                let mut spans = vec![Span::styled(first.clone(), Style::default().fg(col(CLAY)))];
                 spans.extend(l.into_iter().map(|r| Span::styled(r.text, r.style)));
                 out.push(Line::from(spans));
             } else {

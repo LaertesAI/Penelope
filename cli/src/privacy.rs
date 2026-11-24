@@ -1,5 +1,5 @@
-//! The privacy filter. It masks secrets in tool output before any model reads the text. Today it works with fixed
-//! rules. The Strix model of VeeAI takes this place later.
+//! The privacy filter. It masks secrets in requests and tool output before any model reads the text. Today it works
+//! with fixed rules. An Outis model takes this place later. The level "pii" also masks e-mail addresses and IBANs.
 
 const KEY_NAMES: &[&str] = &["password", "passwd", "secret", "token", "api_key", "apikey", "api-key", "access_key", "private_key", "authorization"];
 /// Prefix of a known key format and the shortest length that counts.
@@ -110,9 +110,81 @@ pub fn mask(text: &str) -> (String, usize) {
     (out, hits)
 }
 
+fn is_email(w: &str) -> bool {
+    let Some((local, domain)) = w.split_once('@') else { return false };
+    !local.is_empty() && !domain.contains('@') && domain.contains('.') && !domain.starts_with('.') && !domain.ends_with('.')
+        && local.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '+'))
+        && domain.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'))
+}
+
+/// Country code, two check digits, then 11 to 30 letters or digits.
+fn is_iban(w: &str) -> bool {
+    let b = w.as_bytes();
+    (15..=34).contains(&b.len()) && b[0].is_ascii_uppercase() && b[1].is_ascii_uppercase() && b[2].is_ascii_digit() && b[3].is_ascii_digit()
+        && b[4..].iter().all(|c| c.is_ascii_digit() || c.is_ascii_uppercase())
+}
+
+/// The second pass of the level "pii": e-mail addresses and IBANs, written in one piece or in groups of four.
+pub fn mask_pii(text: &str) -> (String, usize) {
+    let (mut out, mut hits) = (String::with_capacity(text.len()), 0usize);
+    for line in text.split_inclusive('\n') {
+        let (body, end) = match line.strip_suffix('\n') {
+            Some(b) => (b, "\n"),
+            None => (line, ""),
+        };
+        let words: Vec<&str> = body.split(' ').collect();
+        let mut i = 0;
+        let mut first = true;
+        while i < words.len() {
+            if !first {
+                out.push(' ');
+            }
+            first = false;
+            let w = words[i];
+            let core = w.trim_matches(|c: char| is_delim(c) || matches!(c, '.' | ':' | '!' | '?'));
+            if is_email(core) {
+                out.push_str(&w.replace(core, "[masked:email]"));
+                hits += 1;
+            } else if is_iban(core) {
+                out.push_str(&w.replace(core, "[masked:iban]"));
+                hits += 1;
+            } else {
+                // an IBAN in groups: DE89 3704 0044 0532 0130 00
+                let mut joined = String::new();
+                let mut j = i;
+                while j < words.len() && joined.len() < 34 && !words[j].is_empty() && words[j].len() <= 4
+                    && words[j].chars().all(|c| c.is_ascii_digit() || c.is_ascii_uppercase()) {
+                    joined.push_str(words[j]);
+                    j += 1;
+                }
+                if j - i >= 4 && is_iban(&joined) {
+                    out.push_str("[masked:iban]");
+                    hits += 1;
+                    i = j;
+                    continue;
+                }
+                out.push_str(w);
+            }
+            i += 1;
+        }
+        out.push_str(end);
+    }
+    (out, hits)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::mask;
+    use super::{mask, mask_pii};
+
+    #[test]
+    fn masks_mail_addresses_and_ibans() {
+        let (t, n) = mask_pii("Write to (anna.berg@example.org). IBAN DE89 3704 0044 0532 0130 00 or DE89370400440532013000\nplain line 1234 5678\n");
+        assert_eq!(n, 3, "{}", t);
+        assert_eq!(t, "Write to ([masked:email]). IBAN [masked:iban] or [masked:iban]\nplain line 1234 5678\n");
+        for plain in ["user@host", "git@github.com:owner/repo.git", "x = a @ b", "AB12 is short"] {
+            assert_eq!(mask_pii(plain), (plain.to_string(), 0));
+        }
+    }
 
     #[test]
     fn masks_keys_and_values() {

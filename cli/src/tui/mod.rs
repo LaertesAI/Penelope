@@ -1,4 +1,4 @@
-//! The full screen interface of strix: a transcript, an input box, a side panel with the owl and its mood.
+//! The full screen interface of penelope: a transcript, an input box, a side panel with the loom and its mood.
 //!
 //! One thread draws and reads keys. A turn of the main model runs in a second thread and reports through a channel.
 
@@ -59,17 +59,20 @@ pub struct Cmd {
 pub const COMMANDS: &[Cmd] = &[
     Cmd { name: "/new", help: "start a new session", key: "ctrl+n", takes_text: false },
     Cmd { name: "/models", help: "choose the main and the weaker model", key: "ctrl+o", takes_text: false },
+    Cmd { name: "/sessions", help: "list the stored sessions", key: "", takes_text: false },
+    Cmd { name: "/crew", help: "the model families and what does each job today", key: "", takes_text: false },
     Cmd { name: "/map", help: "show the memory map", key: "", takes_text: false },
     Cmd { name: "/go", help: "follow the memory map to a topic", key: "", takes_text: true },
     Cmd { name: "/note", help: "store a rule or a fact in the memory map", key: "", takes_text: true },
+    Cmd { name: "/unravel", help: "take back the last note of the memory map", key: "", takes_text: false },
     Cmd { name: "/stats", help: "how much tool output stayed away from the main model", key: "", takes_text: false },
     Cmd { name: "/plugins", help: "list the registered plugins", key: "", takes_text: false },
-    Cmd { name: "/doctor", help: "check the programs and models Strix needs", key: "", takes_text: false },
+    Cmd { name: "/doctor", help: "check the programs and models Penelope needs", key: "", takes_text: false },
     Cmd { name: "/copy", help: "copy the last answer to the clipboard", key: "", takes_text: false },
-    Cmd { name: "/shot", help: "save the screen as a picture under .strix/screens", key: "f12", takes_text: false },
+    Cmd { name: "/shot", help: "save the screen as a picture under .penelope/screens", key: "f12", takes_text: false },
     Cmd { name: "/sidebar", help: "show or hide the side panel", key: "ctrl+b", takes_text: false },
     Cmd { name: "/help", help: "keys and commands", key: "f1", takes_text: false },
-    Cmd { name: "/quit", help: "leave Strix", key: "ctrl+c", takes_text: false },
+    Cmd { name: "/quit", help: "leave Penelope", key: "ctrl+c", takes_text: false },
 ];
 
 enum Msg {
@@ -79,7 +82,7 @@ enum Msg {
     Learned(Vec<String>),
 }
 
-/// Numbers of the side panel that come from files under `.strix`.
+/// Numbers of the side panel that come from files under `.penelope`.
 #[derive(Default)]
 pub struct Side {
     pub waypoints: usize,
@@ -289,7 +292,7 @@ impl App {
                 Msg::Trail(trail, cached) => {
                     let way = format!("start / {}{}", trail.last().map(|t| t.replace('/', " / ")).unwrap_or_default(), if cached { "  (stored walk)" } else { "" });
                     self.trail = trail;
-                    self.note("◆", "memory", way, art::TEAL);
+                    self.note("◆", "memory", way, art::SEA);
                 }
                 Msg::Turn(TurnEvent::Delta(t)) => {
                     match self.items.last_mut() {
@@ -306,6 +309,10 @@ impl App {
                     }
                     self.streaming = false;
                     self.scroll = 0;
+                }
+                Msg::Turn(TurnEvent::Masked(n)) => {
+                    self.note("◆", "outis", format!("{} masked in the request before the model read it", if n == 1 { "1 item".to_string() } else { format!("{} items", n) }), art::SEA);
+                    self.refresh_side();
                 }
                 Msg::Turn(TurnEvent::ToolStart { id, name, detail }) => {
                     self.tool_calls += 1;
@@ -361,7 +368,7 @@ impl App {
                 Msg::Learned(ids) => {
                     self.learning = false;
                     for id in ids {
-                        self.note("✦", "learned", id.clone(), art::AMBER);
+                        self.note("✦", "learned", id.clone(), art::CLAY);
                         self.learned.push(id);
                         self.flash = Some((Mood::Learned, Instant::now()));
                     }
@@ -439,11 +446,18 @@ impl App {
             "/go" if !rest.is_empty() => self.pager("Memory map: the way", tools::memory_go(&self.ctx, rest)),
             "/note" if !rest.is_empty() => {
                 let report = tools::memory_note(&self.ctx, "", rest);
-                self.note("✦", "learned", report.trim_start_matches("noted at ").to_string(), art::AMBER);
+                self.note("✦", "learned", report.trim_start_matches("noted at ").to_string(), art::CLAY);
                 self.flash = Some((Mood::Learned, Instant::now()));
                 self.refresh_side();
             }
             "/go" | "/note" => self.toast(format!("{} TEXT", name)),
+            "/sessions" => self.pager("Sessions", crate::sessions::list(&self.ctx)),
+            "/crew" => self.pager("Crew", tools::crew(&self.ctx)),
+            "/unravel" => {
+                let report = tools::unravel(&self.ctx, 1);
+                self.note("↺", "unravel", report, art::SEA);
+                self.refresh_side();
+            }
             "/stats" => self.pager("Routed tool output", tools::stats(&self.ctx)),
             "/plugins" => self.pager("Plugins", plugins::list(&self.ctx)),
             "/doctor" => self.pager("Doctor", crate::doctor_text(&self.ctx)),
@@ -470,7 +484,7 @@ impl App {
             return;
         }
         if !text.starts_with('/') && self.busy.is_some() {
-            self.toast("Strix still works on the last request. esc stops it.".to_string());
+            self.toast("Penelope still works on the last request. esc stops it.".to_string());
             return;
         }
         self.set_input("");
@@ -696,7 +710,7 @@ fn help_text() -> String {
         up, down         earlier and later requests\n\
         page up, down    scroll the transcript (also the mouse wheel)\n\
         esc              stop the running turn, or empty the input\n\
-        ctrl+c           empty the input, leave Strix when it is empty\n\
+        ctrl+c           empty the input, leave Penelope when it is empty\n\
         shift+drag       mark text with the mouse\n\nCommands\n");
     for c in COMMANDS {
         out.push_str(&format!("{:<10} {:<8} {}\n", c.name, c.key, c.help));
@@ -706,10 +720,16 @@ fn help_text() -> String {
 }
 
 /// Runs the interface until the person leaves it.
-pub fn run(ctx: Ctx) -> Result<(), String> {
+pub fn run(ctx: Ctx, resume: Option<(Chat, String)>) -> Result<(), String> {
     art::detect_colour();
     let mut app = App::new(ctx);
-    std::env::set_var("STRIX_APPROVE_DIR", &app.approve_dir);
+    if let Some((chat, title)) = resume {
+        app.tokens = (chat.input_tokens, chat.output_tokens);
+        app.turns = chat.turns;
+        app.chat = Some(chat);
+        app.note("↺", "resumed", title, art::SEA);
+    }
+    std::env::set_var("PENELOPE_APPROVE_DIR", &app.approve_dir);
     let mut terminal = ratatui::init();
     let _ = execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste);
     let result = (|| -> Result<(), String> {
@@ -760,7 +780,7 @@ mod tests {
     use ratatui::Terminal;
 
     fn app() -> App {
-        let root = std::env::temp_dir().join(format!("strix-test-{}-{:?}", std::process::id(), std::thread::current().id()));
+        let root = std::env::temp_dir().join(format!("penelope-test-{}-{:?}", std::process::id(), std::thread::current().id()));
         let _ = fs::remove_dir_all(&root);
         App::new(crate::config::load(&root))
     }
@@ -825,14 +845,14 @@ mod tests {
     fn home_shows_the_input_and_chat_shows_the_transcript() {
         let mut a = app();
         let home = screen(&mut a, 120, 40);
-        assert!(home.contains("Ask Strix anything"), "{}", home);
+        assert!(home.contains("Ask Penelope anything"), "{}", home);
         a.items.push(Item::User("list the files".into()));
         a.items.push(Item::Reply("Three files: **a**, `b` and c.".into()));
         let chat = screen(&mut a, 120, 40);
         assert!(chat.contains("list the files") && chat.contains("Three files: a, b and c."), "{}", chat);
-        assert!(chat.contains("MEMORY") && chat.contains("awake") && chat.contains("FORMATION") && chat.contains("privacy"), "{}", chat);
+        assert!(chat.contains("MEMORY") && chat.contains("awake") && chat.contains("CREW") && chat.contains("outis"), "{}", chat);
         let narrow = screen(&mut a, 70, 24);
-        assert!(!narrow.contains("MEMORY") && narrow.contains("{ o,o }"), "{}", narrow);
+        assert!(!narrow.contains("MEMORY") && narrow.contains("[#|#]"), "{}", narrow);
     }
 
     #[test]

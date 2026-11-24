@@ -1,9 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="112 135 800 800" role="img" aria-label="The owl, asleep">
-<g id="owl">
-    <path id="head" fill="#F6F3EC" d="M150 205C204 246 266 276 307 280C437 189 587 189 717 280C758 276 820 246 874 205C885 266 867 318 817 356C864 419 891 492 890 567C888 739 713 880 512 880C311 880 136 739 134 567C133 492 160 419 207 356C157 318 139 266 150 205Z" />
-    <path id="facial-disc" fill="#B5B1C2" d="M280 380C362 413 444 467 512 527C580 467 662 413 744 380C806 421 844 485 844 553C844 706 693 837 512 837C331 837 180 706 180 553C180 485 218 421 280 380Z" />
-    
-    <g id="eyes-asleep"><path d="M262 548 Q348 610 434 548 M590 548 Q676 610 762 548" fill="none" stroke="#15131C" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/></g>
-    <path id="beak" fill="#15131C" d="M464 649H560Q571 649 566 661L520 751Q512 766 504 751L458 661Q453 649 464 649Z" />
-  </g>
-</svg>
