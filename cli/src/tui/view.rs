@@ -566,19 +566,36 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
                 put(f, inner, inner.x, inner.y + 2, "no session yet. A session is stored after its first answer.", on(DIM, RAISED));
             }
         }
-        Overlay::Approve { command, cwd, file, .. } => {
-            let w = 76u16.min(area.width.saturating_sub(4)).max(10);
+        Overlay::Approve { command, cwd, file, diff, .. } => {
+            let widest = diff.iter().map(|l| width(l)).max().unwrap_or(0) as u16;
+            let w = (widest + 6).clamp(76, 104).min(area.width.saturating_sub(4)).max(10);
             let command = &tilde_all(command);
             let rows = wrap_plain(command, (w as usize).saturating_sub(8).max(1));
-            let inner = dialog(f, area, if *file { "Change this file?" } else { "Run this command?" }, w, rows.len() as u16 + 10);
+            let inner = dialog(f, area, if *file { "Change this file?" } else { "Run this command?" }, w,
+                               rows.len() as u16 + 10 + if diff.is_empty() { 0 } else { diff.len() as u16 + 1 });
             put(f, inner, inner.x, inner.y, if *file { "The main model wants to change a file. Penelope waits for an answer." }
                 else { "The command is outside the safe list. Penelope waits for an answer." }, on(ASH, RAISED));
             let mut y = inner.y + 2;
-            for row in rows.iter().take(inner.height.saturating_sub(5) as usize) {
+            let shown = rows.len().min(inner.height.saturating_sub(5) as usize);
+            for row in rows.iter().take(shown) {
                 fill(f, Rect::new(inner.x, y, inner.width, 1), INK);
                 put(f, inner, inner.x + 1, y, if *file { "±" } else { "$" }, on(CLAY, INK));
                 put(f, inner, inner.x + 3, y, row, on(PAPER, INK));
                 y += 1;
+            }
+            // The changed lines: removed in red, added in clay. The dialog keeps 5 rows for its fixed lines, the diff gets the rest.
+            let room = (inner.height as usize).saturating_sub(6 + shown);
+            if !diff.is_empty() && room > 0 {
+                y += 1;
+                let fits = diff.len() <= room;
+                for (i, line) in diff.iter().take(room).enumerate() {
+                    fill(f, Rect::new(inner.x, y, inner.width, 1), INK);
+                    let (text, colour) = if !fits && i + 1 == room { (format!("        {} more changed lines", diff.len() - i), DIM) } else {
+                        (tilde_all(line), match line.chars().next() { Some('-') => RED, Some('+') => CLAY, _ => DIM })
+                    };
+                    put(f, inner, inner.x + 1, y, &text, on(colour, INK));
+                    y += 1;
+                }
             }
             if !cwd.is_empty() {
                 put(f, inner, inner.x, y, &format!("in {}", clip(&tilde(cwd), (inner.width as usize).saturating_sub(4))), on(DIM, RAISED));

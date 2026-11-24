@@ -74,6 +74,15 @@ fn guard(ctx: &Ctx, text: &str) -> String {
     guard_count(ctx, text).0
 }
 
+/// A finished text block of a model on its way to the screen and to the transcript. It passes the same filter as a
+/// request, and its masked items go to the same count. With "privacy_answers": false the block passes unchanged.
+pub fn guard_answer(ctx: &Ctx, text: &str) -> (String, usize) {
+    if !ctx.cfg["privacy_answers"].as_bool().unwrap_or(true) {
+        return (text.to_string(), 0);
+    }
+    guard_count(ctx, text)
+}
+
 /// The eight model families of Laertes and what does each job in Penelope today.
 pub fn crew(ctx: &Ctx) -> String {
     let model = |key: &str| format!("{} ({})", ctx.cfg[key]["model"].as_str().unwrap_or("?"), ctx.cfg[key]["kind"].as_str().unwrap_or("?"));
@@ -124,7 +133,7 @@ pub fn stats(ctx: &Ctx) -> String {
     out.push_str(&format!("scout: {} tasks with {} steps on the weaker model, {} tokens in and {} out that the main model never read\n",
                           v["scout"]["tasks"].as_u64().unwrap_or(0), v["scout"]["steps"].as_u64().unwrap_or(0),
                           v["scout"]["tokens_in"].as_u64().unwrap_or(0), v["scout"]["tokens_out"].as_u64().unwrap_or(0)));
-    out.push_str(&format!("privacy: {} secrets masked before a model read them\n", v["privacy"]["masked"].as_u64().unwrap_or(0)));
+    out.push_str(&format!("privacy: {} items masked in requests, tool output and answers\n", v["privacy"]["masked"].as_u64().unwrap_or(0)));
     out
 }
 
@@ -134,16 +143,16 @@ fn next_run_id(ctx: &Ctx) -> u64 {
 }
 
 /// Asks the person at the terminal interface whether a command outside the safe list may run, or whether a file may change
-/// (`kind` is "command" or "file"). The interface names a
+/// (`kind` is "command" or "file"). `diff` holds the changed lines of a file, the dialog shows them. The interface names a
 /// folder in PENELOPE_APPROVE_DIR. The question is a file `ID.req` there, the answer a file `ID.ans` with `yes` or `no`.
 /// Without that folder nobody can answer: None. No answer within 120 seconds counts as no.
-pub fn ask_person(command: &str, cwd: &str, kind: &str) -> Option<bool> {
+pub fn ask_person(command: &str, cwd: &str, kind: &str, diff: &str) -> Option<bool> {
     let dir = std::path::PathBuf::from(std::env::var("PENELOPE_APPROVE_DIR").ok().filter(|d| !d.is_empty())?);
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     let id = format!("{}-{}", std::process::id(), nanos);
     let (req, ans) = (dir.join(format!("{}.req", id)), dir.join(format!("{}.ans", id)));
     let tmp = dir.join(format!("{}.tmp", id));
-    fs::write(&tmp, serde_json::json!({"command": command, "cwd": cwd, "kind": kind}).to_string()).ok()?;
+    fs::write(&tmp, serde_json::json!({"command": command, "cwd": cwd, "kind": kind, "diff": diff}).to_string()).ok()?;
     fs::rename(&tmp, &req).ok()?;
     for _ in 0..600 {
         if let Ok(answer) = fs::read_to_string(&ans) {
@@ -197,10 +206,15 @@ pub fn ask_user(question: &str, options: &serde_json::Value) -> String {
 /// One tool call of a turn: name, the argument shown to the person, whether it worked, the first line of its result.
 pub type Call = (String, String, bool, String);
 
+/// True if a call failed or was refused: the tool reported an error, or its first line says so.
+pub fn in_trouble(call: &Call) -> bool {
+    let trouble = ["NOT ", "cannot ", "does not occur", " occurs ", "no file matches", "no line holds", "failed", "unknown tool", "could not"];
+    !call.2 || trouble.iter().any(|t| call.3.contains(t))
+}
+
 /// True if a turn holds something to learn from: a call that failed or was refused, or a long row of calls.
 pub fn worth_a_lesson(trace: &[Call]) -> bool {
-    let trouble = ["NOT ", "cannot ", "does not occur", " occurs ", "no file matches", "no line holds", "failed", "unknown tool", "could not"];
-    trace.len() >= 8 || trace.iter().any(|(_, _, ok, summary)| !ok || trouble.iter().any(|t| summary.contains(t)))
+    trace.len() >= 8 || trace.iter().any(in_trouble)
 }
 
 /// Learning from tool use: the weaker model reads the tool calls of one turn and files what would make the next turn
@@ -218,18 +232,26 @@ imperative that names the concrete thing. At most 3 lessons. Lessons that any ag
     for (i, (name, detail, ok, summary)) in trace.iter().take(40).enumerate() {
         lines.push(format!("{}. {} {} -> {}{}", i + 1, name, detail.chars().take(160).collect::<String>(), if *ok { "" } else { "FAILED: " }, summary.chars().take(200).collect::<String>()));
     }
-    let Ok(text) = weak::ask(&ctx.cfg["weak"], system, &guard(ctx, &lines.join("\n"))) else { return Vec::new() };
+    let asked = weak::ask(&ctx.cfg["weak"], system, &guard(ctx, &lines.join("\n")));
     let mut out = Vec::new();
     let mut m = Memory::open(&ctx.root);
     let known = m.branch("tools", 4000);
-    for line in text.lines().take(3) {
+    for line in asked.as_deref().unwrap_or("").lines().take(3) {
         if let Some((path, lesson)) = line.split_once('|') {
-            let (path, lesson) = (path.trim().trim_start_matches('-').trim(), lesson.trim());
+            let (path, lesson) = (path.trim().trim_start_matches('-').trim().to_lowercase(), lesson.trim());      // the weaker model wrote tools/Bash once
             let ok_path = path.starts_with("tools/") && path.len() <= 40 && path.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '/' || c == '-' || c == '_');
             if ok_path && lesson.len() > 12 && lesson.len() < 240 && !known.contains(lesson) {
-                out.push(m.note(path, lesson));
+                out.push(m.note(&path, lesson));
             }
         }
+    }
+    // One line per lesson step in .penelope/lessons.log: what the weaker model wrote and how many lessons were filed.
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let entry = serde_json::json!({"at": crate::sessions::stamp(secs), "calls": trace.len(), "filed": out.len(),
+        "answer": asked.unwrap_or_else(|e| format!("the weaker model failed: {}", e)).chars().take(600).collect::<String>()});
+    if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(ctx.root.join("lessons.log")) {
+        use std::io::Write;
+        let _ = writeln!(f, "{}", entry);
     }
     out
 }
@@ -240,7 +262,7 @@ pub fn run(ctx: &Ctx, command: &str, question: &str, cwd: &str) -> String {
         if crate::scout::inside() {
             return "NOT run. A scout runs commands of the safe list only: read-only and build commands without shell operators.".to_string();
         }
-        match ask_person(command, cwd, "command") {
+        match ask_person(command, cwd, "command", "") {
             Some(true) => {}
             Some(false) => return "NOT run. The user declined this command.".to_string(),
             None => return "NOT run. The command is not on the safe list (read-only and build commands without shell operators). \

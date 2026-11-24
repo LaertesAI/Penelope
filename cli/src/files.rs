@@ -1,5 +1,5 @@
 //! File tools: read, write, edit, find and grep. What a model reads passes the privacy filter. A change waits for
-//! the person's yes unless the config says "edit_policy": "all".
+//! the person's yes unless the config says "edit_policy": "all". The question carries the changed lines.
 
 use crate::config::Ctx;
 use std::fs;
@@ -24,7 +24,7 @@ pub fn resolve(path: &str, cwd: &str) -> PathBuf {
 }
 
 /// A path for a message, with the home folder written as `~`. `resolve` reads that form again.
-fn show(p: &Path) -> String {
+pub fn show(p: &Path) -> String {
     let (text, home) = (p.display().to_string(), std::env::var("HOME").unwrap_or_default());
     match text.strip_prefix(&home) {
         Some(rest) if home.len() > 1 && rest.starts_with('/') => format!("~{}", rest),
@@ -60,12 +60,35 @@ pub fn read(ctx: &Ctx, path: &str, offset: usize, limit: usize, cwd: &str) -> St
             if hits > 0 { format!(" · {} items masked", hits) } else { String::new() }, shown)
 }
 
-/// None if the change may happen, else the text of the refusal.
-fn permit(ctx: &Ctx, what: &str, cwd: &str) -> Option<String> {
+/// Lines of one side the question "Change this file?" shows at most.
+const DIFF_LINES: usize = 12;
+
+/// The changed lines between two versions of a file, for the question "Change this file?". Equal lines at the start and
+/// at the end are left out. Removed lines start with `-`, added lines with `+`, each with its line number. Each side
+/// shows 12 lines, a line without a sign counts the rest. Two equal texts give an empty text.
+pub fn diff_text(old: &str, new: &str) -> String {
+    let (a, b): (Vec<&str>, Vec<&str>) = (old.lines().collect(), new.lines().collect());
+    let head = a.iter().zip(b.iter()).take_while(|(x, y)| x == y).count();
+    let tail = a[head..].iter().rev().zip(b[head..].iter().rev()).take_while(|(x, y)| x == y).count();
+    let mut out = Vec::new();
+    for (sign, lines, word) in [('-', &a[head..a.len() - tail], "removed"), ('+', &b[head..b.len() - tail], "added")] {
+        for (i, line) in lines.iter().take(DIFF_LINES).enumerate() {
+            let text: String = line.replace('\t', "    ").chars().filter(|c| !c.is_control()).take(160).collect();
+            out.push(format!("{}{:>5}  {}", sign, head + i + 1, text));
+        }
+        if lines.len() > DIFF_LINES {
+            out.push(format!("        {} more {} lines", lines.len() - DIFF_LINES, word));
+        }
+    }
+    out.join("\n")
+}
+
+/// None if the change may happen, else the text of the refusal. `diff` holds the changed lines for the question.
+fn permit(ctx: &Ctx, what: &str, cwd: &str, diff: &str) -> Option<String> {
     if ctx.cfg["edit_policy"].as_str() == Some("all") {
         return None;
     }
-    match crate::tools::ask_person(what, cwd, "file") {
+    match crate::tools::ask_person(what, cwd, "file", diff) {
         Some(true) => None,
         Some(false) => Some("NOT changed. The user declined this change.".to_string()),
         None => Some("NOT changed. Outside the full screen interface nobody can answer the question. The user can allow every change \
@@ -79,11 +102,12 @@ pub fn write(ctx: &Ctx, path: &str, text: &str, cwd: &str) -> String {
     if p.is_dir() {
         return format!("{} is a folder", show(&p));
     }
-    let what = match fs::read_to_string(&p) {
+    let before = fs::read_to_string(&p);
+    let what = match &before {
         Ok(old) => format!("overwrite {} ({} lines become {})", show(&p), old.lines().count(), text.lines().count()),
         Err(_) => format!("create {} ({} lines)", show(&p), text.lines().count()),
     };
-    if let Some(refusal) = permit(ctx, &what, cwd) {
+    if let Some(refusal) = permit(ctx, &what, cwd, &diff_text(before.as_deref().unwrap_or(""), text)) {
         return refusal;
     }
     if let Some(dir) = p.parent() {
@@ -112,13 +136,14 @@ pub fn edit(ctx: &Ctx, path: &str, old: &str, new: &str, all: bool, cwd: &str) -
     if count > 1 && !all {
         return format!("the old text occurs {} times in {}. Add surrounding lines until it occurs once, or set all to true.", count, show(&p));
     }
-    let line = text[..text.find(old).unwrap_or(0)].lines().count().max(1);
+    let line = text[..text.find(old).unwrap_or(0)].matches('\n').count() + 1;
     let what = format!("edit {} at line {} ({} {}, {} lines become {})", show(&p), line, count, if count == 1 { "place" } else { "places" },
                        old.lines().count() * count, new.lines().count() * count);
-    if let Some(refusal) = permit(ctx, &what, cwd) {
+    let after = text.replace(old, new);
+    if let Some(refusal) = permit(ctx, &what, cwd, &diff_text(&text, &after)) {
         return refusal;
     }
-    match fs::write(&p, text.replace(old, new)) {
+    match fs::write(&p, after) {
         Ok(()) => format!("done: {}", what),
         Err(e) => format!("cannot write {}: {}", show(&p), e),
     }
@@ -331,6 +356,18 @@ mod tests {
         let lines = outline(&ctx, "src/deep/b.rs", &cwd);
         assert!(lines.contains("7 lines, 2 entries") && lines.contains("    3  pub fn one() {") && lines.contains("    7  struct Two;"), "{}", lines);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn diff_text_numbers_the_changed_lines_and_stops_at_12() {
+        assert_eq!(diff_text("a\nb\nc\nd\n", "a\nB\nC\nc2\nd\n"), "-    2  b\n-    3  c\n+    2  B\n+    3  C\n+    4  c2");
+        assert_eq!(diff_text("", "x\n\ty"), "+    1  x\n+    2      y");
+        assert_eq!(diff_text("same\n", "same\n"), "");
+        let old: String = (1..=30).map(|i| format!("line {}\n", i)).collect();
+        let cut = diff_text(&old, "line 1\nline 30\n");
+        let rows: Vec<&str> = cut.lines().collect();
+        assert_eq!(rows.len(), 13, "{}", cut);
+        assert!(rows[0] == "-    2  line 2" && rows[11] == "-   13  line 13" && rows[12] == "        16 more removed lines", "{}", cut);
     }
 
     #[test]

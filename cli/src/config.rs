@@ -19,6 +19,7 @@ pub fn default_config() -> Value {
         "delegate": "auto",
         "search": {"kind": "auto"},
         "privacy": "rules",
+        "privacy_answers": true,
         "auto_learn": true,
         "screencodec": {"command": "", "hosts": "", "images": ""}
     })

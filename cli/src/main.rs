@@ -36,7 +36,9 @@ penelope scout TASK           let the weaker model look something up with its ow
 penelope run [--ask QUESTION] COMMAND
                               run a command, long output condensed by the weaker model
 penelope plugin add DIR       register a plugin folder in the format of Claude Code (skills and MCP servers)
-penelope plugin list          show the registered plugins
+penelope plugin list          show the registered plugins and whether the tools of their MCP servers are allowed
+penelope plugin allow NAME    put the tools of a plugin's MCP servers on the allow list of the main model
+penelope plugin deny NAME     take them off the allow list (the state of a new plugin)
 penelope stats                how much tool output the weaker model kept away from the main model
 penelope mcp [--root DIR]     serve Penelope's tools as an MCP server on stdin and stdout
 penelope doctor               check the programs and models Penelope needs";
@@ -97,6 +99,7 @@ fn main() {
         "stats" => print!("{}", tools::stats(&ctx)),
         "plugin" => match args.get(1).map(String::as_str) {
             Some("add") if args.len() >= 3 => println!("{}", plugins::add(&ctx, &args[2])),
+            Some(verb @ ("allow" | "deny")) if args.len() >= 3 => println!("{}", plugins::set_allow(&ctx, &args[2], verb == "allow")),
             _ => print!("{}", plugins::list(&ctx)),
         },
         "chat" => {
@@ -150,10 +153,20 @@ fn answer(ctx: &config::Ctx, chat: &mut backend::Chat, text: &str) {
     if !trail.is_empty() {
         loom::say(&format!("memory: start / {}{}", trail.last().unwrap().replace('/', " / "), if cached { " (stored walk)" } else { "" }));
     }
-    match chat.turn(ctx, text, &notes) {
+    let mut masked = 0;
+    let result = chat.turn_with(ctx, text, &notes, &mut |e| {
+        if let backend::Event::MaskedAnswer(n) = e {
+            masked += n;
+        }
+    });
+    match result {
         Ok(a) => {
             println!("{}", a);
+            if masked > 0 {
+                loom::say(&format!("utis: {} items masked in the answer", masked));
+            }
             loom::say(&format!("tokens so far: {} in, {} out", chat.input_tokens, chat.output_tokens));
+            loom::say(&format!("tool calls of this turn: {}, {} of them failed or refused", chat.trace.len(), chat.trace.iter().filter(|c| tools::in_trouble(c)).count()));
             if ctx.cfg["auto_learn"].as_bool().unwrap_or(true) {
                 for id in tools::learn(ctx, text, &a) {
                     loom::say(&format!("learned: {}", id));

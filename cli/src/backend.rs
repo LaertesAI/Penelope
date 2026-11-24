@@ -19,6 +19,27 @@ pub enum Event {
     ToolEnd { id: String, ok: bool, summary: String },
     /// The privacy filter masked this many items in the request before the main model read it.
     Masked(usize),
+    /// The privacy filter masked this many items in the text block that was reported just before.
+    MaskedAnswer(usize),
+}
+
+/// The text blocks of one turn after the privacy filter. The result of a turn repeats its last block. A block that
+/// passed the filter once is taken from this list, so its masked items are counted once.
+#[derive(Default)]
+struct Answers {
+    seen: Vec<(String, String)>,
+}
+
+impl Answers {
+    /// The block as the screen and the transcript get it, and the number of items newly masked in it.
+    fn block(&mut self, ctx: &Ctx, text: &str) -> (String, usize) {
+        if let Some((_, shown)) = self.seen.iter().find(|(raw, _)| raw == text.trim()) {
+            return (shown.clone(), 0);
+        }
+        let (shown, hits) = crate::tools::guard_answer(ctx, text);
+        self.seen.push((text.trim().to_string(), shown.clone()));
+        (shown, hits)
+    }
 }
 
 /// `mcp__penelope__run` becomes `run`, `mcp__screencodec__open` becomes `screen open`.
@@ -115,10 +136,6 @@ impl Chat {
         chat
     }
 
-    pub fn turn(&mut self, ctx: &Ctx, user: &str, memory: &str) -> Result<String, String> {
-        self.turn_with(ctx, user, memory, &mut |_| {})
-    }
-
     /// One turn. `on` receives the text and the tool calls while the turn runs.
     pub fn turn_with(&mut self, ctx: &Ctx, user: &str, memory: &str, on: &mut dyn FnMut(Event)) -> Result<String, String> {
         self.cancel.store(false, Ordering::SeqCst);
@@ -137,7 +154,16 @@ impl Chat {
             system.push_str(&format!("\n\nLessons from earlier tool use, learned in this folder:\n{}", lessons));
         }
         let (mut trace, mut ids): (Vec<crate::tools::Call>, Vec<String>) = (Vec::new(), Vec::new());
+        let mut answers = Answers::default();
         let mut watch = |e: Event| {
+            if let Event::Text(text) = &e {          // a finished block passes the privacy filter before anyone draws or stores it
+                let (shown, hits) = answers.block(ctx, text);
+                on(Event::Text(shown));
+                if hits > 0 {
+                    on(Event::MaskedAnswer(hits));
+                }
+                return;
+            }
             match &e {
                 Event::ToolStart { id, name, detail } => {
                     trace.push((name.clone(), detail.clone(), true, String::new()));
@@ -158,6 +184,13 @@ impl Chat {
             _ => self.turn_claude(ctx, user, &system, &mut watch),
         };
         self.trace = trace;
+        let out = out.map(|answer| {
+            let (shown, hits) = answers.block(ctx, &answer);
+            if hits > 0 {
+                on(Event::MaskedAnswer(hits));
+            }
+            shown
+        });
         if out.is_ok() {
             self.turns += 1;
             if let Some(id) = &self.session {
@@ -176,9 +209,10 @@ impl Chat {
         let mut allowed: Vec<String> = mcp::main_tools(ctx).iter().map(|t| format!("mcp__penelope__{}", t)).collect();
         if let Some(obj) = crate::plugins::servers(ctx).as_object() {
             for (k, s) in obj {
-                servers[k] = s.clone();        // tools of plugin servers are not on the allow list: the model sees them, a call is refused
+                servers[k] = s.clone();        // the model sees the tools of every plugin server
             }
         }
+        allowed.extend(crate::plugins::allowed(ctx));        // a call works for plugins with "allow": true only
         let sc_cmd = ctx.cfg["screencodec"]["command"].as_str().filter(|c| !c.is_empty()).map(std::path::PathBuf::from).or_else(|| which("screencodec-mcp"));
         if let Some(sc) = sc_cmd {
             servers["screencodec"] = json!({"command": sc.to_string_lossy(), "args": [], "env": {
@@ -304,5 +338,28 @@ impl Chat {
             }
         }
         Err("stopped after 8 rounds of tool calls".to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_text_block_is_masked_once_and_counted_once() {
+        let root = std::env::temp_dir().join(format!("penelope-answers-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let mut ctx = crate::config::load(&root);
+        assert_eq!(ctx.cfg["privacy_answers"], true);
+        let raw = "The file sets API_TOKEN=q7Lw2ZxP91aaBBcc and PORT=8080.";
+        let mut answers = Answers::default();
+        let (shown, hits) = answers.block(&ctx, raw);
+        assert!(hits == 1 && shown.contains("API_TOKEN=[masked:secret]") && shown.contains("PORT=8080") && !shown.contains("q7Lw2"), "{}", shown);
+        assert_eq!(answers.block(&ctx, &format!("{}\n", raw)), (shown, 0));          // the result of the turn repeats the block
+        let stats: Value = serde_json::from_str(&std::fs::read_to_string(root.join("stats.json")).unwrap()).unwrap();
+        assert_eq!(stats["privacy"]["masked"], 1);
+        ctx.cfg["privacy_answers"] = json!(false);
+        assert_eq!(Answers::default().block(&ctx, raw), (raw.to_string(), 0));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

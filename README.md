@@ -8,7 +8,7 @@ notes back the same way. Earlier names of the project: Kate with the command `ka
 with the command `strix` (0.4.0). The agency was called VeeAI and Polytrope before. The model families Utis, Klea,
 Tiresias and Telemach were called Outis, Kleia, Teiresias and Phaiax until 0.7.0.
 
-Status: version 0.8.0, private. Seventeen real runs so far.
+Status: version 0.9.0, private. Twenty-five real runs so far.
 
 <p align="center"><img src="docs/screens/chat.png" alt="penelope: transcript on the left, the woven mark and the session numbers on the right" width="100%"></p>
 
@@ -27,24 +27,24 @@ The marks are drawn by a script in the Laertes folder (`brand/build/` there). Th
 
 | Part | What it does | State |
 |---|---|---|
-| Full screen interface | `penelope` opens a transcript with an input box, a side panel with the woven mark and its mood, a command list on `/` and a palette on `ctrl+p`. The answer appears piece by piece while the model writes. | works, 8 real turns |
+| Full screen interface | `penelope` opens a transcript with an input box, a side panel with the woven mark and its mood, a command list on `/` and a palette on `ctrl+p`. The answer appears piece by piece while the model writes. | works, 12 real turns |
 | Routed tool output | The tool `run` executes a shell command. Output over 40 lines goes to a weaker model first and comes back as at most 12 lines. The raw output stays on disk under a run id. | works |
-| Approval | A command outside the safe list opens a question in the interface: run once, allow all in this session, or refuse. | works, 2 real commands |
-| Privacy filter | The request of the user and the output of `run` and `fetch` pass a filter before any model reads them. Known key formats, values behind names such as `password` or `token`, and private key blocks become `[masked:...]`. The level `pii` also masks e-mail addresses and IBANs. | works, 4 tests, 4 real turns |
+| Approval | A command outside the safe list opens a question in the interface: run once, allow all in this session, or refuse. | works, 3 real commands |
+| Privacy filter | The request of the user and the output of `run` and `fetch` pass a filter before any model reads them. Known key formats, values behind names such as `password` or `token`, and private key blocks become `[masked:...]`. The level `pii` also masks e-mail addresses and IBANs. Every finished text block of a model passes the same filter before the screen and the transcript get it. | works, 5 tests, 5 real turns |
 | Web pages | The tool `fetch` loads a page and lets the weaker model answer one question from it. The page text never enters the main model. | works, 1 page tried |
 | Memory map | Notes live at waypoints of a tree under `.penelope/memory/`. A lookup follows signposts from the start, one level at a time, and never searches all notes. Finished walks are stored, the same request jumps to its waypoint the next time. | works |
 | Eyes | If `screencodec-mcp` is installed, Penelope connects it: pages and pictures come as text, never as screenshots. | wired, not tested inside the harness |
 | Main model | The official `claude` command with the user's own login, or any OpenAI-compatible endpoint (API key or local model). | claude tested, OpenAI-compatible written and untested |
 | MCP server | `penelope mcp` offers all 18 tools to any MCP client: `run`, `run_detail`, `fetch`, `web_search`, `read`, `write`, `edit`, `find`, `grep`, `tree`, `outline`, `scout`, `plan`, `ask_user`, `memory_go`, `memory_note`, `memory_map`, `skill`. | works |
 | Auto-learning | After each answer the weaker model reads the exchange and files lasting rules of the user at a waypoint. | works, 2 runs |
-| Plugins | `penelope plugin add DIR` registers a plugin folder of Claude Code: skills by name and description, MCP servers for the main model. | works, 1 plugin tried (9 skills, 7 servers) |
-| Scout | `delegate` decides who searches: `auto`, `web`, `offer` or `off`. `/scout` changes it in the interface, the setting `scout` gives the scout its own model. With `"delegate": "auto"` the main model has no search tools. Every search goes to the tool `scout`: the weaker model gets the task, calls `web_search`, `fetch`, `find`, `grep`, `read` and safe commands itself and returns a report of at most 15 lines. Its tokens never reach the main model. | works, 3 real tasks |
+| Plugins | `penelope plugin add DIR` registers a plugin folder of Claude Code: skills by name and description, MCP servers for the main model. `penelope plugin allow NAME` puts the tools of that plugin's MCP servers on the allow list of the `claude` command. `penelope plugin deny NAME` takes them off that list. A new plugin starts denied. | works, 1 test, 1 plugin tried (9 skills, 7 servers), 2 demo plugins in 1 real turn |
+| Scout | `delegate` decides who searches: `auto`, `web`, `offer` or `off`. `/scout` changes it in the interface, the setting `scout` gives the scout its own model. With `"delegate": "auto"` the main model has no search tools. Every search goes to the tool `scout`: the weaker model gets the task, calls `web_search`, `fetch`, `find`, `grep`, `read` and safe commands itself and returns a report of at most 15 lines. Its tokens never reach the main model. | works, 4 real tasks |
 | Web search | `web_search` tries a row of sources and takes the first that answers: the search tool of the `claude` command (run by the weaker model), a SearXNG instance if an address is set, the Brave API if a key is set, DuckDuckGo's HTML page last. The query passes the privacy filter first. | claude and DuckDuckGo tried, SearXNG and Brave written and untested |
-| Lessons from tool calls | After a turn with a failed or refused call, or with 8 calls and more, the weaker model reads the calls and files up to 3 lessons under the waypoint `tools`. Every later turn gets these lessons in its system prompt. | works, 2 tests, 1 real lesson filed and read back |
-| Question to the user | The tool `ask_user` opens a dialog with 2 to 6 answers. The main model asks before it guesses. | works, 1 real question |
-| File tools | `tree` for the folders, `outline` for the functions and sections of a file, `read` with line numbers, `find` by name or path pattern, `grep` for plain text, `write` and `edit`. A change opens the question "Change this file?" in the interface. | works, 3 tests, 1 real change |
-| Plan | The main model keeps the steps of a task with the tool `plan`. The side panel shows them with a mark per state. | works, 1 real run |
-| Sessions as tabs | Every conversation through the `claude` command is stored with its transcript. The top row shows the sessions as tabs, `f2` opens the list, `f3` and `f4` change the tab, `penelope chat --resume N` opens one from the command line. | works, 1 test, 2 real sessions |
+| Lessons from tool calls | After a turn with a failed or refused call, or with 8 calls and more, the weaker model reads the calls and files up to 3 lessons under the waypoint `tools`. Every later turn gets these lessons in its system prompt. `.penelope/lessons.log` keeps the answer of the weaker model for every lesson step. | works, 2 tests, 4 real lessons filed, 3 of 5 lesson steps in 0.9.0 filed none |
+| Question to the user | The tool `ask_user` opens a dialog with 2 to 6 answers. The main model asks before it guesses. | works, 2 real questions |
+| File tools | `tree` for the folders, `outline` for the functions and sections of a file, `read` with line numbers, `find` by name or path pattern, `grep` for plain text, `write` and `edit`. A change opens the question "Change this file?" in the interface. The dialog shows the changed lines with their numbers, at most 12 lines per side. Removed lines are red, added lines have the clay colour. | works, 5 tests, 2 real changes |
+| Plan | The main model keeps the steps of a task with the tool `plan`. The side panel shows them with a mark per state. | works, 2 real runs |
+| Sessions as tabs | Every conversation through the `claude` command is stored with its transcript. The top row shows the sessions as tabs, `f2` opens the list, `f3` and `f4` change the tab, `penelope chat --resume N` opens one from the command line. | works, 1 test, 6 real sessions |
 | Setup | `penelope setup` asks seven questions with numbered answers: both models, who searches, privacy, both policies, the search source. `/setup` does the same from the interface. | works, 1 test |
 | Unravel | `penelope memory unravel [N]` takes back the last N notes of the memory map. A journal keeps the order of the notes. | works, 1 test |
 | Crew | `penelope crew` lists the eight model families of Laertes and what does each job today. | works |
@@ -56,7 +56,7 @@ The marks are drawn by a script in the Laertes folder (`brand/build/` there). Th
 cd cli
 cargo build --release
 ./target/release/penelope doctor
-cargo test                      # 26 tests, no model call
+cargo test                      # 30 tests, no model call
 ```
 
 ## The full screen interface
@@ -107,6 +107,8 @@ Paths on the screen show the home folder as `~`.
 
 <p align="center"><img src="docs/screens/approve.png" alt="Question before a command outside the safe list" width="49%"> <img src="docs/screens/palette.png" alt="Command palette" width="49%"></p>
 
+<p align="center"><img src="docs/screens/approve-file.png" alt="Question before a change to a file: one removed line in red, two added lines in clay" width="49%"> <img src="docs/screens/question.png" alt="Question of the main model with two answers" width="49%"></p>
+
 ## Use without the interface
 
 ```bash
@@ -123,6 +125,9 @@ penelope memory unravel 2                         # take back the last two notes
 penelope memory map
 penelope run --ask "which test fails?" cargo test
 penelope plugin add ~/path/to/plugin              # a plugin folder of Claude Code
+penelope plugin list                              # plugins, their MCP servers, tools allowed or denied
+penelope plugin allow NAME                        # the main model may call the tools of this plugin's MCP servers
+penelope plugin deny NAME                         # back to the state of a new plugin
 penelope stats
 penelope mcp                                      # for other MCP clients
 ```
@@ -138,6 +143,7 @@ penelope mcp                                      # for other MCP clients
   "delegate": "auto",
   "search": {"kind": "auto"},
   "privacy": "rules",
+  "privacy_answers": true,
   "auto_learn": true,
   "screencodec": {"command": "", "hosts": "", "images": ""}
 }
@@ -155,6 +161,11 @@ penelope mcp                                      # for other MCP clients
   DuckDuckGo's page refused after 2 queries in a test. A user without the claude command needs SearXNG or a Brave key.
 - `privacy: "rules"` masks secrets in the request and in tool output. `"pii"` also masks e-mail addresses and IBANs.
   `"off"` passes everything unchanged.
+- `privacy_answers: true` sends every finished text block of a model through the same filter. The screen and the stored
+  transcript get the filtered block. `false` shows and stores the answers of the models unchanged.
+- `.penelope/plugins.json` holds one entry per plugin with `"allow": true` or `false`. `penelope plugin allow NAME` and
+  `penelope plugin deny NAME` write that field. The allow list of the `claude` command gets one rule `mcp__SERVER__*` per
+  MCP server of an allowed plugin.
 - A Claude subscription is used through the official `claude` command only. Penelope has no login of its own.
 - A folder `.strix` or `.kate` of an older version is renamed to `.penelope` on the first start.
 
@@ -165,6 +176,8 @@ JSON line per event: a piece of text, a finished block of text, a tool call, a t
 token counts. In a check with Claude Haiku a sentence of 15 words arrived in 7 pieces. The interface draws each event when it arrives.
 The run tool lives in a second process, the MCP server `penelope mcp`. A question about an unsafe command travels as a
 file `ID.req` in `.penelope/approvals/`, the answer as `ID.ans`. No answer within 120 seconds counts as no.
+A question about a file carries the changed lines in the field `diff` of the same request file.
+A finished block of text passes the privacy filter in `cli/src/backend.rs` before the interface receives it.
 
 ## Real runs
 
@@ -223,6 +236,50 @@ Runs of version 0.7.0 (2026-11-24):
   answered, the model reported `helper`.
 - `/scout web` changed the setting and stored it in `config.json`.
 
+Runs of version 0.9.0 (2026-11-24), main model Claude Sonnet, weaker model Claude Haiku, `delegate` on `auto`.
+The folder was new and held `words.txt` with 12 words, `demo.env` and `src/main.rs`. The main model ran 8 turns.
+
+The lesson check used this request in `penelope ask`, in separate sessions:
+"How many distinct words does words.txt hold? It has one word per line. Use a shell command to count them."
+
+| Run | Lessons in the prompt | Tool calls | Refused calls | Tokens in | Tokens out | Count returned |
+|---|---|---|---|---|---|---|
+| 1 | 0 | 2 | 2 | 4,812 | 656 | no |
+| 2 | 2 | 1 | 1 | 7,528 | 401 | no |
+
+- Run 1 tried `sort -u words.txt | wc -l` and an `awk` line, and the safe policy refused both.
+- After run 1 the weaker model filed 2 lessons at `tools/run`. One of them reads "After one denial, report the block
+  instead of trying a sibling command."
+- Run 2 tried the same `sort` pipe once and then stopped with a report of the refusal.
+- Limit: one pair of runs. The lesson saved 1 tool call and 255 output tokens in that pair.
+- Limit: no run returned the count of 7 distinct words. The lesson named no command that the safe list accepts.
+- Limit: two earlier first runs of the same request used 7,658 and 4,536 tokens in. The 7,528 tokens of run 2 lie
+  inside that spread, so the pair shows no effect on input tokens.
+- Those two earlier first runs filed no lesson after 2 refused calls each. The lesson log did not exist yet, so the
+  answers of the weaker model are lost.
+- After run 2 the weaker model wrote the path `tools/Bash`, and the filter for paths dropped the line. Version 0.9.0
+  writes such a path in lower case before the check.
+
+Four turns in the full screen interface, one session each:
+
+- Request "Three steps, keep a plan: find the file that sets the port, read it, then change the port to 9090 and add a
+  comment line above it with the date of today." The main model stored a plan with 3 steps and sent 1 scout (4 steps,
+  13,547 tokens in and 1,052 out on Haiku, 9 s). It read 2 files and asked to change `src/main.rs`. The dialog showed
+  line 5 as removed and the new lines 5 and 6 as added. After `y` the file held `let port = 9090;` below a comment
+  with the date. The turn took 7 tool calls, 6,792 tokens in and 1,273 out.
+- Request "Ask me with ask_user which fruit I want, apple or pear. Then write one example line for a .env file that
+  sets API_TOKEN to a made-up value of 24 letters and digits." The dialog showed `apple` and `pear`, the key `2`
+  answered. The answer reached the screen and the stored transcript as `API_TOKEN=[masked:secret]`. The count of
+  masked items in the side panel went from 4 to 5. The turn took 5,005 tokens in and 157 out.
+- Two demo plugins, `atlas` allowed and `ledger` denied, each with 1 MCP server and 1 tool `lookup`. The request named
+  both tools. The call `atlas-notes lookup` returned "atlas holds 42 notes". The `claude` command refused the call
+  `ledger-notes lookup` with "Claude requested permissions to use mcp__ledger-notes__lookup". The turn took 2 tool
+  calls, 10,765 tokens in and 172 out.
+- Request with a piped command (`echo penelope | tr a-z A-Z`): the question appeared, `y` let it run, the model
+  reported `PENELOPE`. The turn took 7,177 tokens in and 82 out.
+
+<p align="center"><img src="docs/screens/answer-masked.png" alt="An answer of the main model with a masked token and the note of utis below it" width="49%"> <img src="docs/screens/plugin-tools.png" alt="One plugin tool call that worked and one that the claude command refused" width="49%"></p>
+
 ## The crew
 
 Laertes plans one small model family per job. `penelope crew` prints this table with the settings of the folder:
@@ -243,5 +300,5 @@ None of the eight families is trained yet. The research folder of each family is
 ## Not built yet
 
 Bots, scheduled tasks, the Hugging Face browser with COAA cassettes, a graphical window, hooks and agents of plugins,
-a privacy filter for the answers of the models, a tool to start training runs, the eight model families. Tools of plugin MCP servers are visible to the
-main model but not on the allow list yet. [`docs/ROADMAP.md`](docs/ROADMAP.md) lists every part.
+a tool to start training runs, the eight model families. An allow rule for a single tool of a plugin is missing:
+`"allow"` covers all tools of all MCP servers of one plugin. [`docs/ROADMAP.md`](docs/ROADMAP.md) lists every part.

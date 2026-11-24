@@ -45,7 +45,8 @@ pub enum Overlay {
     Palette { query: String, sel: usize },
     Models { sel: usize, weak: bool },
     Pager { title: String, lines: Vec<String>, scroll: usize },
-    Approve { id: String, command: String, cwd: String, file: bool },
+    /// A command outside the safe list or a change to a file. `diff` holds the changed lines of the file.
+    Approve { id: String, command: String, cwd: String, file: bool, diff: Vec<String> },
     /// The list of stored sessions. Enter opens one.
     Sessions { sel: usize },
     /// A question of the main model with fixed answers.
@@ -428,6 +429,10 @@ impl App {
                     self.note("◆", "utis", format!("{} masked in the request before the model read it", if n == 1 { "1 item".to_string() } else { format!("{} items", n) }), art::SEA);
                     self.refresh_side();
                 }
+                Msg::Turn(TurnEvent::MaskedAnswer(n)) => {
+                    self.note("◆", "utis", format!("{} masked in the answer before it was drawn and stored", if n == 1 { "1 item".to_string() } else { format!("{} items", n) }), art::SEA);
+                    self.refresh_side();
+                }
                 Msg::Turn(TurnEvent::ToolStart { id, name, detail }) => {
                     self.tool_calls += 1;
                     self.streaming = false;
@@ -468,7 +473,8 @@ impl App {
                     }
                     match result {
                         Ok(answer) => {
-                            let shown = matches!(self.items.last(), Some(Item::Reply(t)) if t.trim() == answer.trim());
+                            // The answer repeats the last text block of the turn. A note of utis may stand behind that block.
+                            let shown = self.items.iter().rev().take_while(|i| !matches!(i, Item::User(_))).any(|i| matches!(i, Item::Reply(t) if t.trim() == answer.trim()));
                             if !shown && !answer.is_empty() {
                                 self.items.push(Item::Reply(answer));
                             }
@@ -537,7 +543,8 @@ impl App {
                 self.answer(id, true);
                 continue;
             }
-            self.overlay = Overlay::Approve { id: id.to_string(), command, cwd: v["cwd"].as_str().unwrap_or("").to_string(), file: v["kind"].as_str() == Some("file") };
+            self.overlay = Overlay::Approve { id: id.to_string(), command, cwd: v["cwd"].as_str().unwrap_or("").to_string(), file: v["kind"].as_str() == Some("file"),
+                                              diff: v["diff"].as_str().unwrap_or("").lines().map(String::from).collect() };
             return;
         }
     }
@@ -1030,7 +1037,8 @@ mod tests {
                 1 => Overlay::Palette { query: "m".into(), sel: 1 },
                 2 => Overlay::Models { sel: 0, weak: true },
                 3 => Overlay::Pager { title: "Help".into(), lines: help_text().lines().map(String::from).collect(), scroll: 2 },
-                _ => Overlay::Approve { id: "x".into(), command: "rm -rf target && cargo build".into(), cwd: "/tmp".into(), file: overlay % 2 == 0 },
+                _ => Overlay::Approve { id: "x".into(), command: "rm -rf target && cargo build".into(), cwd: "/tmp".into(), file: overlay % 2 == 0,
+                                        diff: crate::files::diff_text("a\nb\n", "a\nc\nd\n").lines().map(String::from).collect() },
             };
             for (w, h) in [(20, 5), (40, 12), (80, 24), (100, 30), (120, 40), (200, 60)] {
                 screen(&mut a, w, h);
@@ -1119,6 +1127,28 @@ mod tests {
         a.poll_approvals();
         assert_eq!(fs::read_to_string(a.approve_dir.join("9.ans")).unwrap(), "yes");
         assert!(matches!(a.overlay, Overlay::None));
+    }
+
+    #[test]
+    fn the_file_dialog_shows_the_diff_in_two_colours_and_clips_it() {
+        let mut a = app();
+        let old: String = (1..=20).map(|i| format!("old {}\n", i)).collect();
+        let req = serde_json::json!({"kind": "file", "command": "edit ~/a.txt at line 1", "cwd": "", "diff": crate::files::diff_text(&old, "new 1\nnew 2\n")});
+        fs::write(a.approve_dir.join("5.req"), req.to_string()).unwrap();
+        a.poll_approvals();
+        assert!(matches!(&a.overlay, Overlay::Approve { file: true, diff, .. } if diff.len() == 15));
+        let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        let frame = t.draw(|f| view::draw(f, &mut a)).unwrap();
+        let rows: Vec<String> = (0..40).map(|y| (0..120).map(|x| frame.buffer[(x, y)].symbol().to_string()).collect()).collect();
+        let colour_of = |text: &str| {
+            let (y, row) = rows.iter().enumerate().find(|(_, r)| r.contains(text)).unwrap_or_else(|| panic!("no row with {}", text));
+            frame.buffer[(row.chars().take(row.find(text).unwrap()).count() as u16, y as u16)].fg
+        };
+        assert_eq!(colour_of("-    1  old 1"), art::col(art::RED));
+        assert_eq!(colour_of("+    2  new 2"), art::col(art::CLAY));
+        assert!(rows.iter().any(|r| r.contains("8 more removed lines")), "{}", rows.join("\n"));
+        let small = screen(&mut a, 80, 20);
+        assert!(small.contains("-    1  old 1") && small.contains("more changed lines") && !small.contains("+    2  new 2"), "{}", small);
     }
 
     #[test]
