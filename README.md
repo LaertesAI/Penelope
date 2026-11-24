@@ -16,7 +16,7 @@
 Penelope is a coding agent for the terminal, written in Rust. It sends searches and long tool output to a cheaper
 model, keeps notes in a memory map, and asks before every change to a file.
 
-<p align="center"><img src="docs/screens/chat.png" alt="penelope: transcript on the left, the woven mark and the session numbers on the right" width="100%"></p>
+<p align="center"><img src="docs/screens/chat.png" alt="penelope in kitty: transcript on the left, the painted picture and the session numbers on the right" width="100%"></p>
 
 ## Status
 
@@ -142,7 +142,7 @@ The 22 tools: `run`, `run_detail`, `job_start`, `job_read`, `job_stop`, `fetch`,
 
 The painted picture is a real picture, sent through the graphics protocol of kitty. It shows in kitty, Ghostty, WezTerm and Konsole.
 Other terminals and tmux show the name alone. `PENELOPE_PICTURE=off` switches it off, `PENELOPE_PICTURE=on` forces it.
-The start screen above is a picture of kitty on a virtual display. The other three screens are from version 0.9.0 and show the earlier woven mark.
+The screens in this file are pictures of kitty on a virtual display. The chat screen shows the stored transcript of the run of 2026-11-24, opened as a session.
 
 `penelope` without arguments opens it. `penelope chat --plain` keeps the line by line chat. A pipe on standard input
 or output selects the plain chat by itself.
