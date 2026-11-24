@@ -29,26 +29,53 @@ fn text(input: &mut dyn BufRead, out: &mut dyn Write, question: &str, current: &
     if line.trim().is_empty() { current.to_string() } else { line.trim().to_string() }
 }
 
-/// One model: through the claude command, or an endpoint in the format of OpenAI (API key or local model).
+/// One model: a provider of the table, or another address in the format of OpenAI. The setting gets the name of the
+/// environment variable with the key. A key typed here is refused and is not stored.
 fn model(input: &mut dyn BufRead, out: &mut dyn Write, title: &str, cfg: &Value, names: &[(&str, &str)]) -> Value {
-    let kind = choose(input, out, &format!("{}: where does it run?", title),
-                      &[("claude-cli", "the claude command with your own login"), ("openai", "an endpoint in the format of OpenAI: API key, Ollama, llama.cpp")],
-                      cfg["kind"].as_str().unwrap_or("claude-cli"));
-    if kind == "openai" {
-        return json!({"kind": "openai",
-            "base_url": text(input, out, "address of the endpoint", cfg["base_url"].as_str().unwrap_or("http://localhost:11434/v1")),
-            "model": text(input, out, "name of the model", if cfg["kind"] == "openai" { cfg["model"].as_str().unwrap_or("") } else { "" }),
-            "api_key_env": text(input, out, "environment variable with the key, empty for none", cfg["api_key_env"].as_str().unwrap_or(""))});
+    use crate::providers::{self, TABLE};
+    let now = providers::of(cfg).map(|p| p.name).unwrap_or("custom");
+    let help: Vec<String> = TABLE.iter().map(|p| format!("{} ({}, {})", p.label, p.kind, providers::key_state(p.key_env, p.key_optional))).collect();
+    let mut options: Vec<(&str, &str)> = TABLE.iter().zip(help.iter()).map(|(p, h)| (p.name, h.as_str())).collect();
+    options.push(("custom", "another address in the format of OpenAI"));
+    let chosen = choose(input, out, &format!("{}: where does it run?", title), &options, now);
+    if chosen == "claude-cli" {
+        let current = if now == "claude-cli" { cfg["model"].as_str().unwrap_or(names[0].0) } else { names[0].0 };
+        return json!({"kind": "claude-cli", "model": choose(input, out, &format!("{}: which model?", title), names, current)});
     }
-    let current = if cfg["kind"] == "openai" { names[0].0 } else { cfg["model"].as_str().unwrap_or(names[0].0) };
-    json!({"kind": "claude-cli", "model": choose(input, out, &format!("{}: which model?", title), names, current)})
+    let Some(p) = providers::get(&chosen) else {
+        let was_custom = now == "custom";
+        let address = text(input, out, "address of the endpoint", if was_custom { cfg["base_url"].as_str().unwrap_or("http://localhost:11434/v1") } else { "http://localhost:11434/v1" });
+        let name = text(input, out, "name of the model", if was_custom { cfg["model"].as_str().unwrap_or("") } else { "" });
+        let mut env = text(input, out, "name of the environment variable with the key, empty for none", if was_custom { cfg["api_key_env"].as_str().unwrap_or("") } else { "" });
+        if !env.is_empty() && !providers::is_env_name(&env) {
+            let _ = writeln!(out, "  That is no name of an environment variable, so nothing was stored. Put the key into a variable and give its name.");
+            env.clear();
+        }
+        return json!({"kind": "openai", "base_url": address, "model": name, "api_key_env": env});
+    };
+    let same = now == p.name;
+    let name = text(input, out, "name of the model", if same { cfg["model"].as_str().unwrap_or(p.model) } else { p.model });
+    let _ = writeln!(out, "  key: {}{}", providers::key_state(p.key_env, p.key_optional), if p.key_env.is_empty() { String::new() } else { format!(" in {}", p.key_env) });
+    if same {          // the same provider keeps its other fields, such as max_tokens
+        let mut kept = cfg.clone();
+        kept["model"] = json!(name);
+        return kept;
+    }
+    let workspace = if p.base.contains(providers::WORKSPACE) { text(input, out, "workspace ID of your account, as in the column API Host of the console", "") } else { String::new() };
+    match providers::setting(p, Some(&name), Some(&workspace), None) {
+        Ok(v) => v,
+        Err(e) => {
+            let _ = writeln!(out, "  {} The setting stays as it was.", e);
+            cfg.clone()
+        }
+    }
 }
 
 /// Walks through the questions and returns the new settings.
 pub fn wizard(input: &mut dyn BufRead, out: &mut dyn Write, mut cfg: Value) -> Value {
     let _ = writeln!(out, "Penelope setup. Seven questions, enter keeps what is set.");
     let claude = crate::config::which("claude");
-    let _ = writeln!(out, "  claude command: {}", claude.map(|p| p.display().to_string()).unwrap_or_else(|| "not found, choose openai below or install it".into()));
+    let _ = writeln!(out, "  claude command: {}", claude.map(|p| p.display().to_string()).unwrap_or_else(|| "not found, choose another provider below or install it".into()));
     cfg["main"] = model(input, out, "Main model (answers, writes code)", &cfg["main"].clone(),
                         &[("sonnet", "balanced"), ("opus", "strongest, most expensive"), ("haiku", "fastest, cheapest")]);
     cfg["weak"] = model(input, out, "Weaker model (condenses output, runs searches as scout)", &cfg["weak"].clone(),
@@ -85,14 +112,25 @@ mod tests {
     fn answers_become_settings_and_enter_keeps_them() {
         let start = crate::config::default_config();
         let mut out = Vec::new();
-        // main: claude-cli, opus. weaker: openai with three texts. delegate offer, privacy pii, run kept, edit all, search searxng with an address.
-        let answers = "1\n2\n2\nhttp://localhost:1234/v1\nqwen2.5:0.5b\n\n3\n2\n\n2\n4\nhttp://localhost:8888\n";
+        // main: claude-cli, opus. weaker: a custom address with three texts. delegate offer, privacy pii, run kept, edit all, search searxng with an address.
+        let answers = "1\n2\ncustom\nhttp://localhost:1234/v1\nqwen2.5:0.5b\n\n3\n2\n\n2\n4\nhttp://localhost:8888\n";
         let cfg = wizard(&mut answers.as_bytes(), &mut out, start.clone());
         assert_eq!(cfg["main"], json!({"kind": "claude-cli", "model": "opus"}));
         assert_eq!(cfg["weak"], json!({"kind": "openai", "base_url": "http://localhost:1234/v1", "model": "qwen2.5:0.5b", "api_key_env": ""}));
         assert_eq!((cfg["delegate"].as_str(), cfg["privacy"].as_str(), cfg["run_policy"].as_str(), cfg["edit_policy"].as_str()),
                    (Some("offer"), Some("pii"), Some("safe"), Some("all")));
         assert_eq!(cfg["search"], json!({"kind": "searxng", "url": "http://localhost:8888"}));
+        // The table: groq by name with its example model, Alibaba with a model and a workspace. Enter keeps the other five answers.
+        let cfg = wizard(&mut "groq\n\nalibaba-intl\nqwen-plus\nllm-abc\n".as_bytes(), &mut out, start.clone());
+        assert_eq!(cfg["main"], json!({"kind": "openai", "base_url": "https://api.groq.com/openai/v1", "model": "llama-3.3-70b-versatile", "api_key_env": "GROQ_API_KEY"}));
+        assert_eq!(cfg["weak"]["base_url"], "https://llm-abc.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1");
+        assert_eq!((cfg["weak"]["model"].as_str(), cfg["weak"]["api_key_env"].as_str(), cfg["delegate"].as_str()), (Some("qwen-plus"), Some("DASHSCOPE_API_KEY"), Some("auto")));
+        assert_eq!(wizard(&mut "".as_bytes(), &mut out, cfg.clone()), cfg);
+        // A key typed in place of a variable name is refused: the settings and the printed text do not hold it.
+        let mut shown = Vec::new();
+        let cfg = wizard(&mut "custom\nhttp://localhost:9/v1\nm\nsk-typed-by-mistake-123456\n".as_bytes(), &mut shown, start.clone());
+        assert_eq!(cfg["main"]["api_key_env"], "");
+        assert!(!cfg.to_string().contains("sk-typed") && !String::from_utf8_lossy(&shown).contains("sk-typed"));
         let kept = wizard(&mut "".as_bytes(), &mut out, start.clone());
         assert_eq!(kept, start);
     }

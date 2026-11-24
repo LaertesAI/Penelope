@@ -2,20 +2,20 @@
 
 Written on 2026-11-24 for version 0.9.0. `ROADMAP.md` lists what is built and what is open. This file says how the
 open parts fit together, in which order they come, and how each one is measured. Nothing in this file is built yet
-unless a row says so.
+unless a row says so. Version 0.10.0 built the 4 rows of tools that carry the word built.
 
 ## Where the harness stands
 
-| Part | State in 0.9.0 |
+| Part | State in 0.10.0 |
 |---|---|
-| Tools of the main model | 18: `run`, `run_detail`, `fetch`, `web_search`, `read`, `write`, `edit`, `find`, `grep`, `tree`, `outline`, `ask_user`, `scout`, `plan`, `memory_go`, `memory_note`, `memory_map`, `skill` |
+| Tools of the main model | 22: `run`, `run_detail`, `job_start`, `job_read`, `job_stop`, `fetch`, `web_search`, `read`, `write`, `edit`, `undo`, `find`, `grep`, `tree`, `outline`, `ask_user`, `scout`, `plan`, `memory_go`, `memory_note`, `memory_map`, `skill` |
 | Subagents | 1 kind: `scout`. One task, 10 read-only tools, the weaker model, the main model waits for the report |
 | Who decides | fixed rules: the setting `delegate`, the safe list for commands, `edit_policy` |
 | Learning | notes of the user (`learn`) and lessons from tool calls (`learn_tools`) under the waypoint `tools` |
 | Cost view | characters kept away by `run` and `fetch`, tasks and tokens of scouts, masked items |
 
-Three gaps follow from this table. A change cannot be taken back. A long command blocks the turn. Only one helper
-runs at a time, and it can only read.
+Version 0.9.0 had three gaps. A change could not be taken back, and a long command blocked the turn. The tool `undo`
+and the 3 job tools of 0.10.0 close these 2 gaps. The third gap is open: only one helper runs at a time, and it can only read.
 
 ## Part 1: the remaining tools
 
@@ -23,16 +23,16 @@ Each tool is small enough for one version. The column "asks" names the question 
 
 | Tool | What it does | Who may call it | Asks | Version |
 |---|---|---|---|---|
-| `undo` | Restores the file as it was before the last `write` or `edit`. Every change first copies the old file to `.penelope/undo/N/`. | main model, command `penelope undo` | no, it only goes back | 0.10 |
-| `edit` with several places | One call carries a list of replacements for one file. One question shows all of them as one diff. | main model, worker | "Change this file?" once | 0.10 |
-| `grep` with patterns | Regular expressions through the crate `regex`, switched on by a field `regex: true`. Plain text stays the default. | main model, scout, worker | no | 0.10 |
-| `job_start`, `job_read`, `job_stop` | Starts a command in the background, reads its new output, stops it. For servers, watchers and long builds. Output passes the privacy filter. | main model, worker | like `run`: outside the safe list it asks | 0.10 |
+| `undo` | Restores the file as it was before the last `write` or `edit`. Every change first copies the old file to `.penelope/undo/N/`. | main model, command `penelope undo` | no, it only goes back | 0.10, built |
+| `edit` with several places | One call carries a list of replacements for one file. One question shows all of them as one diff. | main model, worker | "Change this file?" once | 0.10, built |
+| `grep` with patterns | Regular expressions through the crate `regex`, switched on by a field `regex: true`. Plain text stays the default. | main model, scout, worker | no | 0.10, built |
+| `job_start`, `job_read`, `job_stop` | Starts a command in the background, reads its new output, stops it. For servers, watchers and long builds. Output passes the privacy filter. | main model, worker | like `run`: outside the safe list it asks | 0.10, built |
 | `memory_forget` | Takes back one note by its text. The command `memory unravel` exists, the tool does not. | main model | "Forget this note?" | 0.11 |
 | `git_commit` | Stages named files and commits with a message. Never pushes. Identity comes from the repository, no extra trailer. | main model | "Commit these N files?" with the file list | 0.11 |
 | `scouts` | Several lookups at once, see part 2. | main model | no | 0.11 |
 | `check` | Hands a claim and its evidence to the judge, see part 2. | main model | no | 0.12 |
 | `work` | Hands a change to a worker in its own worktree, see part 2. | main model | "Apply this change?" with the diff | 0.13 |
-| `cassette_add`, `cassette_ask` | Bridge to COAA: compile a document into a cassette, ask a store. Calls `coaa.py` of the prototype. | main model | "Compile for about N minutes on the GPU?" | 0.15 |
+| bridge tools | A bridge to a private research prototype: hand it a document, ask it a question. | main model | before every step that needs minutes on the GPU | 0.15 |
 | `train_plan`, `train_start`, `train_watch` | Proteus, first step: writes a training configuration, starts a run on this PC, reads the loss and the test score. | main model | before every start, with model, data, steps and the time estimate | 0.15 |
 
 Not planned as tools: a browser of its own (ScreenCodec covers pages and pictures), a tool that pushes to a remote,
@@ -129,12 +129,12 @@ The setting `delegate` stays the switch for searches. Two more settings follow t
 
 | Version | Content | Done when |
 |---|---|---|
-| 0.10 | `undo`, several places in `edit`, patterns in `grep`, background jobs | 4 unit tests pass and each tool has 1 real run in the README |
+| 0.10, built | `undo`, several places in `edit`, patterns in `grep`, background jobs | 4 unit tests pass and each tool has 1 real run in [`RUNS.md`](RUNS.md). Version 0.10.0 also added the provider table and the kind `anthropic`, see [`PROVIDERS.md`](PROVIDERS.md). |
 | 0.11 | roles in the settings, `PENELOPE_ROLE`, budgets, records in `.penelope/agents/`, scouts side by side, section AGENTS, `memory_forget`, `git_commit` | 3 scouts with 3 tasks finish in less wall time than the same 3 in a row, both times written down |
 | 0.12 | judge, tool `check`, setting `verify`, lessons from the records of subagents | the 30 tasks of P1 exist and the judge's verdicts on them are compared with the tests |
 | 0.13 | worker in a worktree, dialog "Apply this change?", command `penelope work` | the same 30 tasks solved once by the lead and once through workers, with solved count and lead tokens for both |
-| 0.14 | all roles through an endpoint in the format of OpenAI, sessions and MCP client for that path, one scout on a local model | 1 real scout task on a local model with its time and its answer checked by hand |
-| 0.15 | `train_*` for Qwen2.5-0.5B on this PC, `cassette_*` as a bridge to COAA | 1 training run started, watched and scored from the harness, with a yes before the start |
+| 0.14 | all roles through an HTTP endpoint, MCP client for that path, one scout on a local model (sessions for that path came in 0.10.0) | 1 real scout task on a local model with its time and its answer checked by hand |
+| 0.15 | `train_*` for Qwen2.5-0.5B on this PC, bridge tools for a private research prototype | 1 training run started, watched and scored from the harness, with a yes before the start |
 
 Later, without a version: scheduled tasks, bots, the model browser, several sessions that run at once.
 

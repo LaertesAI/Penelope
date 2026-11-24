@@ -20,9 +20,10 @@ pub fn model(ctx: &Ctx) -> &Value {
     if ctx.cfg["scout"]["model"].is_string() { &ctx.cfg["scout"] } else { &ctx.cfg["weak"] }
 }
 
-/// True inside the MCP server of a scout. There the tool list is the short one and no further scout starts.
+/// True inside the MCP server of a scout and inside the tool loop of a scout in this process. There the tool list is
+/// the short one and no further scout starts.
 pub fn inside() -> bool {
-    std::env::var("PENELOPE_SCOUT").is_ok()
+    std::env::var("PENELOPE_SCOUT").is_ok() || IN_LOOP.with(|f| f.get())
 }
 
 struct Report {
@@ -62,42 +63,29 @@ fn claude(ctx: &Ctx, task: &str, cwd: &str) -> Result<Report, String> {
                 tokens_out: v["usage"]["output_tokens"].as_u64().unwrap_or(0) })
 }
 
-fn openai(ctx: &Ctx, task: &str, cwd: &str) -> Result<Report, String> {
-    let m = model(ctx);
-    let base = m["base_url"].as_str().unwrap_or("http://localhost:11434/v1").trim_end_matches('/').to_string();
-    let key = m["api_key_env"].as_str().and_then(|n| std::env::var(n).ok()).unwrap_or_default();
-    let tools: Vec<Value> = mcp::tool_specs().as_array().unwrap().iter().filter(|t| TOOLS.contains(&t["name"].as_str().unwrap_or("")))
-        .map(|t| json!({"type": "function", "function": {"name": t["name"], "description": t["description"], "parameters": t["inputSchema"]}})).collect();
-    let mut messages = vec![json!({"role": "system", "content": SYSTEM}), json!({"role": "user", "content": task})];
-    let mut report = Report { text: String::new(), steps: 0, tokens_in: 0, tokens_out: 0 };
-    for _ in 0..10 {
-        let body = json!({"model": m["model"].as_str().unwrap_or(""), "messages": messages, "tools": tools, "temperature": 0});
-        let mut req = ureq::post(&format!("{}/chat/completions", base)).timeout(std::time::Duration::from_secs(300));
-        if !key.is_empty() {
-            req = req.set("Authorization", &format!("Bearer {}", key));
+thread_local! {
+    /// True on a thread that runs the tool loop of a scout inside this process.
+    static IN_LOOP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The scout through an HTTP endpoint: the tool loop runs in this process with the 10 tools of a scout.
+fn api(ctx: &Ctx, task: &str, cwd: &str) -> Result<Report, String> {
+    let tools: Vec<Value> = mcp::tool_specs().as_array().unwrap().iter().filter(|t| TOOLS.contains(&t["name"].as_str().unwrap_or(""))).cloned().collect();
+    let mut history = vec![crate::llm::user_message(task)];
+    let mut usage = crate::llm::Usage::default();
+    IN_LOOP.with(|f| f.set(true));
+    let out = crate::llm::run_loop(model(ctx), SYSTEM, &mut history, &tools, 10, None, &mut usage, &mut |call| {
+        let mut args = call.args.clone();
+        if args["cwd"].is_null() && !cwd.is_empty() {
+            args["cwd"] = json!(cwd);
         }
-        let resp: Value = req.send_json(body).map_err(|e| format!("request failed: {}", e))?.into_json().map_err(|e| e.to_string())?;
-        report.tokens_in += resp["usage"]["prompt_tokens"].as_u64().unwrap_or(0);
-        report.tokens_out += resp["usage"]["completion_tokens"].as_u64().unwrap_or(0);
-        let msg = resp["choices"][0]["message"].clone();
-        let calls = msg["tool_calls"].as_array().cloned().unwrap_or_default();
-        messages.push(msg.clone());
-        if calls.is_empty() {
-            report.text = msg["content"].as_str().unwrap_or("").trim().to_string();
-            return Ok(report);
+        match mcp::call(ctx, &call.name, &args) {
+            Ok(text) => (text, true),
+            Err(e) => (e, false),
         }
-        for c in calls {
-            let name = c["function"]["name"].as_str().unwrap_or("");
-            let mut args: Value = serde_json::from_str(c["function"]["arguments"].as_str().unwrap_or("{}")).unwrap_or(json!({}));
-            if args["cwd"].is_null() && !cwd.is_empty() {
-                args["cwd"] = json!(cwd);
-            }
-            let text = if TOOLS.contains(&name) { mcp::call(ctx, name, &args).unwrap_or_else(|e| e) } else { format!("a scout has no tool {}", name) };
-            report.steps += 1;
-            messages.push(json!({"role": "tool", "tool_call_id": c["id"], "content": text}));
-        }
-    }
-    Err("stopped after 10 rounds of tool calls".to_string())
+    }, &mut |_| {});
+    IN_LOOP.with(|f| f.set(false));
+    Ok(Report { text: out?, steps: usage.steps, tokens_in: usage.tokens_in, tokens_out: usage.tokens_out })
 }
 
 /// Runs one task on the weaker model and returns its report with the cost in one line.
@@ -111,7 +99,7 @@ pub fn run(ctx: &Ctx, task: &str, cwd: &str) -> String {
     let (task, _) = crate::tools::guard_count(ctx, task);
     let start = std::time::Instant::now();
     let result = match model(ctx)["kind"].as_str().unwrap_or("claude-cli") {
-        "openai" => openai(ctx, &task, cwd),
+        kind if crate::llm::is_api(kind) => api(ctx, &task, cwd),
         _ => claude(ctx, &task, cwd),
     };
     match result {

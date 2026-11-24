@@ -70,7 +70,7 @@ pub fn guard_count(ctx: &Ctx, text: &str) -> (String, usize) {
     (masked, hits)
 }
 
-fn guard(ctx: &Ctx, text: &str) -> String {
+pub fn guard(ctx: &Ctx, text: &str) -> String {
     guard_count(ctx, text).0
 }
 
@@ -208,7 +208,7 @@ pub type Call = (String, String, bool, String);
 
 /// True if a call failed or was refused: the tool reported an error, or its first line says so.
 pub fn in_trouble(call: &Call) -> bool {
-    let trouble = ["NOT ", "cannot ", "does not occur", " occurs ", "no file matches", "no line holds", "failed", "unknown tool", "could not"];
+    let trouble = ["NOT ", "cannot ", "does not occur", " occurs ", "no file matches", "no line holds", "no line matches", "failed", "unknown tool", "could not"];
     !call.2 || trouble.iter().any(|t| call.3.contains(t))
 }
 
@@ -256,18 +256,27 @@ imperative that names the concrete thing. At most 3 lessons. Lessons that any ag
     out
 }
 
+/// None if a command may start, else the text of the refusal. Under the policy "safe" a command outside the safe list
+/// needs the person's yes. `run` and `job_start` share this check.
+pub fn permit_command(ctx: &Ctx, command: &str, cwd: &str) -> Option<String> {
+    if ctx.cfg["run_policy"].as_str().unwrap_or("safe") == "all" || is_safe(command) {
+        return None;
+    }
+    if crate::scout::inside() {
+        return Some("NOT run. A scout runs commands of the safe list only: read-only and build commands without shell operators.".to_string());
+    }
+    match ask_person(command, cwd, "command", "") {
+        Some(true) => None,
+        Some(false) => Some("NOT run. The user declined this command.".to_string()),
+        None => Some("NOT run. The command is not on the safe list (read-only and build commands without shell operators). \
+                      The user can allow every command with \"run_policy\": \"all\" in .penelope/config.json.".to_string()),
+    }
+}
+
 /// Runs a shell command. Short output comes back as it is. Long output is stored and condensed by the weaker model.
 pub fn run(ctx: &Ctx, command: &str, question: &str, cwd: &str) -> String {
-    if ctx.cfg["run_policy"].as_str().unwrap_or("safe") != "all" && !is_safe(command) {
-        if crate::scout::inside() {
-            return "NOT run. A scout runs commands of the safe list only: read-only and build commands without shell operators.".to_string();
-        }
-        match ask_person(command, cwd, "command", "") {
-            Some(true) => {}
-            Some(false) => return "NOT run. The user declined this command.".to_string(),
-            None => return "NOT run. The command is not on the safe list (read-only and build commands without shell operators). \
-                            The user can allow every command with \"run_policy\": \"all\" in .penelope/config.json.".to_string(),
-        }
+    if let Some(refusal) = permit_command(ctx, command, cwd) {
+        return refusal;
     }
     let mut cmd = Command::new("sh");
     cmd.arg("-c").arg(command);

@@ -4,10 +4,13 @@ mod backend;
 mod loom;
 mod config;
 mod files;
+mod jobs;
+mod llm;
 mod mcp;
 mod memory;
 mod plugins;
 mod privacy;
+mod providers;
 mod scout;
 mod search;
 mod setup;
@@ -24,6 +27,9 @@ penelope chat --resume N      go on with session N of the list
 penelope ask \"TEXT\"           one question, one answer
 penelope init                 create a .penelope folder in this directory
 penelope setup [--here]       answer seven questions: models, who searches, privacy, policies, web search
+penelope providers            list the provider table and say per entry whether its key is set
+penelope provider use NAME [--role main|weak|scout] [--model MODEL] [--workspace ID] [--base-url URL]
+                              write one model setting from the table to config.json
 penelope sessions             list the stored sessions, newest first
 penelope crew                 the eight model families and what does each job today
 penelope memory map           show the memory map
@@ -35,6 +41,9 @@ penelope search WORDS         search the web and print up to 8 results
 penelope scout TASK           let the weaker model look something up with its own tool calls
 penelope run [--ask QUESTION] COMMAND
                               run a command, long output condensed by the weaker model
+penelope undo                 take back the last change that the tools write or edit made to a file
+penelope jobs                 list the background jobs of this folder
+penelope jobs stop N          end background job N
 penelope plugin add DIR       register a plugin folder in the format of Claude Code (skills and MCP servers)
 penelope plugin list          show the registered plugins and whether the tools of their MCP servers are allowed
 penelope plugin allow NAME    put the tools of a plugin's MCP servers on the allow list of the main model
@@ -73,8 +82,25 @@ fn main() {
         loom::say(&format!("saved: {}", root.join("config.json").display()));
         return;
     }
-    let ctx = config::load(&config::find_root(root_arg.as_deref()));
+    let mut ctx = config::load(&config::find_root(root_arg.as_deref()));
     match cmd {
+        "providers" => print!("{}", providers::list(&ctx)),
+        "provider" => match args.get(1).map(String::as_str) {
+            Some("use") => {
+                let report = providers::use_provider(&mut ctx, &args[2..]);
+                println!("{}", report);
+                if report.starts_with("NOT") {
+                    std::process::exit(2);
+                }
+            }
+            _ => print!("{}", providers::list(&ctx)),
+        },
+        "undo" => println!("{}", files::undo(&ctx)),
+        "jobs" => match (args.get(1).map(String::as_str), args.get(2).and_then(|n| n.parse::<u64>().ok())) {
+            (Some("stop"), Some(id)) => println!("{}", jobs::stop(&ctx, id)),
+            (Some("read"), Some(id)) => println!("{}", jobs::read(&ctx, id)),
+            _ => print!("{}", jobs::list(&ctx)),
+        },
         "mcp" => mcp::serve(&ctx),
         "memory" => memory_cmd(&ctx, &args[1..]),
         "run" => {
@@ -116,7 +142,7 @@ fn main() {
             }
             let plain = args.iter().any(|a| a == "--plain") || !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal();
             if plain {
-                repl(&ctx, resume.map(|entry| backend::Chat::resume(&entry)));
+                repl(&ctx, resume.map(|entry| backend::Chat::resume(&ctx, &entry)));
             } else if let Err(e) = tui::run(ctx, resume) {
                 loom::warn(&e);
                 std::process::exit(1);
@@ -218,7 +244,22 @@ pub fn doctor_text(ctx: &config::Ctx) -> String {
     };
     line("folder", true, ctx.root.display().to_string());
     let claude = config::which("claude");
-    line("claude command (login of the user, main and weaker model)", claude.is_some(), claude.map(|p| p.display().to_string()).unwrap_or_else(|| "not on the PATH".into()));
+    let needs_claude = ["main", "weak"].iter().any(|r| !llm::is_api(llm::kind_of(&ctx.cfg[*r])));
+    line("claude command (login of the user)", claude.is_some() || !needs_claude, claude.map(|p| p.display().to_string())
+        .unwrap_or_else(|| if needs_claude { "not on the PATH".into() } else { "not on the PATH, no model setting needs it".into() }));
+    for role in ["main", "weak", "scout"] {
+        let m = &ctx.cfg[role];
+        if !m["model"].is_string() {
+            continue;
+        }
+        // The line names the variable and says whether it is set. The key itself is never read into this text.
+        let (table, env) = (providers::of(m), m["api_key_env"].as_str().unwrap_or(""));
+        let local = ["http://localhost", "http://127.0.0.1", "http://[::1]"].iter().any(|h| m["base_url"].as_str().unwrap_or("").starts_with(h));
+        let optional = table.map(|p| p.key_optional).unwrap_or(env.is_empty()) || local;
+        let state = providers::key_state(env, optional);
+        line(&format!("{} model", role), state != "no key", format!("{} on {}, {}{}", m["model"].as_str().unwrap_or("?"),
+            table.map(|p| p.name).unwrap_or("an address outside the table"), state, if env.is_empty() { String::new() } else { format!(" in {}", env) }));
+    }
     let sc = ctx.cfg["screencodec"]["command"].as_str().filter(|c| !c.is_empty()).map(std::path::PathBuf::from).or_else(|| config::which("screencodec-mcp"));
     line("screencodec-mcp (eyes: pages and pictures as text)", sc.is_some(), sc.map(|p| p.display().to_string()).unwrap_or_else(|| "not on the PATH, Penelope runs without it".into()));
     line("run policy", true, ctx.cfg["run_policy"].as_str().unwrap_or("safe").to_string());

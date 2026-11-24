@@ -1,13 +1,13 @@
 //! The weaker model. It reads long tool output so that the main model gets a few lines.
 
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
 /// One question to a model described by `{"kind": ..., "model": ...}`. Returns the answer text.
 pub fn ask(model: &Value, system: &str, user: &str) -> Result<String, String> {
     match model["kind"].as_str().unwrap_or("claude-cli") {
-        "openai" => ask_openai(model, system, user),
+        kind if crate::llm::is_api(kind) => ask_api(model, system, user),
         _ => ask_claude_cli(model, system, user),
     }
 }
@@ -29,18 +29,11 @@ fn ask_claude_cli(model: &Value, system: &str, user: &str) -> Result<String, Str
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-fn ask_openai(model: &Value, system: &str, user: &str) -> Result<String, String> {
-    let base = model["base_url"].as_str().unwrap_or("http://localhost:11434/v1").trim_end_matches('/').to_string();
-    let key = model["api_key_env"].as_str().and_then(|n| std::env::var(n).ok()).unwrap_or_default();
-    let body = json!({
-        "model": model["model"].as_str().unwrap_or(""),
-        "temperature": 0,
-        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]
-    });
-    let mut req = ureq::post(&format!("{}/chat/completions", base)).timeout(std::time::Duration::from_secs(180));
-    if !key.is_empty() {
-        req = req.set("Authorization", &format!("Bearer {}", key));
+/// One question through an HTTP endpoint, in the format of the setting's kind and without tools.
+fn ask_api(model: &Value, system: &str, user: &str) -> Result<String, String> {
+    let reply = crate::llm::chat(model, system, &[crate::llm::user_message(user)], &[])?;
+    if reply.text.is_empty() {
+        return Err(format!("no answer text in the response (stop reason {})", reply.stop));
     }
-    let resp: Value = req.send_json(body).map_err(|e| format!("request failed: {}", e))?.into_json().map_err(|e| e.to_string())?;
-    resp["choices"][0]["message"]["content"].as_str().map(|s| s.trim().to_string()).ok_or_else(|| "no answer text in the response".to_string())
+    Ok(reply.text)
 }

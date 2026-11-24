@@ -1,5 +1,6 @@
-//! The list of past conversations. Every turn through the claude command updates one entry in `sessions.json`,
-//! so a conversation can go on later with `penelope chat --resume N`.
+//! The list of past conversations. Every turn updates one entry in `sessions.json`, so a conversation can go on
+//! later with `penelope chat --resume N`. The claude command keeps the messages of its sessions itself. For an HTTP
+//! endpoint the messages lie in `sessions/ID.history.json`.
 
 use crate::config::Ctx;
 use serde_json::{json, Value};
@@ -50,7 +51,7 @@ pub fn record(ctx: &Ctx, id: &str, request: &str, turns: u64, tokens: (u64, u64)
 pub fn list(ctx: &Ctx) -> String {
     let all = load(ctx);
     if all.is_empty() {
-        return "no sessions yet. A session is stored after its first answer through the claude command.\n".to_string();
+        return "no sessions yet. A session is stored after its first answer.\n".to_string();
     }
     let mut out = String::new();
     for (i, s) in all.iter().rev().enumerate() {
@@ -81,6 +82,30 @@ pub fn save_transcript(ctx: &Ctx, id: &str, items: &[Value]) {
 
 pub fn load_transcript(ctx: &Ctx, id: &str) -> Vec<Value> {
     fs::read_to_string(transcript_path(ctx, id)).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+}
+
+/// An id for a conversation through an HTTP endpoint. The claude command names its own sessions.
+pub fn new_id() -> String {
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    format!("api-{:x}-{}", nanos, std::process::id())
+}
+
+fn history_path(ctx: &Ctx, id: &str) -> std::path::PathBuf {
+    let name: String = id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
+    ctx.root.join("sessions").join(format!("{}.history.json", name))
+}
+
+/// Writes the messages of a conversation through an HTTP endpoint, in the wire format of its kind. The file holds
+/// requests after the privacy filter, tool results after the privacy filter, and the blocks of the model as they came.
+pub fn save_history(ctx: &Ctx, id: &str, kind: &str, model: &str, messages: &[Value]) {
+    let _ = fs::create_dir_all(ctx.root.join("sessions"));
+    let _ = fs::write(history_path(ctx, id), json!({"kind": kind, "model": model, "messages": messages}).to_string());
+}
+
+/// The stored messages of a conversation and their wire format. None for a session of the claude command.
+pub fn load_history(ctx: &Ctx, id: &str) -> Option<(String, Vec<Value>)> {
+    let v: Value = serde_json::from_str(&fs::read_to_string(history_path(ctx, id)).ok()?).ok()?;
+    Some((v["kind"].as_str()?.to_string(), v["messages"].as_array()?.clone()))
 }
 
 /// A conversation by its number in the list (1 is the newest) or by the start of its id.

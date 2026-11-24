@@ -66,6 +66,9 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd { name: "/models", help: "choose the main and the weaker model", key: "ctrl+o", takes_text: false },
     Cmd { name: "/sessions", help: "list the stored sessions and open one", key: "f2", takes_text: false },
     Cmd { name: "/setup", help: "answer the setup questions again", key: "", takes_text: false },
+    Cmd { name: "/providers", help: "the provider table and which keys are set", key: "", takes_text: false },
+    Cmd { name: "/undo", help: "take back the last change to a file", key: "", takes_text: false },
+    Cmd { name: "/jobs", help: "list the background jobs", key: "", takes_text: false },
     Cmd { name: "/scout", help: "who searches: auto, web, offer or off (no word: the next one)", key: "", takes_text: false },
     Cmd { name: "/crew", help: "the model families and what does each job today", key: "", takes_text: false },
     Cmd { name: "/map", help: "show the memory map", key: "", takes_text: false },
@@ -229,7 +232,7 @@ impl App {
         }
         let Some(id) = entry["id"].as_str() else { return };
         self.save_session();
-        let chat = Chat::resume(entry);
+        let chat = Chat::resume(&self.ctx, entry);
         self.tokens = (chat.input_tokens, chat.output_tokens);
         self.turns = chat.turns;
         self.chat = Some(chat);
@@ -327,7 +330,7 @@ impl App {
     pub fn model_choices(&self, weak: bool) -> Vec<String> {
         let m = &self.ctx.cfg[if weak { "weak" } else { "main" }];
         let current = m["model"].as_str().unwrap_or("").to_string();
-        let mut out: Vec<String> = if m["kind"].as_str().unwrap_or("claude-cli") == "openai" { Vec::new() } else {
+        let mut out: Vec<String> = if crate::llm::is_api(crate::llm::kind_of(m)) { Vec::new() } else {
             ["sonnet", "opus", "haiku"].iter().map(|s| s.to_string()).collect()
         };
         if !current.is_empty() && !out.contains(&current) {
@@ -625,6 +628,12 @@ impl App {
                     _ => "off: the main model does every search itself",
                 }.to_string(), art::SEA);
             }
+            "/providers" => self.pager("Providers", crate::providers::list(&self.ctx)),
+            "/undo" => {
+                let report = crate::files::undo(&self.ctx);
+                self.note("↺", "undo", report, art::SEA);
+            }
+            "/jobs" => self.pager("Background jobs", crate::jobs::list(&self.ctx)),
             "/crew" => self.pager("Crew", tools::crew(&self.ctx)),
             "/unravel" => {
                 let report = tools::unravel(&self.ctx, 1);

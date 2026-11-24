@@ -1,5 +1,5 @@
-//! The main model. Two ways in: the official claude command (uses the user's own login) or an OpenAI-compatible
-//! endpoint with an API key or a local model.
+//! The main model. Three ways in: the official claude command (uses the user's own login), an endpoint in the chat
+//! completions format of OpenAI, or the Messages API of Anthropic. The two HTTP formats share the tool loop in `llm.rs`.
 
 use crate::config::{which, Ctx};
 use crate::mcp;
@@ -109,6 +109,8 @@ above it holds a repository. Paths are relative to it, and ~ stands for the home
 pub struct Chat {
     pub session: Option<String>,
     history: Vec<Value>,
+    /// The wire format the history is written in: `openai` or `anthropic`. Empty before the first turn through an endpoint.
+    history_kind: String,
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub turns: u64,
@@ -122,14 +124,18 @@ pub struct Chat {
 
 impl Chat {
     pub fn new() -> Chat {
-        Chat { session: None, history: Vec::new(), input_tokens: 0, output_tokens: 0, turns: 0,
+        Chat { session: None, history: Vec::new(), history_kind: String::new(), input_tokens: 0, output_tokens: 0, turns: 0,
                cancel: Arc::new(AtomicBool::new(false)), pid: Arc::new(AtomicU32::new(0)), trace: Vec::new() }
     }
 
-    /// Goes on with a stored conversation of the claude command.
-    pub fn resume(entry: &Value) -> Chat {
+    /// Goes on with a stored conversation. A conversation through an HTTP endpoint gets its message history back from disk.
+    pub fn resume(ctx: &Ctx, entry: &Value) -> Chat {
         let mut chat = Chat::new();
         chat.session = entry["id"].as_str().map(String::from);
+        if let Some((kind, messages)) = chat.session.as_deref().and_then(|id| crate::sessions::load_history(ctx, id)) {
+            chat.history = messages;
+            chat.history_kind = kind;
+        }
         chat.turns = entry["turns"].as_u64().unwrap_or(0);
         chat.input_tokens = entry["in"].as_u64().unwrap_or(0);
         chat.output_tokens = entry["out"].as_u64().unwrap_or(0);
@@ -180,7 +186,7 @@ impl Chat {
             on(e)
         };
         let out = match ctx.cfg["main"]["kind"].as_str().unwrap_or("claude-cli") {
-            "openai" => self.turn_openai(ctx, user, &system, &mut watch),
+            kind if crate::llm::is_api(kind) => self.turn_api(ctx, user, &system, &mut watch),
             _ => self.turn_claude(ctx, user, &system, &mut watch),
         };
         self.trace = trace;
@@ -201,6 +207,9 @@ impl Chat {
     }
 
     fn turn_claude(&mut self, ctx: &Ctx, user: &str, system: &str, on: &mut dyn FnMut(Event)) -> Result<String, String> {
+        if !self.history.is_empty() {
+            return Err(format!("this session ran through an endpoint in the format {}. The claude command cannot go on with it. Start a new session.", self.history_kind));
+        }
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
         let mut servers = json!({"penelope": {"command": exe.to_string_lossy(), "args": ["mcp", "--root", ctx.root.to_string_lossy()]}});
         if let Ok(dir) = std::env::var("PENELOPE_APPROVE_DIR") {
@@ -295,49 +304,44 @@ impl Chat {
         v["result"].as_str().map(|s| s.trim().to_string()).ok_or_else(|| "the claude command returned no result text".to_string())
     }
 
-    fn turn_openai(&mut self, ctx: &Ctx, user: &str, system: &str, on: &mut dyn FnMut(Event)) -> Result<String, String> {
+    /// One turn through an HTTP endpoint. The harness runs the tool loop itself and writes the history to disk afterwards.
+    fn turn_api(&mut self, ctx: &Ctx, user: &str, system: &str, on: &mut dyn FnMut(Event)) -> Result<String, String> {
         let m = &ctx.cfg["main"];
-        let base = m["base_url"].as_str().unwrap_or("http://localhost:11434/v1").trim_end_matches('/').to_string();
-        let key = m["api_key_env"].as_str().and_then(|n| std::env::var(n).ok()).unwrap_or_default();
-        let mine = mcp::main_tools(ctx);
-        let tools: Vec<Value> = mcp::tool_specs().as_array().unwrap().iter().filter(|t| mine.contains(&t["name"].as_str().unwrap_or("")))
-            .map(|t| json!({"type": "function", "function": {"name": t["name"], "description": t["description"], "parameters": t["inputSchema"]}})).collect();
-        self.history.push(json!({"role": "user", "content": user}));
-        for _ in 0..8 {
-            if self.cancel.load(Ordering::SeqCst) {
-                return Err("stopped".to_string());
-            }
-            let mut messages = vec![json!({"role": "system", "content": system})];
-            messages.extend(self.history.iter().cloned());
-            let body = json!({"model": m["model"].as_str().unwrap_or(""), "messages": messages, "tools": tools, "temperature": 0});
-            let mut req = ureq::post(&format!("{}/chat/completions", base)).timeout(std::time::Duration::from_secs(300));
-            if !key.is_empty() {
-                req = req.set("Authorization", &format!("Bearer {}", key));
-            }
-            let resp: Value = req.send_json(body).map_err(|e| format!("request failed: {}", e))?.into_json().map_err(|e| e.to_string())?;
-            self.input_tokens += resp["usage"]["prompt_tokens"].as_u64().unwrap_or(0);
-            self.output_tokens += resp["usage"]["completion_tokens"].as_u64().unwrap_or(0);
-            let msg = resp["choices"][0]["message"].clone();
-            let calls = msg["tool_calls"].as_array().cloned().unwrap_or_default();
-            self.history.push(msg.clone());
-            if calls.is_empty() {
-                return Ok(msg["content"].as_str().unwrap_or("").trim().to_string());
-            }
-            if let Some(text) = msg["content"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
-                on(Event::Text(text.to_string()));
-            }
-            for c in calls {
-                let name = c["function"]["name"].as_str().unwrap_or("");
-                let args: Value = serde_json::from_str(c["function"]["arguments"].as_str().unwrap_or("{}")).unwrap_or(json!({}));
-                let id = c["id"].as_str().unwrap_or("").to_string();
-                on(Event::ToolStart { id: id.clone(), name: short_name(name), detail: tool_detail(&args) });
-                let called = mcp::call(ctx, name, &args);
-                on(Event::ToolEnd { id, ok: called.is_ok(), summary: first_line(called.as_deref().unwrap_or_else(|e| e.as_str())) });
-                let text = called.unwrap_or_else(|e| e);
-                self.history.push(json!({"role": "tool", "tool_call_id": c["id"], "content": text}));
-            }
+        let kind = crate::llm::kind_of(m).to_string();
+        if self.history.is_empty() && self.session.is_some() && self.turns > 0 {
+            return Err("this session ran through the claude command, so its history is not stored here. Start a new session.".to_string());
         }
-        Err("stopped after 8 rounds of tool calls".to_string())
+        if !self.history.is_empty() && self.history_kind != kind {
+            return Err(format!("this session is stored in the format {} and the main model now uses {}. Start a new session.", self.history_kind, kind));
+        }
+        let mine = mcp::main_tools(ctx);
+        let tools: Vec<Value> = mcp::tool_specs().as_array().unwrap().iter().filter(|t| mine.contains(&t["name"].as_str().unwrap_or(""))).cloned().collect();
+        let before = self.history.len();
+        self.history.push(crate::llm::user_message(user));
+        self.history_kind = kind.clone();
+        let mut usage = crate::llm::Usage::default();
+        let mut history = std::mem::take(&mut self.history);
+        // Both closures report to the interface, so the events go through one shared cell.
+        let events = std::cell::RefCell::new(on);
+        let out = crate::llm::run_loop(m, system, &mut history, &tools, 12, Some(&*self.cancel), &mut usage,
+            &mut |call| {
+                (*events.borrow_mut())(Event::ToolStart { id: call.id.clone(), name: short_name(&call.name), detail: tool_detail(&call.args) });
+                let called = if mine.contains(&call.name.as_str()) { mcp::call(ctx, &call.name, &call.args) } else { Err(format!("unknown tool {}", call.name)) };
+                (*events.borrow_mut())(Event::ToolEnd { id: call.id.clone(), ok: called.is_ok(), summary: first_line(called.as_deref().unwrap_or_else(|e| e.as_str())) });
+                let ok = called.is_ok();
+                (called.unwrap_or_else(|e| e), ok)
+            },
+            &mut |text| (*events.borrow_mut())(Event::Text(text.to_string())));
+        self.history = history;
+        self.input_tokens += usage.tokens_in;
+        self.output_tokens += usage.tokens_out;
+        if out.is_err() {
+            self.history.truncate(before);          // a failed turn leaves no half exchange behind
+            return out;
+        }
+        let id = self.session.get_or_insert_with(crate::sessions::new_id).clone();
+        crate::sessions::save_history(ctx, &id, &kind, m["model"].as_str().unwrap_or(""), &self.history);
+        out
     }
 }
 
@@ -361,5 +365,208 @@ mod tests {
         ctx.cfg["privacy_answers"] = json!(false);
         assert_eq!(Answers::default().block(&ctx, raw), (raw.to_string(), 0));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A folder with one file, and settings whose main model is an endpoint of the given kind at `address`.
+    fn endpoint(name: &str, kind: &str, address: &str, key_env: &str) -> (Ctx, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("penelope-llm-{}-{}", name, std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut ctx = crate::config::load(&dir.join(".penelope"));
+        std::fs::write(dir.join("note.txt"), "hello from the note\n").unwrap();
+        ctx.cfg["main"] = json!({"kind": kind, "base_url": address, "model": "test-model", "api_key_env": key_env});
+        ctx.cfg["auto_learn"] = json!(false);
+        (ctx, dir)
+    }
+
+    fn names(events: &[String]) -> String {
+        events.join(" | ")
+    }
+
+    fn collect(events: &mut Vec<String>) -> impl FnMut(Event) + '_ {
+        |e| events.push(match e {
+            Event::Text(t) => format!("text {}", t),
+            Event::ToolStart { name, detail, .. } => format!("start {} {}", name, detail),
+            Event::ToolEnd { ok, summary, .. } => format!("end {} {}", ok, summary),
+            Event::Delta(_) | Event::Masked(_) | Event::MaskedAnswer(_) => "other".to_string(),
+        })
+    }
+
+    #[test]
+    fn openai_shape_runs_one_round_of_tool_calls_and_resumes_from_disk() {
+        std::env::set_var("PENELOPE_TEST_KEY_OPENAI", "test-key-openai-0123456789");
+        let dir = std::env::temp_dir().join(format!("penelope-llm-openai-{}", std::process::id()));
+        let call = json!({"path": "note.txt", "cwd": dir.to_string_lossy()}).to_string();
+        let (address, seen) = crate::llm::fake::serve(vec![
+            (200, json!({"choices": [{"finish_reason": "tool_calls", "message": {"role": "assistant", "content": null, "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "read", "arguments": call}}]}}], "usage": {"prompt_tokens": 100, "completion_tokens": 20}}).to_string()),
+            (200, json!({"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "The note says hello."}}], "usage": {"prompt_tokens": 150, "completion_tokens": 8}}).to_string()),
+            (200, json!({"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "Second answer."}}], "usage": {"prompt_tokens": 170, "completion_tokens": 3}}).to_string()),
+        ]);
+        let (ctx, dir) = endpoint("openai", "openai", &format!("{}/v1", address), "PENELOPE_TEST_KEY_OPENAI");
+        let mut chat = Chat::new();
+        let mut events = Vec::new();
+        let answer = chat.turn_with(&ctx, "What does note.txt say?", "", &mut collect(&mut events)).unwrap();
+        assert_eq!(answer, "The note says hello.");
+        assert!(names(&events).starts_with("start read note.txt | end true ") && events[1].contains("lines 1 to 1 of 1"), "{}", names(&events));
+        assert_eq!((chat.input_tokens, chat.output_tokens, chat.turns), (250, 28, 1));
+        {
+            let seen = seen.lock().unwrap();
+            assert_eq!((seen.len(), seen[0].path.as_str()), (2, "/v1/chat/completions"));
+            assert!(seen[0].headers.contains(&"authorization: bearer test-key-openai-0123456789".to_string()));
+            let first = &seen[0].body;
+            assert_eq!((first["model"].as_str(), first["messages"][0]["role"].as_str(), first["messages"][1]["content"].as_str()),
+                       (Some("test-model"), Some("system"), Some("What does note.txt say?")));
+            assert!(first["temperature"].is_null() && first["tools"][0]["type"] == "function" && first["tools"][0]["function"]["parameters"]["type"] == "object");
+            let second = seen[1].body["messages"].as_array().unwrap();
+            assert_eq!(second.len(), 4);
+            assert_eq!(second[2]["tool_calls"][0]["id"], "call_1");
+            assert_eq!((second[3]["role"].as_str(), second[3]["tool_call_id"].as_str()), (Some("tool"), Some("call_1")));
+            assert!(second[3]["content"].as_str().unwrap().contains("hello from the note"));
+        }
+        // The session is in the list and its messages are on disk, so another process can go on with it.
+        let entry = crate::sessions::pick(&ctx, "1").unwrap();
+        let id = entry["id"].as_str().unwrap();
+        assert!(id.starts_with("api-") && chat.session.as_deref() == Some(id));
+        let (kind, stored) = crate::sessions::load_history(&ctx, id).unwrap();
+        assert_eq!((kind.as_str(), stored.len()), ("openai", 4));
+        let mut again = Chat::resume(&ctx, &entry);
+        assert_eq!(again.turn_with(&ctx, "And once more?", "", &mut |_| {}).unwrap(), "Second answer.");
+        let third = seen.lock().unwrap()[2].body["messages"].as_array().unwrap().clone();
+        assert_eq!((third.len(), third[1]["content"].as_str(), third[5]["content"].as_str()), (6, Some("What does note.txt say?"), Some("And once more?")));
+        assert_eq!((again.turns, crate::sessions::load_history(&ctx, id).unwrap().1.len()), (2, 6));
+        // The same session cannot go on in the other wire format or through the claude command.
+        let mut other = ctx.clone();
+        other.cfg["main"]["kind"] = json!("anthropic");
+        assert!(Chat::resume(&ctx, &entry).turn_with(&other, "x", "", &mut |_| {}).unwrap_err().contains("stored in the format openai"));
+        other.cfg["main"] = json!({"kind": "claude-cli", "model": "haiku"});
+        assert!(Chat::resume(&ctx, &entry).turn_with(&other, "x", "", &mut |_| {}).unwrap_err().contains("claude command cannot go on"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn anthropic_shape_runs_one_round_of_tool_calls_and_reports_a_refusal() {
+        std::env::set_var("PENELOPE_TEST_KEY_ANTHROPIC", "test-key-anthropic-0123456789");
+        let dir = std::env::temp_dir().join(format!("penelope-llm-anthropic-{}", std::process::id()));
+        let blocks = json!([{"type": "thinking", "thinking": "", "signature": "sig-1"}, {"type": "text", "text": "I will read the note."},
+                            {"type": "tool_use", "id": "toolu_1", "name": "read", "input": {"path": "note.txt", "cwd": dir.to_string_lossy()}}]);
+        let (address, seen) = crate::llm::fake::serve(vec![
+            (200, json!({"id": "msg_1", "type": "message", "role": "assistant", "content": blocks, "stop_reason": "tool_use", "usage": {"input_tokens": 90, "output_tokens": 30}}).to_string()),
+            (200, json!({"content": [{"type": "text", "text": "The note says hello."}], "stop_reason": "end_turn", "usage": {"input_tokens": 140, "cache_read_input_tokens": 10, "output_tokens": 9}}).to_string()),
+            (200, json!({"content": [], "stop_reason": "refusal", "stop_details": {"type": "refusal", "category": "cyber"}, "usage": {"input_tokens": 5, "output_tokens": 0}}).to_string()),
+        ]);
+        let (ctx, dir) = endpoint("anthropic", "anthropic", &address, "PENELOPE_TEST_KEY_ANTHROPIC");
+        let mut chat = Chat::new();
+        let mut events = Vec::new();
+        let answer = chat.turn_with(&ctx, "What does note.txt say?", "", &mut collect(&mut events)).unwrap();
+        assert_eq!(answer, "The note says hello.");
+        assert!(names(&events).starts_with("text I will read the note. | start read note.txt | end true "), "{}", names(&events));
+        assert_eq!((chat.input_tokens, chat.output_tokens), (240, 39));
+        {
+            let seen = seen.lock().unwrap();
+            assert_eq!((seen.len(), seen[0].path.as_str()), (2, "/v1/messages"));
+            let h = &seen[0].headers;
+            assert!(h.contains(&"x-api-key: test-key-anthropic-0123456789".to_string()) && h.contains(&format!("anthropic-version: {}", crate::llm::ANTHROPIC_VERSION)), "{:?}", h);
+            assert!(!h.iter().any(|l| l.starts_with("authorization:") || l.starts_with("anthropic-beta:")));
+            let first = &seen[0].body;
+            assert!(first["system"].as_str().unwrap().starts_with("You work inside Penelope") && first["max_tokens"] == 16000 && first["temperature"].is_null());
+            assert_eq!(first["messages"], json!([{"role": "user", "content": "What does note.txt say?"}]));
+            let tool = first["tools"].as_array().unwrap().iter().find(|t| t["name"] == "read").unwrap();
+            assert!(tool["input_schema"]["properties"]["path"].is_object() && tool["type"].is_null());
+            let second = seen[1].body["messages"].as_array().unwrap();
+            assert_eq!(second.len(), 3);
+            assert_eq!(second[1], json!({"role": "assistant", "content": blocks}));          // every block goes back unchanged, the thinking block too
+            let result = &second[2]["content"][0];
+            assert_eq!((second[2]["role"].as_str(), result["type"].as_str(), result["tool_use_id"].as_str()), (Some("user"), Some("tool_result"), Some("toolu_1")));
+            assert!(result["content"].as_str().unwrap().contains("hello from the note") && result["is_error"].is_null());
+        }
+        let id = chat.session.clone().unwrap();
+        assert_eq!(crate::sessions::load_history(&ctx, &id).map(|(k, m)| (k, m.len())), Some(("anthropic".to_string(), 4)));
+        // A refusal ends the turn with its category. The stored history stays as it was.
+        let refused = chat.turn_with(&ctx, "Next request", "", &mut |_| {}).unwrap_err();
+        assert!(refused.contains("declined this request: refusal (category cyber)"), "{}", refused);
+        assert_eq!((chat.turns, chat.history.len(), crate::sessions::load_history(&ctx, &id).unwrap().1.len()), (1, 4, 4));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_scout_and_the_weaker_model_work_through_the_messages_api() {
+        let (address, seen) = crate::llm::fake::serve(vec![
+            (200, json!({"content": [{"type": "tool_use", "id": "toolu_1", "name": "run", "input": {"command": "rm -rf build"}},
+                                     {"type": "tool_use", "id": "toolu_2", "name": "write", "input": {"path": "x.txt", "text": "x"}}],
+                         "stop_reason": "tool_use", "usage": {"input_tokens": 50, "output_tokens": 12}}).to_string()),
+            (200, json!({"content": [{"type": "text", "text": "Nothing was removed."}], "stop_reason": "end_turn", "usage": {"input_tokens": 70, "output_tokens": 6}}).to_string()),
+            (200, json!({"content": [{"type": "text", "text": "three lines"}], "stop_reason": "end_turn", "usage": {"input_tokens": 9, "output_tokens": 2}}).to_string()),
+        ]);
+        let (mut ctx, dir) = endpoint("scout", "anthropic", &address, "");
+        ctx.cfg["scout"] = ctx.cfg["main"].clone();
+        let report = crate::scout::run(&ctx, "Remove the build folder.", &dir.to_string_lossy());
+        assert!(report.starts_with("report of the scout on test-model: 2 steps, 120 tokens in, 18 out") && report.ends_with("Nothing was removed."), "{}", report);
+        assert!(!crate::scout::inside());
+        {
+            let seen = seen.lock().unwrap();
+            assert_eq!(seen[0].body["tools"].as_array().unwrap().len(), crate::scout::TOOLS.len());
+            assert!(!seen[0].headers.iter().any(|l| l.starts_with("x-api-key:")));          // no variable named, no key header
+            let results = seen[1].body["messages"][2]["content"].as_array().unwrap().clone();
+            assert_eq!(results.len(), 2);          // both results travel in one user message
+            assert!(results[0]["content"].as_str().unwrap().starts_with("NOT run. A scout runs commands of the safe list only"));
+            assert!(results[1]["content"] == "a scout has no tool write" && results[1]["is_error"] == true && !dir.join("x.txt").exists());
+        }
+        assert_eq!(crate::weak::ask(&ctx.cfg["main"], "Condense.", "a\nb\nc").unwrap(), "three lines");
+        assert!(seen.lock().unwrap()[2].body["tools"].is_null());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn no_key_reaches_the_settings_the_transcript_or_any_stored_file() {
+        const KEY: &str = "sk-test-7c1e9a4b2d6f8031-not-a-real-key";
+        std::env::set_var("PENELOPE_TEST_KEY_STORE", KEY);
+        let dir = std::env::temp_dir().join(format!("penelope-llm-key-{}", std::process::id()));
+        let call = json!({"path": "note.txt", "cwd": dir.to_string_lossy()}).to_string();
+        // This endpoint repeats the key wherever it can: in an error, next to a tool call and in the answer.
+        let (address, seen) = crate::llm::fake::serve(vec![
+            (401, json!({"error": {"message": format!("Incorrect API key provided: {}", KEY)}}).to_string()),
+            (200, json!({"choices": [{"finish_reason": "tool_calls", "message": {"role": "assistant", "content": format!("Your key is {}.", KEY), "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "read", "arguments": call}}]}}], "usage": {"prompt_tokens": 1, "completion_tokens": 1}}).to_string()),
+            (200, json!({"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": format!("Done with {}.", KEY)}}]}).to_string()),
+        ]);
+        let (mut ctx, dir) = endpoint("key", "openai", "http://unused", "");
+        let set = crate::providers::use_provider(&mut ctx, &["openai".to_string(), "--base-url".to_string(), format!("{}/v1", address), "--model".to_string(), "test-model".to_string()]);
+        assert!(set.starts_with("set: main model test-model on openai") && set.contains("in OPENAI_API_KEY"), "{}", set);
+        ctx.cfg["main"]["api_key_env"] = json!("PENELOPE_TEST_KEY_STORE");
+        std::fs::write(ctx.root.join("config.json"), serde_json::to_string_pretty(&ctx.cfg).unwrap()).unwrap();
+        let mut chat = Chat::new();
+        let failed = chat.turn_with(&ctx, "First try", "", &mut |_| {}).unwrap_err();
+        assert!(failed.contains("status 401") && failed.contains("Incorrect API key provided: [key]") && !failed.contains(KEY), "{}", failed);
+        let mut events = Vec::new();
+        let answer = chat.turn_with(&ctx, "What does note.txt say?", "", &mut collect(&mut events)).unwrap();
+        assert_eq!(answer, "Done with [key].");
+        // The interface stores what it showed as the transcript of the session.
+        let mut items: Vec<Value> = events.iter().map(|e| json!({"shown": e})).collect();
+        items.push(json!({"reply": answer, "error": failed}));
+        let id = chat.session.clone().unwrap();
+        crate::sessions::save_transcript(&ctx, &id, &items);
+        let screen = format!("{}{}{}{}", names(&events), crate::providers::list(&ctx), crate::doctor_text(&ctx), set);
+        assert!(!screen.contains(KEY) && screen.contains("PENELOPE_TEST_KEY_STORE") && screen.contains("text Your key is [key]."), "{}", screen);
+        // Every request carried the key in its header and nowhere in its body.
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 3);
+        assert!(seen.iter().all(|r| r.headers.contains(&format!("authorization: bearer {}", KEY)) && !r.body.to_string().contains(KEY)));
+        // No file below the settings folder holds the key: config.json, sessions.json, the transcript, the history.
+        fn files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for e in std::fs::read_dir(dir).unwrap().flatten() {
+                if e.path().is_dir() { files(&e.path(), out) } else { out.push(e.path()) }
+            }
+        }
+        let mut all = Vec::new();
+        files(&ctx.root, &mut all);
+        let names: Vec<String> = all.iter().map(|p| p.strip_prefix(&ctx.root).unwrap().to_string_lossy().to_string()).collect();
+        for needed in ["config.json", "sessions.json", &format!("sessions/{}.json", id), &format!("sessions/{}.history.json", id)] {
+            assert!(names.iter().any(|n| n == needed), "{} is missing in {:?}", needed, names);
+        }
+        for path in &all {
+            assert!(!String::from_utf8_lossy(&std::fs::read(path).unwrap()).contains(KEY), "{} holds the key", path.display());
+        }
+        assert!(std::fs::read_to_string(ctx.root.join("config.json")).unwrap().contains("\"api_key_env\": \"PENELOPE_TEST_KEY_STORE\""));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
