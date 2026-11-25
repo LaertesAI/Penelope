@@ -1461,3 +1461,27 @@ Open:
 - The default task cwd applies when a tool call names no cwd. A model can still pass an absolute path outside the
   scratch copy; the eval is a measurement, not a sandbox.
 - A task with `"copy": false` works in its setup folder and can change it on purpose.
+
+## DeepSeek phase 2 (branch `feat/phase2-notes-advise`)
+
+### 2.1 Notes with links and a status
+
+`notes.rs` is wired into the cluster. It can now write a note as `<name>.md` with a `source:`, `date:` and `status:`
+header, change only the status of an existing note, and turn a selection into prompt text. `within_notes` returns the
+notes at most N links from a start note, links followed both ways and stale notes left out; `context` caps each body at
+4,000 and the whole selection at 12,000 characters.
+
+Every worker part writes `<cluster>/notes/<part>.md` before it runs and again with its result: the task is the start
+note, `[[links]]` in the task or result are kept, and the parts it waits for plus its neighbours in the worker list are
+links in both directions. The worker prompt now carries only the notes at most two links from its own note; the
+validator sees every open or confirmed note, never a stale one. `memory.md` stays unchanged as the human-readable log
+and is only a fallback for a cluster that has no notes yet.
+
+`validate()` owns the status: a PASS sets every worker note of the attempt to `confirmed`, a FAIL sets it to `stale`, so
+a rejected result (including a note confirmed before a later contradiction) cannot reach a later prompt.
+
+Test: ten linked notes with one stale note (`n7`); from `n1` the prompt holds exactly `n1`, `n2`, `n3` and no stale
+text. Measured: `cd cli && cargo test` → 242 unit tests + 4 integration tests, 0 failed (2026-11-26).
+
+Open: notes belong to one cluster id, so a later run of the same task starts a fresh note folder; there is no carry-over
+between runs yet. The validator's own PASS/FAIL is still only in `memory.md`, not a note.
