@@ -5,7 +5,7 @@
 **Scope:** one contract layer for every tool, models in every role, agents written with `$`, shared memory and an
 Obsidian brain, cost in euro, ScreenCodec and Penelope's own cursor, plugin install and import, a startup weave, and
 the commands and views that make these reachable.  
-**Tests:** 132 passed, 0 failed. No test needs a key. The live runs against OpenCode Go are written down below and used no test fixture.
+**Tests:** 135 passed, 0 failed. No test needs a key. The live runs against OpenCode Go are written down below and used no test fixture.
 
 This is a working increment, not a claim that every limit is gone. The last section names what is still open and how
 each claim can be checked on this machine.
@@ -791,7 +791,7 @@ rule is woven from left to right for 1.5 s, then the screen settles. `PENELOPE_N
 Keys: **F5** starts a new session and resets the animation. **F6** arms a delete; a second F6 within four seconds
 removes the current transcript, its history and its tab. A first F6 only shows the warning.
 
-`/models` is a provider screen now, not a list of three aliases:
+The provider and model screens are separate now. `/providers` connects a provider, `/model` chooses the model:
 
 - arrows choose a provider, `tab` switches main/weaker, `enter` signs in or opens the key window;
 - a Claude provider runs the official `claude auth login` on the plain terminal and returns;
@@ -850,6 +850,20 @@ letters can filter. Enter on a command puts `/plugin:command ` into the input li
 presses enter. The live test used a demo plugin with `commands/echo.md`, typed `/plugins`, filtered with `echo`, opened
 the command, inserted `/demo:echo `, typed `plugin-ok` and got `plugin-ok` back from the model.
 
+### The interface bugs of the 0.12 pass
+
+- A paste now goes to the open field. An API key pasted in the key window lands in the masked input (`sk-p•••`), not in
+  the prompt; a unit test proves the prompt stays empty.
+- The start screen shows the actual mark from `brand/term-mark.svg` again: 40 by 40 pixels, 40 columns and 20 rows above
+  the `P E N E L O P E` wordmark. Terminals below 38 rows keep the text-only screen.
+- Delete removes the selected session from the session list and its transcript/history. If it was the open session,
+  the interface starts a fresh chat. The list says `entf deletes`.
+- `/providers` and `/model` are separate screens now. `/providers` shows provider, kind, key state and key variable;
+  `enter` connects. `/model` shows the provider's model list, the effort column, `tab` main/weak, `r` role models and
+  `e` effort. `/models` only points at the two new commands.
+- The plugins screen uses compact counts (`0c 1s 1m`), wider names and a footer that fits. The provider text list
+  prints one block per provider, so long addresses and notes no longer wrap into broken columns.
+
 ## Startup animation
 
 `cli/src/startup.rs` draws five frames: the loose thread grows `~`, `~~`, `~~~`, `~~~~`, and the name and model line
@@ -861,7 +875,7 @@ never blocks a turn.
 
 | Command | What it does |
 |---|---|
-| `/model` | same as `/models` |
+| `/model` | chooses the model of the current provider |
 | `/btw TEXT` | keep a quick note without interrupting |
 | `/rules [TEXT]` | show the shared rules, or add one to `rules` |
 | `/orchestrate GOAL` | run an agent on a goal |
@@ -899,7 +913,7 @@ New CLI commands: `tools`, `tool list`, `tool call NAME JSON`, `route`, `agents`
 
 ## Tests and evidence
 
-`cargo test` in `cli/`: **132 passed, 0 failed**. The new tests, all without a real provider:
+`cargo test` in `cli/`: **135 passed, 0 failed**. The new tests, all without a real provider:
 
 | Test | What it proves |
 |---|---|
@@ -972,6 +986,9 @@ New CLI commands: `tools`, `tool list`, `tool call NAME JSON`, `route`, `agents`
 | `llm::effort_reaches_the_anthropic_and_the_openai_body` | `output_config.effort` and `reasoning_effort` |
 | `plugins::commands_are_registered_shown_and_expanded_with_their_arguments` | `$ARGUMENTS`, `$1`, command list |
 | `tui::the_plugins_screen_lists_a_plugin_and_inserts_its_command` | filter, tab, command insert |
+| `tui::delete_removes_the_selected_session_from_the_list` | Delete removes the stored session |
+| `tui::model_and_providers_are_two_separate_screens` | `/model` and `/providers` do not share an overlay |
+| Paste in `tui::the_provider_list_opens_a_masked_key_window_and_a_claude_login` | key lands masked, prompt stays empty |
 | `search::the_fanout_switch_is_written_and_the_health_line_names_every_engine` | fanout setting and health line |
 | `providers::the_provider_list_wins_over_the_static_catalog_and_is_cached` | `/models` parsing, effort column, cache, Anthropic header |
 | `tui::the_picker_uses_the_provider_list_and_its_effort_column` | picker and `e` use the fetched list |
@@ -1045,7 +1062,7 @@ body.
 
 ```bash
 cd cli
-cargo test                     # 132 tests, no model, no key
+cargo test                     # 135 tests, no model, no key
 
 ./target/release/penelope tools
 ./target/release/penelope serve --print-config

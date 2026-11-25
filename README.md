@@ -3,7 +3,7 @@
 <p align="center">
   <a href="cli/Cargo.toml"><img src="https://img.shields.io/badge/version-0.11.0-C4623E?style=flat-square&labelColor=1C1A17" alt="version 0.11.0"></a>
   <a href="cli/Cargo.toml"><img src="https://img.shields.io/badge/Rust_edition-2021-C4623E?style=flat-square&labelColor=1C1A17" alt="Rust edition 2021"></a>
-  <a href="#build"><img src="https://img.shields.io/badge/tests-132_passing-C4623E?style=flat-square&labelColor=1C1A17" alt="132 tests passing"></a>
+  <a href="#build"><img src="https://img.shields.io/badge/tests-135_passing-C4623E?style=flat-square&labelColor=1C1A17" alt="135 tests passing"></a>
   <a href="#status"><img src="https://img.shields.io/badge/platform-Linux-C4623E?style=flat-square&labelColor=1C1A17" alt="platform Linux"></a>
   <a href="#parts"><img src="https://img.shields.io/badge/MCP_tools-46-C4623E?style=flat-square&labelColor=1C1A17" alt="46 MCP tools"></a>
   <a href="docs/PROVIDERS.md"><img src="https://img.shields.io/badge/providers-35-C4623E?style=flat-square&labelColor=1C1A17" alt="35 providers"></a>
@@ -26,11 +26,11 @@ model, keeps notes in a memory map, and asks before every change to a file.
 | Date | 2026-11-25 |
 | Stage | alpha: one developer, one PC, no packaged release |
 | Repository | https://github.com/LaertesAI/Penelope, branch `main` |
-| Source | [`cli/`](cli), 47 Rust files, 18,763 lines |
-| Binary | `cli/target/release/penelope`, 7.7 MB (7,750,144 bytes), built from source |
+| Source | [`cli/`](cli), 47 Rust files, 18,876 lines |
+| Binary | `cli/target/release/penelope`, 7.7 MB (7,755,256 bytes), built from source |
 | Build | `cargo build --release`, profile `release` with `opt-level = 2` and `strip = true` |
 | Toolchain | rustc 1.99.1, edition 2021 |
-| Tests | 132 passed, 0 failed, no test needs a key. Live runs are listed in the devlog. |
+| Tests | 135 passed, 0 failed, no test needs a key. Live runs are listed in the devlog. |
 | Real runs | 29 with the `claude` command up to 0.10.0, live OpenCode Go runs on 2026-11-24, and three live cluster runs with Claude + haiku on 2026-11-25. See [`DEVLOG.md`](docs/DEVLOG.md). |
 | Platform | Linux. Background jobs read `/proc`. Windows and macOS are untried. |
 | Settings folder | `.penelope/` in the project, else `~/.penelope/` |
@@ -64,7 +64,7 @@ Needed: a Rust toolchain, Linux, and one model source (the `claude` command, an 
 ```bash
 cd cli
 cargo build --release
-cargo test                          # 132 tests, no model call
+cargo test                          # 135 tests, no model call
 ./target/release/penelope doctor    # one line per program and setting Penelope depends on
 ```
 
@@ -95,7 +95,7 @@ penelope provider use alibaba-intl --workspace ID   # the address holds the work
 penelope provider use openai --base-url http://localhost:9000/v1 --model NAME
 ```
 
-In the full screen interface `/models` opens the provider list. Arrow keys choose, `tab` switches main/weaker, `m` opens the model names, and `enter` signs in. The model names come from the provider's own list endpoint (`/models` for OpenAI-compatible addresses, `/v1/models` for Anthropic), are cached under `.penelope/models/`, and fall back to the built-in catalog when the endpoint has no key or no list. The Claude command has no list endpoint, so its three subscription aliases stay built in. `penelope models [PROVIDER]` prints the same list in the terminal.
+The two screens are separate. `/providers` connects a provider: arrows choose, `tab` switches main/weaker, `enter` signs in with the Claude command or opens the masked API-key window. `/model` chooses the model of the current provider: arrows choose, `tab` switches main/weaker, `r` opens the role models, `e` changes the effort, `enter` applies. The model names come from the provider's own list endpoint (`/models` for OpenAI-compatible addresses, `/v1/models` for Anthropic), are cached under `.penelope/models/`, and fall back to the built-in catalog when the endpoint has no key or no list. The Claude command has no list endpoint, so its three subscription aliases stay built in. `penelope models [PROVIDER]` prints the same list in the terminal.
 - Claude: the official `claude auth login` page, then the terminal comes back.
 - API providers: a second window takes the key and shows only its first four characters; `enter` stores it, `esc` cancels.
 
@@ -123,8 +123,9 @@ In the full screen interface `/models` opens the provider list. Arrow keys choos
 | Local HTTP API | `penelope serve` answers `/search`, `/read`, `/embed`, `/rerank`, `/redact` and `/whoami` on loopback, with a bearer token for a remote bind and 120 requests per minute. | 0.11 | 6 tests, live curl |
 | Worktrees | `penelope work new/list/diff/apply/remove` keeps a task on its own branch; the live tree changes only on `apply`. | 0.12 | 1 test, live git worktree |
 | Checkpoints and rewind | A checkpoint at every turn; `/rewind N` restores the transcript and the file changes of the last N turns. | 0.12 | 2 tests |
-| Role models | `/models` → `r`: tool calls, processing, research/web search, coding, judge, router and filter, each with its own provider. | 0.12 | 1 test |
-| Exact models and effort | `/models` → `m` asks the provider for its model list (cached under `.penelope/models/`), falls back to the built-in names, and shows the provider's own effort column. `e` cycles it; a model without the field shows `no effort` and gets no parameter. | 0.12 | 3 tests, live OpenCode list |
+| Providers and models | `/providers` connects a provider; `/model` chooses the model of the current provider. Two separate screens, no mixed list. A pasted API key goes into the masked key field, never the prompt. | 0.12 | 3 tests, live screens and paste |
+| Role models | `/model` → `r`: tool calls, processing, research/web search, coding, judge, router and filter, each with its own provider. | 0.12 | 1 test |
+| Exact models and effort | `/model` asks the provider for its model list (cached under `.penelope/models/`), falls back to the built-in names, and shows the provider's own effort column. `e` cycles it; a model without the field shows `no effort` and gets no parameter. | 0.12 | 3 tests, live OpenCode list |
 | Monthly budget | `/budget 20`, consumption and the rest of the month in the side panel and `/cost`. | 0.12 | 1 test |
 | Sandbox and allowlist | `/sandbox on` runs shell commands through bubblewrap without network; a confirmed command is kept hashed for this project. | 0.12 | 2 tests, live bwrap |
 | CI event stream | `penelope ask --json` writes newline-delimited events for CI and editors. | 0.12 | live Claude event stream |
@@ -160,7 +161,7 @@ In the full screen interface `/models` opens the provider list. Arrow keys choos
 | Plugin install and import | `/plugins install LINK` clones, unpacks or registers a plugin; the first start takes over the plugins of other harnesses. A ZIP is unpacked into the plugin home first. | 0.11 | 5 tests, live ZIP |
 | Plugin administration | `plugin update NAME` pulls a git plugin or re-reads a local/ZIP one; `plugin remove NAME` takes it out of the registry and leaves the folder. | 0.11 | 1 test, live update/remove |
 | More tools | `session_search`, `http_request`, `json_query`, `git_diff`, `clipboard`, `agent`. | 0.11 | 1 test |
-| Startup animation and keys | A crisp wordmark, a short weaving animation on the home screen, F5 for a new session and F6 twice for delete. | 0.11 / 0.12 | TUI tests, tmux capture |
+| Logo and keys | The woven mark above the wordmark, a short weaving animation on the home screen, F5 for a new session, F6 twice for delete, Delete in the session list. | 0.11 / 0.12 | TUI tests, tmux capture |
 | Web search, ranked | 10 sources, cache, canonical URLs, diversity, scores, rate-limit fallback. A server search API and a reranker follow the same JSON contract. | 0.11 | 9 tests, live 8 results, live health rows |
 | Scraper | HTML to Markdown: article, metadata, JSON-LD, lists, tables, code, boilerplate removed. | 0.11 | 6 tests |
 | Research | several queries, the pages behind the hits, a cited report on the weak model. | 0.11 | 1 test, live cited report |
@@ -194,7 +195,7 @@ The 46 tools: `run`, `run_detail`, `job_start`, `job_read`, `job_stop`, `fetch`,
 
 ## The full screen interface
 
-<p align="center"><img src="docs/screens/home.png" alt="Start screen of Penelope with the crisp wordmark, the state of the memory map and the input box" width="80%"></p>
+<p align="center"><img src="docs/screens/home.png" alt="Start screen of Penelope with the woven mark and the wordmark, the state of the memory map and the input box" width="80%"></p>
 
 `penelope` without arguments opens it. `penelope chat --plain` keeps the line by line chat. A pipe on standard input
 or output selects the plain chat by itself.
@@ -218,7 +219,7 @@ or output selects the plain chat by itself.
 | `f12` | save the screen as an SVG picture under `.penelope/screens/` |
 | `ctrl+c` | empty the input, leave when it is empty |
 
-Commands: `/new` (or F5), `/models` (providers; `r` role models, `m` exact names, `e` effort), `/sessions`, `/setup`, `/providers`, `/undo`, `/jobs`,
+Commands: `/new` (or F5), `/model` (`r` role models, `e` effort), `/providers` (connect a provider), `/sessions`, `/setup`, `/undo`, `/jobs`,
 `/scout [auto|web|offer|off]`, `/crew`, `/map`, `/go TEXT`, `/note TEXT`, `/btw TEXT`, `/rules [session|global] TEXT`, `/forge TOPIC`,
 `/unravel`, `/forget TEXT`, `/stats`, `/cost`, `/context TEXT`, `/route`, `/tools`, `/agents`, `/orchestrate GOAL`,
 `/cluster GOAL [--profile NAME]`, `/clusters`.

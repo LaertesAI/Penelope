@@ -7,7 +7,7 @@ The repository is public at https://github.com/LaertesAI/Penelope. Licence: MIT,
 
 | Part | Where | Evidence |
 |---|---|---|
-| Command `penelope` in Rust | `cli/` | 132 tests |
+| Command `penelope` in Rust | `cli/` | 135 tests |
 | Clusters with parts, profiles, reports, one memory file and a validator | `cli/src/clusters.rs` | 5 tests, live solo cluster, [`CLUSTERS.md`](CLUSTERS.md) |
 | Full screen terminal interface | `cli/src/tui/` | 8 tests, 9 real turns |
 | Text that appears piece by piece | `cli/src/backend.rs`, `cli/src/tui/mod.rs` | 1 test, 15 words arrived in 7 pieces |

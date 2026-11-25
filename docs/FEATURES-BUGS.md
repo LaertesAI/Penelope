@@ -1,6 +1,6 @@
 # Penelope: features, bugs and open goals
 
-State: 2026-11-25, working tree after the 0.11.0 second pass and the first 0.12 work. Test suite: 132 tests.
+State: 2026-11-25, working tree after the 0.11.0 second pass and the first 0.12 work. Test suite: 135 tests.
 This is the honest list behind `README.md` and `PLAN-0.12.md`. A feature is only listed as working when a test or a
 live run on this PC backs it.
 
@@ -78,7 +78,7 @@ live run on this PC backs it.
 - [ ] `search probe --daily` runs from a systemd timer; 20 queries survive a blocked engine.
 - [ ] Attack corpus: 20 ScreenCodec injections + 20 normal pages; recall 100 %, false positives < 10 %.
 - [ ] 20 consecutive test runs are green; the one flake is found.
-- [ ] Linux, Windows and macOS CI run the same 132 tests; macOS is signed or labelled unsigned.
+- [ ] Linux, Windows and macOS CI run the same 135 tests; macOS is signed or labelled unsigned.
 - [ ] `pip-audit` and `cargo audit` run in CI; a known CVE fails the job.
 - [ ] A `deploy/` unit and README for the daily probe.
 - [ ] Test loop, LSP, tree-sitter index, eval/replay and an ACP server.
@@ -88,7 +88,7 @@ live run on this PC backs it.
 
 ```bash
 cd cli
-cargo test                       # 132 tests
+cargo test                       # 135 tests
 cargo build --release
 ./target/release/penelope doctor
 ./target/release/penelope work list
