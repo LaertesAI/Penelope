@@ -1,7 +1,7 @@
 # Plan for the coding agent: everything that is still missing in Penelope
 
 Written on 2026-11-25 from a talk with the owner and from a read of the code at commit `10bac25`
-(version 0.11.0, 207 tests, 52 files in `cli/src/`). The reader is a coding agent such as DeepSeek in OpenCode.
+(version 0.11.0, 229 tests, 53 files in `cli/src/`). The reader is a coding agent such as DeepSeek in OpenCode.
 Bug numbers such as B33 point into `docs/FEATURES-BUGS.md`. Block numbers point into `docs/CLUSTER-IDEAS.md`.
 
 ## How to work
@@ -94,13 +94,15 @@ These packages decide whether the idea can be shown. Do them in this order.
 - Done when: a cluster with 3 coding parts and `max_parallel=3` takes less wall time than with `max_parallel=1` in a
   test with a fake model that sleeps 1 second.
 
-### 1.6 Subclusters while running, with limits
+### 1.6 Subclusters while running, with limits — done
+- Result: `5a7fd53`, PR #8. `cluster_spawn` for worker/lead, root depth and tree-wide max_models, parent memory/report stream. Open: parent waits, child worktree from live project, duplicate names newest.
 - State: depth is checked when a plan is created. A running part cannot start a subcluster.
 - Build: a tool `cluster_spawn` for parts. It checks `max_depth` and `max_models` of the root profile. A subcluster of
   a subcluster is allowed up to the depth. Every subcluster reports to the orchestrator through its parent.
 - Done when: a part at depth 3 of 3 gets a refusal with the reason, and a part at depth 1 of 3 gets a running subcluster.
 
-### 1.7 A link between two clusters
+### 1.7 A link between two clusters — done
+- Result: `a6ff5aa`, PR #8. `cluster_ask`, question/answer in both memories, ASK lines in reports, no model call. Open: 6,000 char cap, running target may return only a state line.
 - State: missing. Only `after` orders clusters.
 - Build: a tool `cluster_ask(target, question)`. The orchestrator sees every question and every answer in the report
   stream. Example of the owner: the validator of the dev cluster rejects a design, the dev cluster asks the research
@@ -182,7 +184,8 @@ These packages decide whether the idea can be shown. Do them in this order.
   linter of each language found, and a summary by the weak model. The install needs a yes after the report.
 - Done when: a test plugin with `curl ... | sh` in a script is refused with the line that caused it.
 
-### 4.2 Mods
+### 4.2 Mods — done
+- Result: `a09c6e2`, PR #7. `/mod list|new|on|off|remove`, palette, picture, layout side/compact/top, validated keys, restore on off. 14 tests. Open: JPEG needs ffmpeg/ImageMagick; layout affects chat sidebar only; subset of keys; /mod new simulated.
 - State: missing. The start picture is fixed.
 - Build: a mod is a folder with a manifest and settings for theme, background picture, layout and key bindings.
   `/mod new "use this picture as background"` lets the model write the mod. `/mod list`, `/mod on`, `/mod off`.

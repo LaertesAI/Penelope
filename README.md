@@ -26,8 +26,8 @@ model, keeps notes in a memory map, and asks before every change to a file.
 | Date | 2026-11-25 |
 | Stage | alpha: one developer, one PC, no packaged release |
 | Repository | https://github.com/LaertesAI/Penelope, branch `main` |
-| Source | [`cli/`](cli), 52 Rust files, 21,769 lines |
-| Binary | `cli/target/release/penelope`, 7.7 MB (7,982,992 bytes), built from source |
+| Source | [`cli/`](cli), 53 Rust files, 25,125 lines |
+| Binary | `cli/target/release/penelope`, 7.7 MB (8,464,024 bytes), built from source |
 | Build | `cargo build --release`, profile `release` with `opt-level = 2` and `strip = true` |
 | Toolchain | rustc 1.99.1, edition 2021 |
 | Tests | 173 passed, 0 failed, no test needs a key. Live runs are listed in the devlog. |
