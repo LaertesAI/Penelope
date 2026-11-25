@@ -7,6 +7,7 @@ mod audit;
 mod auth;
 mod backend;
 mod brain;
+mod brief;
 mod loom;
 mod config;
 mod clusters;

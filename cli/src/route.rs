@@ -66,7 +66,7 @@ pub fn allowed_for(role: &str) -> Vec<&'static str> {
         "worker" => &["read", "write", "edit", "unzip", "undo", "pr_create", "run", "run_detail", "job_start", "job_read", "job_stop", "find", "grep", "tree", "outline", "memory_go",
                       "json_query", "git_diff", "mcp_servers", "mcp_call", "cluster_spawn", "cluster_ask"],
         "judge" => &["read", "grep", "tree", "outline", "run", "run_detail", "json_query", "git_diff", "cluster_ask"],
-        "tool" => &["screen", "cursor", "mcp_servers", "mcp_call", "read", "outline", "tree"],
+        "tool" => &["screen", "cursor", "mcp_servers", "mcp_call", "brief_check", "brief_put", "read", "outline", "tree"],
         _ => &[],
     };
     only.to_vec()

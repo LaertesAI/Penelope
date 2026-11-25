@@ -39,6 +39,8 @@ const STOP_WAIT: Duration = Duration::from_millis(800);
 pub struct ToolInfo {
     pub name: String,
     pub description: String,
+    /// The full JSON schema. The brief packing reads the property `brief` from it.
+    pub input_schema: Value,
 }
 
 /// One answer: a result, or a JSON-RPC error from a server that is still alive.
@@ -57,6 +59,10 @@ struct Server {
     rx: Receiver<(u64, Value)>,
     next: u64,
     alive: bool,
+    /// The brief extension from `initialize`, if this server announced it.
+    extension: Option<crate::brief::Extension>,
+    /// `tools/list` as long as this process lives. It is read only when a call carries a brief.
+    tools: Option<Vec<Value>>,
 }
 
 type Cell = Arc<Mutex<Option<Server>>>;
@@ -144,13 +150,14 @@ fn spawn(name: &str, server: &Value, signature: String) -> Result<Server, String
             }
         }
     });
-    let mut live = Server { name: name.to_string(), signature, child, input: Some(input), rx, next: 0, alive: true };
+    let mut live = Server { name: name.to_string(), signature, child, input: Some(input), rx, next: 0, alive: true,
+                             extension: None, tools: None };
     let hello = live.request("initialize", json!({
         "protocolVersion": "2025-06-18", "capabilities": {},
         "clientInfo": {"name": "penelope", "version": env!("CARGO_PKG_VERSION")}
     }), timeout_of(server, INIT_TIMEOUT))?;
     match hello {
-        Reply::Ok(_) => {}
+        Reply::Ok(value) => live.extension = crate::brief::extension_of(&value),
         Reply::Server(e) => return Err(format!("MCP server {} refused initialize: {}", name, e)),
     }
     live.notify("notifications/initialized", json!({}))?;
@@ -207,6 +214,20 @@ impl Server {
                 }
             }
         }
+    }
+
+    /// The tools of this process, read once. Only a call that carries a brief asks for the list.
+    fn tools(&mut self, wait: Duration) -> Result<Vec<Value>, String> {
+        if let Some(tools) = &self.tools {
+            return Ok(tools.clone());
+        }
+        let result = match self.request("tools/list", json!({}), wait)? {
+            Reply::Ok(value) => value,
+            Reply::Server(e) => return Err(format!("MCP server {} refused tools/list: {}", self.name, e)),
+        };
+        let tools = result["tools"].as_array().cloned().unwrap_or_default();
+        self.tools = Some(tools.clone());
+        Ok(tools)
     }
 
     /// Closes stdin, gives a well-behaved server a moment to leave, then kills it.
@@ -274,16 +295,18 @@ pub fn probe(ctx: &Ctx, server: &str) -> Result<Vec<ToolInfo>, String> {
         return Err(format!("NOT listed. This agent run may use the MCP servers: {}.", crate::agents::mcp_scope().unwrap_or_default().join(", ")));
     }
     let (entry, _) = crate::plugins::server_entry(ctx, server).ok_or_else(|| format!("no MCP server named {}", server))?;
-    let result = with_server(ctx, server, &entry, |live| {
-        match live.request("tools/list", json!({}), timeout_of(&entry, LIST_TIMEOUT))? {
-            Reply::Ok(value) => Ok(value),
-            Reply::Server(e) => Err(format!("MCP server {} refused tools/list: {}", server, e)),
-        }
-    })?;
-    Ok(result["tools"].as_array().cloned().unwrap_or_default().into_iter().map(|t| ToolInfo {
+    let tools = with_server(ctx, server, &entry, |live| live.tools(timeout_of(&entry, LIST_TIMEOUT)))?;
+    Ok(tools.into_iter().map(|t| ToolInfo {
         name: t["name"].as_str().unwrap_or("").to_string(),
         description: t["description"].as_str().unwrap_or("").to_string(),
+        input_schema: if t["inputSchema"].is_null() { t["input_schema"].clone() } else { t["inputSchema"].clone() },
     }).collect())
+}
+
+/// True when the tool schema names a property `brief`.
+fn has_brief_property(tool: &Value) -> bool {
+    let schema = if tool["inputSchema"].is_null() { &tool["input_schema"] } else { &tool["inputSchema"] };
+    schema["properties"].get("brief").map(|brief| !brief.is_null()).unwrap_or(false)
 }
 
 /// Calls one tool of one plugin server. A denied plugin changes nothing.
@@ -305,7 +328,42 @@ pub fn call(ctx: &Ctx, server: &str, tool: &str, args: &Value) -> Result<String,
         });
     }
     let result = with_server(ctx, server, &entry, |live| {
-        match live.request("tools/call", json!({"name": tool, "arguments": args}), timeout_of(&entry, CALL_TIMEOUT))? {
+        let mut arguments = args.clone();
+        // Only a Laertes server that announced the extension and whose tool names `brief` gets the packed form.
+        // Every other server, and every call without a brief, keeps exactly the old path.
+        if let Some(ext) = live.extension.clone() {
+            let short = arguments.get("brief").filter(|brief| brief.is_object() && brief.get("items").is_none()).cloned();
+            if let Some(short) = short {
+                let tools = live.tools(timeout_of(&entry, LIST_TIMEOUT))?;
+                let wanted = tools.iter().any(|t| t["name"].as_str() == Some(tool) && has_brief_property(t));
+                if wanted {
+                    let roots = crate::brief::allowed_roots(ctx, server);
+                    let packed = crate::brief::pack(&short, &roots, &ext)
+                        .map_err(|e| format!("NOT sent. brief: {}", e))?;
+                    let crate::brief::Packed { argument, uploads } = packed;
+                    if !uploads.is_empty() && !crate::plugins::tool_allowed(&entry, allow, &ext.upload_tool) {
+                        return Err(format!("NOT sent. brief upload tool {} is denied for MCP server {}", ext.upload_tool, server));
+                    }
+                    for upload in uploads {
+                        for chunk in crate::brief::chunk_arguments(&upload.id, &upload.data) {
+                            match live.request("tools/call", json!({"name": ext.upload_tool, "arguments": chunk}),
+                                               timeout_of(&entry, CALL_TIMEOUT))? {
+                                Reply::Ok(value) => {
+                                    let (text, is_error) = render_result(ctx, &ext.upload_tool, &value);
+                                    if is_error {
+                                        let reason = if text.trim().is_empty() { "the server answered with an error" } else { text.as_str() };
+                                        return Err(format!("NOT sent. brief upload {}: {}", upload.id, reason));
+                                    }
+                                }
+                                Reply::Server(e) => return Err(format!("NOT sent. brief upload {}: {}", upload.id, e)),
+                            }
+                        }
+                    }
+                    arguments["brief"] = argument;
+                }
+            }
+        }
+        match live.request("tools/call", json!({"name": tool, "arguments": arguments}), timeout_of(&entry, CALL_TIMEOUT))? {
             Reply::Ok(value) => Ok(value),
             Reply::Server(e) => Err(format!("MCP server {} refused {}: {}", server, tool, e)),
         }
@@ -534,7 +592,8 @@ pub fn list(ctx: &Ctx, with_tools: bool) -> String {
                 Ok(tools) => {
                     for t in tools {
                         let denied = !crate::plugins::tool_allowed(&entry, allow, &t.name);
-                        out.push_str(&format!("  {} — {}{}\n", t.name, t.description.chars().take(110).collect::<String>(),
+                        let brief = if t.input_schema["properties"].get("brief").is_some() { " · brief" } else { "" };
+                        out.push_str(&format!("  {} — {}{}{}\n", t.name, t.description.chars().take(110).collect::<String>(), brief,
                                               if denied { format!(" · denied (/mcp allow-tool {} {})", name, t.name) } else { String::new() }));
                     }
                 }
@@ -607,6 +666,226 @@ for line in sys.stdin:
     else:
         answer(m, {})
 "#;
+
+    const BRIEF_SERVER: &str = r#"#!/usr/bin/env python3
+import sys, json, os, base64, hashlib
+EXT = "io.github.laertesai/brief"
+upload_tool = "" if os.environ.get("BRIEF_NO_UPLOAD") else "brief_put"
+ext = {"version": 1, "kinds": ["image", "file", "context", "link"], "maxInlineBytes": 262144,
+       "maxItemBytes": 4194304, "maxItems": 16, "ways": ["text", "data", "upload", "uri"],
+       "uploadTool": upload_tool}
+uploads = {}
+def answer(m, r):
+    print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": r}), flush=True)
+for line in sys.stdin:
+    m = json.loads(line)
+    if "id" not in m:
+        continue
+    method = m["method"]
+    if method == "initialize":
+        caps = {"tools": {}}
+        if not os.environ.get("BRIEF_NO_EXT"):
+            caps["experimental"] = {EXT: ext}
+        answer(m, {"protocolVersion": "2025-06-18", "capabilities": caps, "serverInfo": {"name": "brief"}})
+    elif method == "tools/list":
+        answer(m, {"tools": [
+            {"name": "check", "description": "one brief",
+             "inputSchema": {"type": "object", "properties": {"brief": {"type": "object", "properties": {
+                 "task": {"type": "string"}, "attach": {"type": "array", "items": {"type": "string"}},
+                 "items": {"type": "array"}}}}, "required": ["brief"]}},
+            {"name": "plain", "description": "no brief",
+             "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}}}
+        ]})
+    elif method == "tools/call":
+        name = m["params"].get("name")
+        a = m["params"].get("arguments") or {}
+        if name == "brief_put":
+            uid = a["id"]
+            slot = uploads.setdefault(uid, {"seq": 0, "data": b""})
+            if a["seq"] != slot["seq"]:
+                answer(m, {"content": [{"type": "text", "text": "out of order"}], "isError": True})
+            else:
+                slot["data"] += base64.b64decode(a["data"])
+                slot["seq"] += 1
+                answer(m, {"content": [{"type": "text", "text": "upload %s: %d bytes%s" % (
+                    uid, len(slot["data"]), ", complete" if a["last"] else "")}]})
+        elif name == "check":
+            b = a.get("brief", {})
+            seen = []
+            for it in b.get("items", []):
+                if "upload" in it:
+                    data = uploads.get(it["upload"], {"data": b""})["data"]
+                    seen.append("upload:%s:%d:%s" % (it["upload"], len(data), hashlib.sha256(data).hexdigest()))
+                elif "text" in it:
+                    seen.append("text:%s:%s" % (it.get("name", ""), it["text"]))
+                elif "data" in it:
+                    raw = base64.b64decode(it["data"])
+                    seen.append("data:%s:%d:%s" % (it.get("name", ""), len(raw), hashlib.sha256(raw).hexdigest()))
+                elif "uri" in it:
+                    seen.append("uri:%s" % it["uri"])
+            answer(m, {"content": [{"type": "text", "text": json.dumps({"brief": b, "seen": seen})}]})
+        elif name == "plain":
+            answer(m, {"content": [{"type": "text", "text": "plain:" + a.get("text", "")}]})
+        else:
+            answer(m, {"content": [{"type": "text", "text": "unknown " + str(name)}], "isError": True})
+    else:
+        answer(m, {})
+"#;
+
+    fn brief_ctx(dir: &Path, env: Option<Value>) -> crate::config::Ctx {
+        let script = server_script(dir, BRIEF_SERVER);
+        let ctx = crate::config::load(&dir.join(".penelope"));
+        let config = json!({"servers": {"brief": {
+            "command": script.display().to_string(),
+            "args": [],
+            "allow": true,
+            "env": env.unwrap_or_else(|| json!({}))
+        }}});
+        fs::write(dir.join(".penelope/mcp.json"), serde_json::to_string_pretty(&config).unwrap()).unwrap();
+        ctx
+    }
+
+    #[test]
+    fn a_small_text_brief_is_packed_for_a_server_with_the_extension() {
+        let dir = temp("brief-text");
+        let ctx = brief_ctx(&dir, None);
+        let text = "# Rules\nUse blue.";
+        fs::write(dir.join("rules.md"), text).unwrap();
+        let out = call(&ctx, "brief", "check", &json!({
+            "brief": {"task": "check the rules", "attach": ["file:rules.md"]}
+        })).unwrap();
+        let echoed: Value = serde_json::from_str(&out).unwrap();
+        let item = &echoed["brief"]["items"][0];
+        assert_eq!(echoed["brief"]["task"], "check the rules");
+        assert_eq!(item["kind"], "file");
+        assert_eq!(item["name"], "rules.md");
+        assert_eq!(item["text"], text);
+        assert_eq!(item["bytes"].as_u64().unwrap(), text.len() as u64);
+        assert_eq!(item["sha256"], crate::brief::sha256_hex(text.as_bytes()));
+        assert!(echoed["brief"].get("attach").is_none());
+        assert!(echoed["seen"][0].as_str().unwrap().starts_with("text:rules.md:"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_image_brief_travels_as_data_with_a_mime_and_a_hash() {
+        let dir = temp("brief-image");
+        let ctx = brief_ctx(&dir, None);
+        let png = b64_decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=").unwrap();
+        fs::write(dir.join("shot.png"), &png).unwrap();
+        let out = call(&ctx, "brief", "check", &json!({
+            "brief": {"task": "look at the picture", "attach": ["image:shot.png"]}
+        })).unwrap();
+        let echoed: Value = serde_json::from_str(&out).unwrap();
+        let item = &echoed["brief"]["items"][0];
+        assert_eq!(item["kind"], "image");
+        assert_eq!(item["mime"], "image/png");
+        assert_eq!(item["bytes"].as_u64().unwrap(), png.len() as u64);
+        assert_eq!(b64_decode(item["data"].as_str().unwrap()).unwrap(), png);
+        assert_eq!(item["sha256"], crate::brief::sha256_hex(&png));
+        assert!(echoed["seen"][0].as_str().unwrap().starts_with("data:shot.png:68:"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_file_over_the_inline_limit_is_uploaded_before_the_call() {
+        let dir = temp("brief-upload");
+        let ctx = brief_ctx(&dir, None);
+        let body = "x".repeat(300_000);
+        fs::write(dir.join("big.txt"), &body).unwrap();
+        let out = call(&ctx, "brief", "check", &json!({
+            "brief": {"task": "look at the file", "attach": ["file:big.txt"]}
+        })).unwrap();
+        let echoed: Value = serde_json::from_str(&out).unwrap();
+        let item = &echoed["brief"]["items"][0];
+        let upload = item["upload"].as_str().unwrap();
+        assert!(upload.starts_with("u-"), "{}", upload);
+        assert!(item.get("text").is_none() && item.get("data").is_none(), "the large content stayed inline: {}", out);
+        assert_eq!(item["bytes"].as_u64().unwrap(), 300_000);
+        let seen = echoed["seen"][0].as_str().unwrap();
+        assert!(seen.starts_with(&format!("upload:{}:300000:", upload)), "{}", seen);
+        assert!(seen.ends_with(&crate::brief::sha256_hex(body.as_bytes())), "{}", seen);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn two_identical_large_files_get_two_uploads() {
+        let dir = temp("brief-twice");
+        let ctx = brief_ctx(&dir, None);
+        fs::write(dir.join("same.txt"), "y".repeat(300_000)).unwrap();
+        let out = call(&ctx, "brief", "check", &json!({
+            "brief": {"task": "look twice", "attach": ["file:same.txt", "file:same.txt"]}
+        })).unwrap();
+        let echoed: Value = serde_json::from_str(&out).unwrap();
+        let first = echoed["brief"]["items"][0]["upload"].as_str().unwrap();
+        let second = echoed["brief"]["items"][1]["upload"].as_str().unwrap();
+        assert_ne!(first, second, "{}", out);
+        let seen = echoed["seen"].as_array().unwrap();
+        assert_eq!(seen.len(), 2);
+        assert!(seen.iter().all(|line| line.as_str().unwrap().contains(":300000:")), "{}", out);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_large_file_is_refused_when_the_server_has_no_upload_tool() {
+        let dir = temp("brief-noupload");
+        let ctx = brief_ctx(&dir, Some(json!({"BRIEF_NO_UPLOAD": "1"})));
+        fs::write(dir.join("big.txt"), "x".repeat(300_000)).unwrap();
+        let err = call(&ctx, "brief", "check", &json!({
+            "brief": {"task": "look", "attach": ["file:big.txt"]}
+        })).unwrap_err();
+        assert!(err.contains("inline limit") && err.contains("upload"), "{}", err);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_path_outside_the_project_is_refused() {
+        let dir = temp("brief-outside");
+        let ctx = brief_ctx(&dir, None);
+        let outside = std::env::temp_dir().join(format!("penelope-brief-outside-{}.txt", std::process::id()));
+        fs::write(&outside, "secret").unwrap();
+        let name = outside.file_name().unwrap().to_string_lossy().to_string();
+        let err = call(&ctx, "brief", "check", &json!({
+            "brief": {"task": "look", "attach": [format!("file:../{}", name)]}
+        })).unwrap_err();
+        assert!(err.contains("outside"), "{}", err);
+        let _ = fs::remove_file(&outside);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_normal_tool_call_without_a_brief_still_works() {
+        let dir = temp("brief-plain");
+        let ctx = brief_ctx(&dir, None);
+        assert_eq!(call(&ctx, "brief", "plain", &json!({"text": "hi"})).unwrap(), "plain:hi");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_foreign_server_gets_the_short_form_unchanged() {
+        let dir = temp("brief-foreign");
+        let ctx = brief_ctx(&dir, Some(json!({"BRIEF_NO_EXT": "1"})));
+        fs::write(dir.join("rules.md"), "rules").unwrap();
+        let out = call(&ctx, "brief", "check", &json!({
+            "brief": {"task": "look", "attach": ["file:rules.md"]}
+        })).unwrap();
+        let echoed: Value = serde_json::from_str(&out).unwrap();
+        assert!(echoed["brief"].get("attach").is_some(), "the short form was changed: {}", out);
+        assert!(echoed["brief"].get("items").is_none(), "the short form was packed: {}", out);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_tool_without_a_brief_property_gets_no_packed_brief() {
+        let dir = temp("brief-schema");
+        let ctx = brief_ctx(&dir, None);
+        assert_eq!(call(&ctx, "brief", "plain", &json!({
+            "text": "hi", "brief": {"task": "look", "attach": []}
+        })).unwrap(), "plain:hi");
+        let tools = probe(&ctx, "brief").unwrap();
+        assert_eq!(tools[0].input_schema["properties"]["brief"]["type"], "object");
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn two_calls_reach_the_same_process() {

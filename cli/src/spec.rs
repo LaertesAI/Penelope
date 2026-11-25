@@ -167,6 +167,12 @@ pub const TOOLS: &[Tool] = &[
     Tool { name: "cursor",
         description: "Move Penelope's own cursor on the screen, or click with it. It uses the command set in cursor.command, else xdotool or ydotool when one is installed.",
         schema: r#"{"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"},"click":{"type":"boolean"},"label":{"type":"string","description":"A short label shown next to the cursor when the command supports one."}},"required":["x","y"]}"# },
+    Tool { name: "brief_check",
+        description: "Open a brief: one task with its attachments. The client packs files, pictures, context and links; this tool checks size, SHA-256 and kind, reads only the project and plugin folders and links only from allowed hosts, then returns steps, findings and the next call. A later call may name the brief_id instead of sending the content again.",
+        schema: r#"{"type":"object","properties":{"brief":{"type":"object","description":"The task and its attachments. Write the short form: task plus attach, one entry per attachment as kind:name with kind image, file, context or link.","properties":{"v":{"type":"integer"},"task":{"type":"string","maxLength":2000},"attach":{"type":"array","items":{"type":"string"},"maxItems":16},"items":{"type":"array","items":{"type":"object"},"maxItems":16}},"required":["task"],"additionalProperties":false},"brief_id":{"type":"string","description":"The id of a brief this server already opened, for example b1."}}}"# },
+    Tool { name: "brief_put",
+        description: "Send one chunk of a large attachment before the call that uses it. The client of a Laertes MCP server calls this on its own; a model normally does not.",
+        schema: r#"{"type":"object","properties":{"id":{"type":"string"},"seq":{"type":"integer"},"data":{"type":"string"},"last":{"type":"boolean"}},"required":["id","seq","data","last"]}"# },
 ];
 
 pub fn get(name: &str) -> Option<&'static Tool> {
