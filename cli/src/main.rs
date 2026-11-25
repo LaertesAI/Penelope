@@ -41,6 +41,7 @@ mod tools;
 mod tui;
 mod update;
 mod weak;
+mod work;
 
 use std::io::{BufRead, IsTerminal, Write};
 
@@ -116,6 +117,11 @@ penelope mcp call SERVER TOOL JSON
                               call one tool of an MCP server
 penelope serve [--bind HOST:PORT] [--allow-remote] [--print-config]
                               the local HTTP API: search, read, embed, rerank, redact
+penelope work new NAME        make a git worktree for one task under .penelope/worktrees
+penelope work list            the worktrees and how many files changed
+penelope work diff NAME       the patch the worker made, without touching the live tree
+penelope work apply NAME      apply that patch to the live tree
+penelope work remove NAME     remove the worktree (--force discards changes)
 penelope doctor               check the programs and models Penelope needs";
 
 fn main() {
@@ -384,6 +390,13 @@ fn main() {
         "search" if args.get(1).map(String::as_str) == Some("health") => {
             print!("{}", search::health(&ctx, args.iter().any(|a| a == "--probe")));
         }
+        "search" if args.get(1).map(String::as_str) == Some("probe") => {
+            print!("{}", search::probe(&ctx, args.iter().any(|a| a == "--daily")));
+        }
+        "search" if args.get(1).map(String::as_str) == Some("instances") => match args.get(2).map(String::as_str) {
+            Some("add") if args.len() >= 4 => println!("{}", search::instances_add(&ctx, &args[3])),
+            _ => print!("{}", search::instances(&ctx)),
+        },
         "search" => {
             let mut engine = None;
             let mut fresh = false;
@@ -420,6 +433,19 @@ fn main() {
             println!("{}", research::run(&ctx, &words.join(" "), &depth, pages, &recency));
         }
         "scout" => println!("{}", scout::run(&ctx, &args[1..].join(" "), "")),
+        "work" => {
+            let verb = args.get(1).map(String::as_str).unwrap_or("");
+            let name = args.get(2).map(String::as_str).unwrap_or("");
+            let cwd = std::env::current_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+            match verb {
+                "new" if !name.is_empty() => println!("{}", work::new(&ctx, &cwd, name)),
+                "list" | "" => print!("{}", work::list(&ctx, &cwd)),
+                "diff" if !name.is_empty() => print!("{}", work::diff(&ctx, &cwd, name, args.iter().any(|a| a == "--stat"))),
+                "apply" if !name.is_empty() => println!("{}", work::apply(&ctx, &cwd, name)),
+                "remove" if !name.is_empty() => println!("{}", work::remove(&ctx, &cwd, name, args.iter().any(|a| a == "--force"))),
+                _ => println!("penelope work new NAME | list | diff NAME | apply NAME | remove NAME [--force]"),
+            }
+        }
         "doctor" => doctor(&ctx),
         "serve" => {
             if let Err(e) = server::run(&ctx, &args[1..]) {

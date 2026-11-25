@@ -418,6 +418,57 @@ pub fn health(ctx: &Ctx, probe: bool) -> String {
     out
 }
 
+/// One probe a day. The marker is a small file, so a cron job can call `penelope search probe --daily` safely.
+pub fn probe(ctx: &Ctx, daily: bool) -> String {
+    let marker = ctx.root.join("search").join("probe.json");
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let day = now / 86_400;
+    if daily {
+        if let Ok(text) = std::fs::read_to_string(&marker) {
+            if let Ok(v) = serde_json::from_str::<Value>(&text) {
+                if v["day"].as_u64() == Some(day) {
+                    return "the daily search probe already ran today. The health file has the rows.".to_string();
+                }
+            }
+        }
+    }
+    let out = health(ctx, true);
+    if let Some(dir) = marker.parent() { let _ = std::fs::create_dir_all(dir); }
+    let _ = std::fs::write(&marker, serde_json::json!({"day": day, "at": now}).to_string());
+    format!("{}The next daily probe runs tomorrow.\n", out)
+}
+
+/// Adds a SearXNG base to `search.urls` and writes it to `config.json`.
+pub fn instances_add(ctx: &Ctx, url: &str) -> String {
+    let url = url.trim().trim_end_matches('/');
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return "NOT added. Give an http(s) address such as http://127.0.0.1:8080".to_string();
+    }
+    let path = ctx.root.join("config.json");
+    let mut cfg: Value = std::fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_else(|| ctx.cfg.clone());
+    if !cfg["search"]["urls"].is_array() { cfg["search"]["urls"] = serde_json::json!([]); }
+    let urls = cfg["search"]["urls"].as_array_mut().unwrap();
+    if urls.iter().any(|u| u.as_str() == Some(url)) {
+        return format!("{} is already in search.urls", url);
+    }
+    urls.push(serde_json::json!(url));
+    if let Err(e) = std::fs::write(&path, serde_json::to_string_pretty(&cfg).unwrap()) {
+        return format!("NOT added. {} could not be written: {}", path.display(), e);
+    }
+    format!("added {} to search.urls. It is tried after search.url.", url)
+}
+
+pub fn instances(ctx: &Ctx) -> String {
+    let mut out = String::new();
+    if let Some(one) = ctx.cfg["search"]["url"].as_str().filter(|u| !u.is_empty()) {
+        out.push_str(&format!("primary  {}\n", one));
+    }
+    for url in ctx.cfg["search"]["urls"].as_array().cloned().unwrap_or_default() {
+        if let Some(url) = url.as_str() { out.push_str(&format!("pool     {}\n", url)); }
+    }
+    if out.is_empty() { "no SearXNG instance. penelope search instances add URL adds one.".to_string() } else { out }
+}
+
 /// One line for `doctor`: the server search API, its counters and the last success.
 pub fn api_status(ctx: &Ctx) -> String {
     let Some(url) = ctx.cfg["search"]["api_url"].as_str().filter(|u| u.starts_with("http")) else {
@@ -784,6 +835,22 @@ mod tests {
         record_health(&ctx, "api", 42, true, "");
         let line = api_status(&ctx);
         assert!(line.contains("search.example/api") && line.contains("1 calls") && line.contains("42 ms"), "{}", line);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_searxng_instance_is_added_once_and_a_daily_probe_is_idempotent() {
+        let dir = std::env::temp_dir().join(format!("penelope-search-instances-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let ctx = crate::config::load(&dir.join(".penelope"));
+        assert!(instances_add(&ctx, "http://127.0.0.1:8080/").contains("added"));
+        assert!(instances_add(&ctx, "http://127.0.0.1:8080").contains("already"));
+        let cfg: Value = serde_json::from_str(&std::fs::read_to_string(ctx.root.join("config.json")).unwrap()).unwrap();
+        assert_eq!(cfg["search"]["urls"], serde_json::json!(["http://127.0.0.1:8080"]));
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        std::fs::create_dir_all(ctx.root.join("search")).unwrap();
+        std::fs::write(ctx.root.join("search/probe.json"), serde_json::json!({"day": now / 86_400, "at": now}).to_string()).unwrap();
+        assert!(probe(&ctx, true).contains("already ran today"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
