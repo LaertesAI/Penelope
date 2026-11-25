@@ -1074,7 +1074,7 @@ body.
 
 ```bash
 cd cli
-cargo test                     # 165 tests, no model, no key
+cargo test                     # 173 tests, no model, no key
 
 ./target/release/penelope tools
 ./target/release/penelope serve --print-config
@@ -1127,3 +1127,36 @@ Docs and evidence: this devlog, `docs/Penelope 0.11.0 Devlog.pdf`, `docs/screens
 
 The version badge, the test count and the tool count in `README.md` are static. They come from `Cargo.toml`,
 `cargo test` and `spec::TOOLS`.
+
+## Package 1.10: eval and replay (2026-11-25)
+
+Branch `feat/eval-replay`, module `cli/src/eval.rs`, docs `docs/EVAL.md`. `cargo test` in `cli/`: 171 unit tests and
+2 integration tests, 0 failed.
+
+What runs:
+
+- `penelope eval TASKS.jsonl --setup large|large-subagents|cluster|all` reads JSONL tasks (`id`, `prompt`, `setup.repo`
+  with optional `cwd`/`copy`, `check`), copies the setup folder to `.penelope/eval/work/`, runs the setup, then runs the
+  check in that copy.
+- The three setups are `backend::Chat` (main model), `agents::run` (main model for lead, worker and judge) and
+  `clusters::orchestrate` with the `eval-small` profile (weak model worker and validator).
+- Each task records the check exit, tokens in and out from `.penelope/usage.json`, euro from `cost.rs`, and wall time.
+  The table is printed and appended to `docs/RUNS.md` (or `--runs PATH`).
+- `penelope replay ID --model MODEL` reads `.penelope/eval/runs/ID.json`, sends every stored prompt to the named model,
+  and offers only `read`, `find`, `grep`, `tree`, `outline` and `json_query`. Every other tool is refused by name; the
+  output names the refused tool. The provider comes from `main`; `--model` changes only the model name.
+
+What was proven without a provider: the unit tests use `llm::fake::serve`; the integration test starts a local
+chat-completions endpoint and runs the built binary. They show the table and the `RUNS.md` row, the four worker/judge
+calls of the subagent setup, the two weak-model calls of the cluster setup, and a replay that refuses `write` and leaves
+the target file absent.
+
+Open:
+
+- **No real eval run exists yet.** `docs/RUNS.md` says so. The first real table still needs 20 tasks and three models;
+  nothing in the file is estimated or copied from a fake endpoint.
+- The claude command path passes the task folder through `PENELOPE_TASK_CWD` to its MCP server, but no test runs the
+  real `claude` binary. The HTTP path is covered.
+- The default task cwd applies when a tool call names no cwd. A model can still pass an absolute path outside the
+  scratch copy; the eval is a measurement, not a sandbox.
+- A task with `"copy": false` works in its setup folder and can change it on purpose.

@@ -417,6 +417,10 @@ fn run_model(ctx: &Ctx, c: &Cluster, part: &Part, system: &str, task: &str, max_
     }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let mut env = json!({"PENELOPE_ROLE": part.role});
+    let task_cwd = crate::eval::task_cwd();
+    if !task_cwd.is_empty() {
+        env["PENELOPE_TASK_CWD"] = json!(task_cwd);
+    }
     if let Ok(dir) = std::env::var("PENELOPE_APPROVE_DIR") { env["PENELOPE_APPROVE_DIR"] = json!(dir); }
     let cfg = json!({"mcpServers": {"penelope": {"command": exe.to_string_lossy(), "args": ["mcp", "--root", ctx.root.to_string_lossy()], "env": env}}}).to_string();
     let allowed: Vec<String> = crate::route::allowed_for(&part.role).iter().map(|t| format!("mcp__penelope__{}", t)).collect();
