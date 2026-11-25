@@ -1,0 +1,11 @@
+[Unit]
+Description=Penelope daily search probe
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=%i
+Environment=PENELOPE_NO_ANIM=1
+ExecStart=/home/rene/.local/bin/penelope --root /home/rene/.penelope search probe --daily
+Nice=10
