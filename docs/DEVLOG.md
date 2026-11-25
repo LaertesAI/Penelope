@@ -5,7 +5,7 @@
 **Scope:** one contract layer for every tool, models in every role, agents written with `$`, shared memory and an
 Obsidian brain, cost in euro, ScreenCodec and Penelope's own cursor, plugin install and import, a startup weave, and
 the commands and views that make these reachable.  
-**Tests:** 135 passed, 0 failed. No test needs a key. The live runs against OpenCode Go are written down below and used no test fixture.
+**Tests:** 162 passed, 0 failed. No test needs a key. The live runs against OpenCode Go are written down below and used no test fixture.
 
 This is a working increment, not a claim that every limit is gone. The last section names what is still open and how
 each claim can be checked on this machine.
@@ -850,6 +850,17 @@ letters can filter. Enter on a command puts `/plugin:command ` into the input li
 presses enter. The live test used a demo plugin with `commands/echo.md`, typed `/plugins`, filtered with `echo`, opened
 the command, inserted `/demo:echo `, typed `plugin-ok` and got `plugin-ok` back from the model.
 
+### Phase 0: the three cluster modules and the flake check
+
+The branch `feat/cluster-building-blocks` carried three unwired modules: `proof.rs` (a report line with an evidence
+field `V:`), `notes.rs` (Markdown notes with links and `confirmed`/`open`/`stale`) and `advise.rs` (accepted and
+rejected results per part and task type, with a suggestion after five results). They were cherry-picked onto the
+cluster branch, the three `mod` lines stayed in `main.rs`, and the suite rose to 162 tests. Nothing calls the modules
+yet; they are the base for Phase 1.2 and Phase 2.
+
+The one unexplained 105/109 flake did not return: twenty complete `cargo test` runs in a row passed, 20 of 20. The
+harness itself still has no nightly repetition job; this was a local loop.
+
 ### The interface bugs of the 0.12 pass
 
 - A paste now goes to the open field. An API key pasted in the key window lands in the masked input (`sk-p•••`), not in
@@ -913,7 +924,7 @@ New CLI commands: `tools`, `tool list`, `tool call NAME JSON`, `route`, `agents`
 
 ## Tests and evidence
 
-`cargo test` in `cli/`: **135 passed, 0 failed**. The new tests, all without a real provider:
+`cargo test` in `cli/`: **162 passed, 0 failed**. The new tests, all without a real provider:
 
 | Test | What it proves |
 |---|---|
@@ -988,6 +999,7 @@ New CLI commands: `tools`, `tool list`, `tool call NAME JSON`, `route`, `agents`
 | `tui::the_plugins_screen_lists_a_plugin_and_inserts_its_command` | filter, tab, command insert |
 | `tui::delete_removes_the_selected_session_from_the_list` | Delete removes the stored session |
 | `tui::model_and_providers_are_two_separate_screens` | `/model` and `/providers` do not share an overlay |
+| `proof`, `notes`, `advise` (27 tests) | report evidence, linked notes, part scores; not wired yet |
 | Paste in `tui::the_provider_list_opens_a_masked_key_window_and_a_claude_login` | key lands masked, prompt stays empty |
 | `search::the_fanout_switch_is_written_and_the_health_line_names_every_engine` | fanout setting and health line |
 | `providers::the_provider_list_wins_over_the_static_catalog_and_is_cached` | `/models` parsing, effort column, cache, Anthropic header |
@@ -1062,7 +1074,7 @@ body.
 
 ```bash
 cd cli
-cargo test                     # 135 tests, no model, no key
+cargo test                     # 162 tests, no model, no key
 
 ./target/release/penelope tools
 ./target/release/penelope serve --print-config

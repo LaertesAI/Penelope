@@ -1,6 +1,6 @@
 # Penelope: features, bugs and open goals
 
-State: 2026-11-25, working tree after the 0.11.0 second pass and the first 0.12 work. Test suite: 135 tests.
+State: 2026-11-25, working tree after the 0.11.0 second pass and the first 0.12 work. Test suite: 162 tests.
 This is the honest list behind `README.md` and `PLAN-0.12.md`. A feature is only listed as working when a test or a
 live run on this PC backs it.
 
@@ -12,6 +12,7 @@ live run on this PC backs it.
 | Contracts | 46 tools, one schema table, role gate | `spec` and `route` tests, every name reaches a handler |
 | Agents | `$name(...)`, plans, roles, budgets, crew panel | parser, router and live one-step tests |
 | Clusters | orchestrator plan, profiles from parts, parallel clusters, `after`/parent order, one memory file, validator retry, reports, kill | 5 tests, live solo cluster with Claude + haiku validator |
+| Cluster base modules | `proof` (evidence `V:`), `notes` (linked notes and status), `advise` (part scores and suggestions) | 27 tests, not wired yet |
 | Tools | read/write/edit, undo, find/grep/tree, jobs, git, clipboard, HTTP, JSON | unit tests and real changes |
 | Search | 10 sources, parallel fanout, cache, dedupe/rank, health, reranker client, SearXNG pool | live 3 engines; `search health --probe` |
 | Search ops | `search probe [--daily]`, `search instances add URL`, `search fanout on|off` | 2 tests, live 3 engines, daily marker |
@@ -40,7 +41,7 @@ live run on this PC backs it.
 |---|---|---|---|---|
 | B01 | high | A worker still changes the live tree. `work` creates a worktree and applies a patch, but no agent runs inside it and no judge gate exists yet. | `work.rs` has no model call | Run the worker manually with `cwd` in the worktree; next: judge + apply |
 | B02 | high | Keyless search stops when Startpage/DuckDuckGo/Bing rate-limit. | DuckDuckGo returned “refuses automated searches” in probes | Add a SearXNG pool; `search instances add` |
-| B03 | medium | The test suite failed once with 105/109 and then passed eight times. The failing test was never identified. | one run on 2026-11-25 | Nightly 20× job; isolate process/port/temp tests |
+| B03 | low | The test suite failed once with 105/109 and then passed. The failing test was never identified; 20 complete runs in a row now pass. | one old run; 20/20 green on 2026-11-25 | Nightly 20× job; isolate process/port/temp tests |
 | B04 | medium | Windows/macOS code paths are not run on hardware. CI marks them experimental. | no runner here | GitHub Actions matrix, fix failures |
 | B05 | medium | MCP starts one process per call; a stateful server loses state. | mcpclient design | Use its own tool or a long-lived client (0.13) |
 | B06 | medium | MCP permissions are per plugin, not per tool. | `plugins.json` allow switch | Add `allowTools` (0.13) |
@@ -78,7 +79,7 @@ live run on this PC backs it.
 - [ ] `search probe --daily` runs from a systemd timer; 20 queries survive a blocked engine.
 - [ ] Attack corpus: 20 ScreenCodec injections + 20 normal pages; recall 100 %, false positives < 10 %.
 - [ ] 20 consecutive test runs are green; the one flake is found.
-- [ ] Linux, Windows and macOS CI run the same 135 tests; macOS is signed or labelled unsigned.
+- [ ] Linux, Windows and macOS CI run the same 162 tests; macOS is signed or labelled unsigned.
 - [ ] `pip-audit` and `cargo audit` run in CI; a known CVE fails the job.
 - [ ] A `deploy/` unit and README for the daily probe.
 - [ ] Test loop, LSP, tree-sitter index, eval/replay and an ACP server.
@@ -88,7 +89,7 @@ live run on this PC backs it.
 
 ```bash
 cd cli
-cargo test                       # 135 tests
+cargo test                       # 162 tests
 cargo build --release
 ./target/release/penelope doctor
 ./target/release/penelope work list
