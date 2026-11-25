@@ -16,6 +16,8 @@ pub const SEA: Rgb = (0x5F, 0xB3, 0xE4);
 pub const ASH: Rgb = (0xB5, 0xB1, 0xC2);
 pub const DIM: Rgb = (0x7C, 0x77, 0x8C);
 pub const RED: Rgb = (0xFF, 0x6B, 0x6B);
+/// A model of a Laertes family. None of the eight can answer yet, so this colour always means "in training".
+pub const GOLD: Rgb = (0xF2, 0xC9, 0x6B);
 
 static TRUECOLOR: AtomicBool = AtomicBool::new(true);
 

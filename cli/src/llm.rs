@@ -73,12 +73,16 @@ fn scrub(text: &str, key: &str) -> String {
 fn post(url: &str, headers: &[(&str, String)], body: &Value, key: &str, seconds: u64) -> Result<Value, String> {
     let mut wait = 2;
     for attempt in 0..3 {
-        let mut req = ureq::post(url).timeout(std::time::Duration::from_secs(seconds));
+        let mut req = crate::net::agent(seconds).post(url);
         for (name, value) in headers {
             req = req.set(name, value);
         }
         match req.send_json(body.clone()) {
             Ok(resp) => {
+                if (300..400).contains(&resp.status()) {
+                    let to = resp.header("location").unwrap_or("an address the answer did not name");
+                    return Err(format!("{} answered with a redirect to {}. Redirects are not followed, so the key cannot travel to another host.", url, to));
+                }
                 let text = resp.into_string().map_err(|e| format!("the answer of {} could not be read: {}", url, e))?;
                 return serde_json::from_str(&scrub(&text, key)).map_err(|_| format!("{} answered with text that is no JSON", url));
             }
@@ -123,6 +127,11 @@ pub fn chat(model: &Value, system: &str, history: &[Value], tools: &[Value]) -> 
             body["tools"] = tools.iter().map(|t| json!({"name": t["name"], "description": t["description"], "input_schema": t["inputSchema"]})).collect();
         }
         let mut headers = vec![("anthropic-version", model["api_version"].as_str().unwrap_or(ANTHROPIC_VERSION).to_string())];
+        if let Some(extra) = model["headers"].as_object() {
+            for (name, value) in extra {
+                if let Some(v) = value.as_str() { headers.push((name.as_str(), v.to_string())); }
+            }
+        }
         if !key.is_empty() {
             headers.push(("x-api-key", key.clone()));
         }
@@ -161,6 +170,11 @@ pub fn chat(model: &Value, system: &str, history: &[Value], tools: &[Value]) -> 
         }
     }
     let mut headers = Vec::new();
+    if let Some(extra) = model["headers"].as_object() {
+        for (name, value) in extra {
+            if let Some(v) = value.as_str() { headers.push((name.as_str(), v.to_string())); }
+        }
+    }
     if !key.is_empty() {
         headers.push(("Authorization", format!("Bearer {}", key)));
     }

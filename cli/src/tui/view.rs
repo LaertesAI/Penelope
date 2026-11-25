@@ -1,6 +1,6 @@
 //! Draws the interface: the start screen, the transcript with the input box, the side panel and the dialogs.
 
-use super::art::{self, col, Mood, CLAY, ASH, DIM, INK, NIGHT, PAPER, RAISED, RED, SEA};
+use super::art::{self, col, Mood, CLAY, ASH, DIM, GOLD, INK, NIGHT, PAPER, RAISED, RED, SEA};
 use super::text::{clip, input_rows, markdown, width, wrap_plain};
 use super::{App, Item, Overlay, ToolState};
 use ratatui::layout::{Position, Rect};
@@ -82,7 +82,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
 /// A path with the home folder written as `~`, so that no screen picture shows the name of the account.
 fn tilde(path: &str) -> String {
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = crate::platform::home_str();
     if !home.is_empty() && path.starts_with(&home) { format!("~{}", &path[home.len()..]) } else { path.to_string() }
 }
 
@@ -124,7 +124,7 @@ fn tabs(f: &mut Frame, app: &App, area: Rect) {
 
 /// The same for a text that holds a path somewhere inside.
 fn tilde_all(text: &str) -> String {
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = crate::platform::home_str();
     if home.len() > 1 { text.replace(&home, "~") } else { text.to_string() }
 }
 
@@ -259,7 +259,15 @@ fn home(f: &mut Frame, app: &App, area: Rect) {
     }
     let tagline = "A command line harness that remembers the way.";
     put(f, area, x + w.saturating_sub(width(tagline) as u16) / 2, y, tagline, fg(ASH));
-    y += 2;
+    y += 1;
+    // The startup animation: the first thread is woven while the screen settles. It never blocks a key.
+    let intro = app.intro.elapsed().as_millis() as u64;
+    if intro < 1500 && std::env::var("PENELOPE_NO_ANIM").is_err() {
+        let done = (intro / 125).min(10) as usize;
+        let line = format!("weaving {} {}{}", "▓".repeat(done), "░".repeat(10 - done), "");
+        put(f, area, x + w.saturating_sub(width(&line) as u16) / 2, y, &line, fg(if done == 10 { SEA } else { CLAY }));
+    }
+    y += 1;
     if show_loom {
         loom.draw(f.buffer_mut(), x + w - loom.w as u16 - 4, y, area);
         let side = [format!("{} waypoints in the memory map", app.side.waypoints), format!("{} stored walks", app.side.walks),
@@ -397,23 +405,70 @@ fn sidebar(f: &mut Frame, app: &App, area: Rect) {
     section(f, &mut y, "SESSION", vec![
         ("tokens".into(), format!("{} in · {} out", num(app.tokens.0), num(app.tokens.1)), PAPER),
         ("turns".into(), format!("{} · {} tool calls", app.turns, app.tool_calls), PAPER),
+        ("cost".into(), app.side.cost.clone(), SEA),
+        ("mode".into(), crate::mode::current(&app.ctx), SEA),
     ]);
-    let (main, mkind) = model_line(app, false);
-    let (weak, _) = model_line(app, true);
-    // The crew: the lead model answers, the stand-in for Aiolos condenses tool output, the rules of Utis guard secrets.
+    let (main, _) = model_line(app, false);
     let privacy = match app.ctx.cfg["privacy"].as_str().unwrap_or("rules") {
         "off" => "off".to_string(),
         level => format!("{} · {} masked", level, app.side.masked),
     };
-    section(f, &mut y, "CREW", vec![
-        ("lead".into(), format!("{} · {}", main, mkind), PAPER),
-        ("nostos".into(), match app.ctx.cfg["delegate"].as_str().unwrap_or("auto") {
-            "off" => "no scout".to_string(),
-            mode => format!("{} · scout {}", crate::scout::model(&app.ctx)["model"].as_str().unwrap_or("?"), mode),
-        }, PAPER),
-        ("aiolos".into(), format!("{} · stand-in", weak), PAPER),
-        ("utis".into(), privacy, PAPER),
-    ]);
+    // The crew: the lead, then the subagents of the last run under the names the user or the orchestrator gave them.
+    // A model of a Laertes family is gold and says "in training"; it cannot answer yet.
+    let role_row = |role: &str, key: &str, state: &str| -> (String, String, art::Rgb) {
+        match crate::route::model_for(&app.ctx, role) {
+            Some(m) => {
+                let (shown, family) = crate::crew::describe(m);
+                let value = match family {
+                    Some(f) => format!("{} · in training", f),
+                    None => format!("{} · {}", shown, state),
+                };
+                (key.to_string(), value, if family.is_some() { GOLD } else { PAPER })
+            }
+            None => (key.to_string(), "rules".to_string(), PAPER),
+        }
+    };
+    let mut crew = Vec::new();
+    let lead = match crate::crew::family_of(&app.ctx.cfg["main"]) {
+        Some(f) => (format!("lead"), format!("{} · in training", f), GOLD),
+        None => {
+            let mood = app.mood();
+            ("lead".to_string(), format!("{} · {} · {}", main, app.ctx.cfg["main"]["kind"].as_str().unwrap_or("claude-cli"),
+                                        if app.busy.is_some() { mood.name() } else { "ready" }), PAPER)
+        }
+    };
+    crew.push(lead);
+    let members = crate::crew::list(&app.ctx);
+    let mut any_gold = crew.iter().any(|(_, _, c)| *c == GOLD);
+    if members.is_empty() {
+        let scout_state = match app.ctx.cfg["delegate"].as_str().unwrap_or("auto") { "off" => "no scout", mode => mode };
+        for (role, key, state) in [("scout", "nostos", scout_state), ("tool", "computer", "ScreenCodec"), ("router", "tiresias", "routing"),
+                                   ("filter", "utis", "masking"), ("condenser", "aiolos", "condensing"), ("judge", "argos", "judging")] {
+            let row = role_row(role, key, state);
+            any_gold |= row.2 == GOLD;
+            crew.push(row);
+        }
+        if let Some((_, value, colour)) = crew.iter_mut().find(|(k, _, _)| k == "utis") {
+            *value = format!("{} · {}", value, privacy);
+            let _ = colour;
+        }
+    } else {
+        // A subagent gets two rows: its name as the user or the orchestrator gave it, then the plugged model and
+        // its state. Two rows fit in a 40 row terminal and keep the full name readable.
+        for m in members.iter().take(2) {
+            any_gold |= m.family.is_some();
+            let gold = if m.family.is_some() { GOLD } else { PAPER };
+            crew.push((String::new(), format!("{} · {}", m.role, m.name), gold));
+            crew.push((String::new(), format!("   {} · {}", m.model, m.state), if m.family.is_some() { GOLD } else { ASH }));
+        }
+        if members.len() > 2 {
+            crew.push((String::new(), format!("   +{} more in the run", members.len() - 2), DIM));
+        }
+    }
+    if any_gold {
+        crew.push((String::new(), "gold · Laertes model, in training".to_string(), DIM));
+    }
+    section(f, &mut y, "CREW", crew);
     if !app.side.plan.is_empty() {
         let rows = app.side.plan.iter().take(8).map(|(text, state)| {
             let (mark, colour) = match state.as_str() {
@@ -431,6 +486,9 @@ fn sidebar(f: &mut Frame, app: &App, area: Rect) {
         memory.push((String::new(), row, SEA));
     }
     memory.push((String::new(), format!("{} waypoints · {} stored walks", app.side.waypoints, app.side.walks), PAPER));
+    if let Some(last) = app.context_refs.last() {
+        memory.push(("context".into(), last.clone(), SEA));
+    }
     for id in app.learned.iter().rev().take(3) {
         memory.push(("learned".into(), id.clone(), CLAY));
     }
@@ -443,6 +501,7 @@ fn sidebar(f: &mut Frame, app: &App, area: Rect) {
     section(f, &mut y, "ROUTED TO THE WEAKER MODEL", vec![("run".into(), routed(0), PAPER), ("fetch".into(), routed(1), PAPER), ("scout".into(), scout, PAPER)]);
     section(f, &mut y, "EYES AND PLUGINS", vec![
         ("screen".into(), if app.side.screencodec { "● ScreenCodec".into() } else { "○ not installed".into() }, if app.side.screencodec { SEA } else { DIM }),
+        ("cursor".into(), if app.side.cursor { "● own cursor".into() } else { "○ no cursor command".into() }, if app.side.cursor { SEA } else { DIM }),
         ("plugins".into(), format!("{}", app.side.plugins), PAPER),
         ("policy".into(), app.ctx.cfg["run_policy"].as_str().unwrap_or("safe").to_string(), PAPER),
     ]);
@@ -565,6 +624,20 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
             if all.is_empty() {
                 put(f, inner, inner.x, inner.y + 2, "no session yet. A session is stored after its first answer.", on(DIM, RAISED));
             }
+        }
+        Overlay::Brain { scroll } => {
+            let body = crate::brain::ascii(&app.ctx);
+            let lines: Vec<&str> = body.lines().collect();
+            let widest = lines.iter().map(|l| width(l)).max().unwrap_or(40) as u16;
+            let inner = dialog(f, area, "The brain · the memory map as a graph", (widest + 6).clamp(56, 104), lines.len() as u16 + 7);
+            let h = inner.height as usize;
+            let start = (*scroll).min(lines.len().saturating_sub(h));
+            for (i, line) in lines.iter().skip(start).take(h).enumerate() {
+                let colour = if line.contains('●') { CLAY } else if line.contains('○') { DIM }
+                    else if line.contains("waypoints") { SEA } else if line.starts_with("The same") { SEA } else { ASH };
+                put(f, inner, inner.x, inner.y + i as u16, &clip(line, inner.width as usize), on(colour, RAISED));
+            }
+            put(f, inner, inner.x, inner.bottom(), "w writes an Obsidian vault · up/down scroll · a full note: penelope memory go", on(DIM, RAISED));
         }
         Overlay::Approve { command, cwd, file, diff, .. } => {
             let widest = diff.iter().map(|l| width(l)).max().unwrap_or(0) as u16;

@@ -87,7 +87,7 @@ its own tools and returns a short report. You have no web tools of your own. For
 Give scout the full question and say what you need back. scout runs on a weaker model with its own tools and returns a short report. \
 You have no search tools of your own, only tree and outline for a first look.",
     };
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = crate::platform::home_str();
     let cwd = std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_default();
     let cwd = match cwd.strip_prefix(&home) {
         Some(rest) if home.len() > 1 => format!("~{}", rest),
@@ -100,9 +100,12 @@ above it holds a repository. Paths are relative to it, and ~ stands for the home
 3. Use read for a file you are about to change, then edit for a part of it or write for the whole file. A change waits for the user's yes. \
 4. For a task with three steps or more, keep the list of steps current with plan. \
 5. When the user states a rule, a preference or a fact to keep, store it with memory_note. At the start of a task, look up the topic with memory_go. \
-6. To look at a web page as it is drawn or at a picture use the screencodec tools, never a screenshot. \
+6. To look at a web page as it is drawn or at a picture use the tool screen, never a screenshot of the terminal. It drives ScreenCodec and moves Penelope's cursor before a click; cursor moves her pointer without a click. \
 7. When two readings of a request lead to different work, ask with ask_user before you guess. \
-8. Answer briefly. Today is {today} (UTC).", look, cwd = cwd,
+8. A rule that binds every later session goes to the shared memory: memory_note with scope global. A fact of this project stays in the project. \
+9. When a fixed command would save steps next time, write it as a tool with tool_new; a call runs through run and asks like run. \
+10. After a change, hand the claim and the command output to check. Report what passed and what is still open. \
+11. Answer briefly. Today is {today} (UTC).", look, cwd = cwd,
             today = &crate::sessions::stamp(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0))[..10])
 }
 
@@ -144,6 +147,10 @@ impl Chat {
 
     /// One turn. `on` receives the text and the tool calls while the turn runs.
     pub fn turn_with(&mut self, ctx: &Ctx, user: &str, memory: &str, on: &mut dyn FnMut(Event)) -> Result<String, String> {
+        if let Some(family) = crate::crew::family_of(&ctx.cfg["main"]) {
+            return Err(format!("The main model is {} 1, one of the Laertes families. It is in training and cannot answer yet. \
+Choose a hosted model: penelope provider use NAME --role main.", family));
+        }
         self.cancel.store(false, Ordering::SeqCst);
         let (user, masked) = crate::tools::guard_count(ctx, user);
         let user = user.as_str();
@@ -158,6 +165,11 @@ impl Chat {
         let lessons = crate::memory::Memory::open(&ctx.root).branch("tools", 900);
         if !lessons.is_empty() {
             system.push_str(&format!("\n\nLessons from earlier tool use, learned in this folder:\n{}", lessons));
+        }
+        // Only the names of the waypoints, not their notes: a lookup pulls the text when it is needed.
+        let index = crate::context::memory_index(ctx, 14);
+        if !index.is_empty() {
+            system.push_str(&format!("\n\nMemory map, names only. Read a way with memory_go when the request needs it:\n{}", index));
         }
         let (mut trace, mut ids): (Vec<crate::tools::Call>, Vec<String>) = (Vec::new(), Vec::new());
         let mut answers = Answers::default();
@@ -216,6 +228,9 @@ impl Chat {
             servers["penelope"]["env"] = json!({"PENELOPE_APPROVE_DIR": dir});       // the interface answers questions about unsafe commands
         }
         let mut allowed: Vec<String> = mcp::main_tools(ctx).iter().map(|t| format!("mcp__penelope__{}", t)).collect();
+        for t in crate::forge::specs(ctx) {          // a tool Penelope wrote is offered to the claude command too
+            if let Some(name) = t["name"].as_str() { allowed.push(format!("mcp__penelope__{}", name)); }
+        }
         if let Some(obj) = crate::plugins::servers(ctx).as_object() {
             for (k, s) in obj {
                 servers[k] = s.clone();        // the model sees the tools of every plugin server
@@ -296,8 +311,11 @@ impl Chat {
         if let Some(s) = v["session_id"].as_str() {
             self.session = Some(s.to_string());
         }
-        self.input_tokens += v["usage"]["input_tokens"].as_u64().unwrap_or(0) + v["usage"]["cache_creation_input_tokens"].as_u64().unwrap_or(0);
-        self.output_tokens += v["usage"]["output_tokens"].as_u64().unwrap_or(0);
+        let tin = v["usage"]["input_tokens"].as_u64().unwrap_or(0) + v["usage"]["cache_creation_input_tokens"].as_u64().unwrap_or(0);
+        let tout = v["usage"]["output_tokens"].as_u64().unwrap_or(0);
+        self.input_tokens += tin;
+        self.output_tokens += tout;
+        crate::cost::record(ctx, "lead", ctx.cfg["main"]["model"].as_str().unwrap_or(""), tin, tout);
         if v["is_error"].as_bool().unwrap_or(false) {
             return Err(v["result"].as_str().unwrap_or("the claude command reported an error").trim().to_string());
         }
@@ -326,15 +344,19 @@ impl Chat {
         let out = crate::llm::run_loop(m, system, &mut history, &tools, 12, Some(&*self.cancel), &mut usage,
             &mut |call| {
                 (*events.borrow_mut())(Event::ToolStart { id: call.id.clone(), name: short_name(&call.name), detail: tool_detail(&call.args) });
-                let called = if mine.contains(&call.name.as_str()) { mcp::call(ctx, &call.name, &call.args) } else { Err(format!("unknown tool {}", call.name)) };
-                (*events.borrow_mut())(Event::ToolEnd { id: call.id.clone(), ok: called.is_ok(), summary: first_line(called.as_deref().unwrap_or_else(|e| e.as_str())) });
-                let ok = called.is_ok();
-                (called.unwrap_or_else(|e| e), ok)
+                let called = if mine.contains(&call.name.as_str()) {
+                    crate::tools::dispatch_retry(ctx, "lead", &call.name, &call.args)
+                } else {
+                    (format!("NOT called. unknown tool {} — it is not in the tool list of this turn.", call.name), false)
+                };
+                (*events.borrow_mut())(Event::ToolEnd { id: call.id.clone(), ok: called.1, summary: first_line(&called.0) });
+                called
             },
             &mut |text| (*events.borrow_mut())(Event::Text(text.to_string())));
         self.history = history;
         self.input_tokens += usage.tokens_in;
         self.output_tokens += usage.tokens_out;
+        crate::cost::record(ctx, "lead", m["model"].as_str().unwrap_or(""), usage.tokens_in, usage.tokens_out);
         if out.is_err() {
             self.history.truncate(before);          // a failed turn leaves no half exchange behind
             return out;
@@ -509,7 +531,7 @@ mod tests {
             let results = seen[1].body["messages"][2]["content"].as_array().unwrap().clone();
             assert_eq!(results.len(), 2);          // both results travel in one user message
             assert!(results[0]["content"].as_str().unwrap().starts_with("NOT run. A scout runs commands of the safe list only"));
-            assert!(results[1]["content"] == "a scout has no tool write" && results[1]["is_error"] == true && !dir.join("x.txt").exists());
+            assert!(results[1]["content"].as_str().unwrap().starts_with("NOT called. A scout has no tool write") && results[1]["is_error"] == true && !dir.join("x.txt").exists());
         }
         assert_eq!(crate::weak::ask(&ctx.cfg["main"], "Condense.", "a\nb\nc").unwrap(), "three lines");
         assert!(seen.lock().unwrap()[2].body["tools"].is_null());

@@ -32,6 +32,28 @@ pub const TABLE: &[Provider] = &[
                model: "claude-opus-5-5", note: "Messages API with tool use, claude-haiku-5-5 is the smaller model" },
     Provider { name: "openai", label: "OpenAI", kind: "openai", base: "https://api.openai.com/v1", key_env: "OPENAI_API_KEY", key_optional: false,
                model: "gpt-6.2-astra", note: "chat completions" },
+    Provider { name: "laertes", label: "A Laertes model family, in training", kind: "laertes", base: "", key_env: "", key_optional: true,
+               model: "Telemach 1", note: "Nostos, Tiresias, Utis, Aiolos, Argos, Klea, Telemach or Proteus; shown in gold, cannot answer yet" },
+    Provider { name: "perplexity", label: "Perplexity", kind: "openai", base: "https://api.perplexity.ai", key_env: "PERPLEXITY_API_KEY", key_optional: false,
+               model: "sonar-pro", note: "search answers, OpenAI-compatible chat completions" },
+    Provider { name: "cohere", label: "Cohere", kind: "openai", base: "https://api.cohere.ai/compatibility/v1", key_env: "COHERE_API_KEY", key_optional: false,
+               model: "command-r-plus", note: "the OpenAI compatibility endpoint of Cohere" },
+    Provider { name: "deepinfra", label: "DeepInfra", kind: "openai", base: "https://api.deepinfra.com/v1/openai", key_env: "DEEPINFRA_API_KEY", key_optional: false,
+               model: "meta-llama/Llama-3.3-70B-Instruct", note: "open-weight models" },
+    Provider { name: "nebius", label: "Nebius AI Studio", kind: "openai", base: "https://api.studio.nebius.ai/v1", key_env: "NEBIUS_API_KEY", key_optional: false,
+               model: "meta-llama/Llama-3.3-70B-Instruct", note: "open-weight models" },
+    Provider { name: "novita", label: "Novita AI", kind: "openai", base: "https://api.novita.ai/v3/openai", key_env: "NOVITA_API_KEY", key_optional: false,
+               model: "meta-llama/llama-3.3-70b-instruct", note: "open-weight models" },
+    Provider { name: "hyperbolic", label: "Hyperbolic", kind: "openai", base: "https://api.hyperbolic.xyz/v1", key_env: "HYPERBOLIC_API_KEY", key_optional: false,
+               model: "meta-llama/Llama-3.3-70B-Instruct", note: "open-weight models" },
+    Provider { name: "lambda", label: "Lambda Inference", kind: "openai", base: "https://api.lambdalabs.com/v1", key_env: "LAMBDA_API_KEY", key_optional: false,
+               model: "llama3.3-70b-instruct-fp8", note: "Lambda's inference API" },
+    Provider { name: "sambanova", label: "SambaNova", kind: "openai", base: "https://api.sambanova.ai/v1", key_env: "SAMBANOVA_API_KEY", key_optional: false,
+               model: "Meta-Llama-3.3-70B-Instruct", note: "fast open-weight inference" },
+    Provider { name: "nous", label: "Nous Research", kind: "openai", base: "https://inference-api.nousresearch.com/v1", key_env: "NOUS_API_KEY", key_optional: false,
+               model: "Hermes-3-Llama-3.1-70B", note: "Hermes models, OpenAI-compatible" },
+    Provider { name: "github-models", label: "GitHub Models", kind: "openai", base: "https://models.inference.ai.azure.com", key_env: "GITHUB_TOKEN", key_optional: false,
+               model: "gpt-4o", note: "a GitHub token with the models scope; rate limited by plan" },
     Provider { name: "openrouter", label: "OpenRouter", kind: "openai", base: "https://openrouter.ai/api/v1", key_env: "OPENROUTER_API_KEY", key_optional: false,
                model: "openai/gpt-5.2", note: "one key for models of many providers" },
     Provider { name: "alibaba-intl", label: "Alibaba Cloud Model Studio, Singapore", kind: "openai",
@@ -66,6 +88,8 @@ pub const TABLE: &[Provider] = &[
                model: "glm-5.3", note: "GLM models, the address for mainland China" },
     Provider { name: "huggingface", label: "Hugging Face inference router", kind: "openai", base: "https://router.huggingface.co/v1", key_env: "HF_TOKEN", key_optional: false,
                model: "deepseek-ai/DeepSeek-V4.1-Flash", note: "chat only, a suffix :fastest or :cheapest picks the provider" },
+    Provider { name: "opencode", label: "OpenCode Go", kind: "openai", base: "https://opencode.ai/zen/go/v1", key_env: "OPENCODE_API_KEY",
+               key_optional: false, model: "mimo-v2.6-flash", note: "one key for many models; Penelope sends the x-opencode-session header" },
     Provider { name: "ollama", label: "Ollama on this PC", kind: "openai", base: "http://localhost:11434/v1", key_env: "", key_optional: true,
                model: "qwen3:8b", note: "local, Ollama ignores the key" },
     Provider { name: "lmstudio", label: "LM Studio on this PC", kind: "openai", base: "http://localhost:1234/v1", key_env: "LM_API_TOKEN", key_optional: true,
@@ -100,9 +124,60 @@ pub fn is_env_name(text: &str) -> bool {
         && !text.starts_with(|c: char| c.is_ascii_digit())
 }
 
+/// A friendly label for a model whose name is a slug. The crew panel shows this instead of `claude-haiku-5-5`.
+pub fn known_label(model: &str) -> Option<&'static str> {
+    match model.trim().to_lowercase().as_str() {
+        "haiku" => Some("Haiku"),
+        "sonnet" => Some("Sonnet"),
+        "opus" => Some("Opus"),
+        "claude-haiku-5-5" => Some("Haiku 5.5"),
+        "claude-sonnet-5-5" => Some("Sonnet 5.5"),
+        "claude-opus-5-5" => Some("Opus 5.5"),
+        "mimo-v2.6-flash" => Some("MiMo V2.6 Flash"),
+        "deepseek-v4.1-flash" => Some("DeepSeek V4.1 Flash"),
+        "deepseek-v4-pro" => Some("DeepSeek V4 Pro"),
+        "glm-5.3-flash" => Some("GLM-5.3 Flash"),
+        "glm-5.3" => Some("GLM-5.3"),
+        "qwen3.8-flash" => Some("Qwen3.8 Flash"),
+        "kimi-k3" => Some("Kimi K3"),
+        _ => None,
+    }
+}
+
+/// A list price in dollars per million tokens for a model family whose public list we know. Used only when
+/// `provider use` writes a setting and the settings folder has no price for that name yet. A subscription price is
+/// still a proposal, not a bill.
+pub fn known_price(model: &str) -> Option<(f64, f64)> {
+    let m = model.to_lowercase();
+    let mut best: Option<(usize, f64, f64)> = None;
+    for (name, i, o) in [("claude-haiku-5-5", 0.1, 0.5), ("mimo-v2.6", 0.14, 0.28), ("deepseek-v4.1", 0.15, 0.6),
+                         ("glm-5.3", 0.2, 0.8), ("qwen3.8", 0.2, 0.6), ("kimi-k3", 0.6, 2.5), ("sonnet", 3.0, 15.0),
+                         ("opus", 15.0, 75.0), ("haiku", 0.8, 4.0)] {
+        if m.contains(name) && best.map(|(l, _, _)| name.len() > l).unwrap_or(true) {
+            best = Some((name.len(), i, o));
+        }
+    }
+    best.map(|(_, i, o)| (i, o))
+}
+
 /// The key of a model setting, read from the environment variable it names. Empty when none is named or set.
 pub fn key(model: &Value) -> String {
-    model["api_key_env"].as_str().filter(|n| is_env_name(n)).and_then(|n| std::env::var(n).ok()).unwrap_or_default().trim().to_string()
+    // The environment wins for one session; a stored login is the fallback.
+    if let Some(v) = model["api_key_env"].as_str().filter(|n| is_env_name(n)).and_then(|n| std::env::var(n).ok()) {
+        if !v.trim().is_empty() {
+            return v.trim().to_string();
+        }
+    }
+    of(model).map(|p| crate::auth::get(p.name)).unwrap_or_default()
+}
+
+/// The state of a provider for the table and `doctor`: the environment first, then a stored login.
+pub fn state_of(p: &Provider) -> &'static str {
+    let env = key_state(p.key_env, p.key_optional);
+    if env == "key set" || env == "no key needed" || env == "no key, optional" {
+        return env;
+    }
+    if crate::auth::has(p.name) { "stored" } else { env }
 }
 
 /// "key set" or "no key" for one variable name. The value itself is never returned.
@@ -121,7 +196,7 @@ pub fn key_state(key_env: &str, optional: bool) -> &'static str {
 pub fn list(ctx: &Ctx) -> String {
     let mut out = format!("{:<13} {:<10} {:<17} {:<19} {}\n", "name", "kind", "key", "variable", "address");
     for p in TABLE {
-        out.push_str(&format!("{:<13} {:<10} {:<17} {:<19} {}\n", p.name, p.kind, key_state(p.key_env, p.key_optional),
+        out.push_str(&format!("{:<13} {:<10} {:<17} {:<19} {}\n", p.name, p.kind, state_of(p),
                               if p.key_env.is_empty() { "-" } else { p.key_env }, if p.base.is_empty() { "-" } else { p.base }));
         out.push_str(&format!("{:<13} example model {} · {}\n", "", p.model, p.note));
     }
@@ -129,7 +204,15 @@ pub fn list(ctx: &Ctx) -> String {
     for role in ["main", "weak", "scout"] {
         let m = &ctx.cfg[role];
         if m["model"].is_string() {
-            out.push_str(&format!("  {:<5} {} on {}\n", role, m["model"].as_str().unwrap_or("?"), of(m).map(|p| p.name).unwrap_or("an address outside the table")));
+            out.push_str(&format!("  {:<9} {} on {}\n", role, m["model"].as_str().unwrap_or("?"), of(m).map(|p| p.name).unwrap_or("an address outside the table")));
+        }
+    }
+    for (role, what) in crate::route::ROLES {
+        let m = &ctx.cfg["roles"][role];
+        if m["model"].is_string() {
+            out.push_str(&format!("  {:<9} {} on {} · {}\n", role, m["model"].as_str().unwrap_or("?"), of(m).map(|p| p.name).unwrap_or("an address outside the table"), what));
+        } else if matches!(*role, "router" | "filter") {
+            out.push_str(&format!("  {:<9} fixed rules · {}\n", role, what));
         }
     }
     out.push_str("\npenelope provider use NAME [--role main|weak|scout] [--model MODEL] [--workspace ID] [--base-url URL]\n\
@@ -141,7 +224,15 @@ A key is read from its environment variable when a request starts. No command pr
 pub fn setting(p: &Provider, model: Option<&str>, workspace: Option<&str>, base_url: Option<&str>) -> Result<Value, String> {
     let model = model.filter(|m| !m.trim().is_empty()).unwrap_or(p.model).trim();
     if p.kind == "claude-cli" {
-        return Ok(json!({"kind": "claude-cli", "model": model}));
+        let mut v = json!({"kind": "claude-cli", "model": model});
+        if let Some(label) = known_label(model) {
+            v["label"] = json!(label);
+        }
+        return Ok(v);
+    }
+    if p.kind == "laertes" {
+        let family = crate::crew::family_of(&json!({"model": model})).unwrap_or("Telemach");
+        return Ok(json!({"kind": "laertes", "family": family, "model": model, "label": format!("{} 1", family)}));
     }
     let base = match (base_url.map(|b| b.trim().trim_end_matches('/')), p.base.contains(WORKSPACE)) {
         (Some(b), _) if b.starts_with("http://") || b.starts_with("https://") => b.to_string(),
@@ -154,6 +245,12 @@ The console of Model Studio shows the ID in the column API Host.", p.name, p.bas
         (None, false) => p.base.to_string(),
     };
     let mut v = json!({"kind": p.kind, "base_url": base, "model": model, "api_key_env": p.key_env});
+    if let Some(label) = known_label(model) {
+        v["label"] = json!(label);
+    }
+    if base.contains("opencode.ai") {
+        v["headers"] = json!({"x-opencode-session": "penelope"});
+    }
     if p.key_env.is_empty() {
         v.as_object_mut().unwrap().remove("api_key_env");
     }
@@ -171,19 +268,40 @@ pub fn use_provider(ctx: &mut Ctx, args: &[String]) -> String {
         return format!("NOT set. No provider {} in the table. penelope providers lists the {} names.", name, TABLE.len());
     };
     let role = flag("--role").unwrap_or("main");
-    if !["main", "weak", "scout"].contains(&role) {
-        return format!("NOT set. The role is main, weak or scout, {} is none of them.", role);
-    }
+    let slot = match role {
+        "main" | "lead" => "main".to_string(),
+        "weak" | "condenser" => "weak".to_string(),
+        "scout" => "scout".to_string(),
+        r if crate::route::role_names().contains(&r) => format!("roles.{}", r),
+        _ => return format!("NOT set. The role is main, weak, scout or one of: {}.", crate::route::role_names().join(", ")),
+    };
     let value = match setting(p, flag("--model"), flag("--workspace"), flag("--base-url")) {
         Ok(v) => v,
         Err(e) => return e,
     };
-    ctx.cfg[role] = value.clone();
+    if let Some(name) = slot.strip_prefix("roles.") {
+        if !ctx.cfg["roles"].is_object() {
+            ctx.cfg["roles"] = json!({});
+        }
+        ctx.cfg["roles"][name] = value.clone();
+    } else {
+        ctx.cfg[&slot] = value.clone();
+    }
+    // A known list price makes the euro report useful from the first call. An explicit price of the user wins.
+    if let Some((input, output)) = known_price(value["model"].as_str().unwrap_or("")) {
+        let key = value["model"].as_str().unwrap_or("");
+        if ctx.cfg["prices"][key].is_null() {
+            if !ctx.cfg["prices"].is_object() {
+                ctx.cfg["prices"] = json!({});
+            }
+            ctx.cfg["prices"][key] = json!([input, output]);
+        }
+    }
     if let Err(e) = std::fs::write(ctx.root.join("config.json"), serde_json::to_string_pretty(&ctx.cfg).unwrap()) {
         return format!("NOT set. cannot write config.json: {}", e);
     }
     format!("set: {} model {} on {} ({}, {}). Key: {}{}.", role, value["model"].as_str().unwrap_or("?"), p.name, p.kind,
-            value["base_url"].as_str().unwrap_or("the claude command"), key_state(p.key_env, p.key_optional),
+            value["base_url"].as_str().unwrap_or("the claude command"), state_of(p),
             if p.key_env.is_empty() { String::new() } else { format!(" in {}", p.key_env) })
 }
 
@@ -193,11 +311,11 @@ mod tests {
 
     #[test]
     fn the_table_is_well_formed_and_a_setting_names_the_variable_only() {
-        assert_eq!(TABLE.len(), 23);
+        assert_eq!(TABLE.len(), 35);
         for p in TABLE {
-            assert!(["openai", "anthropic", "claude-cli"].contains(&p.kind) && !p.model.is_empty() && !p.note.is_empty(), "{}", p.name);
+            assert!(["openai", "anthropic", "claude-cli", "laertes"].contains(&p.kind) && !p.model.is_empty() && !p.note.is_empty(), "{}", p.name);
             assert!(p.key_env.is_empty() || is_env_name(p.key_env), "{}", p.name);
-            assert!(p.kind == "claude-cli" || p.base.starts_with("http"), "{}", p.name);
+            assert!(p.kind == "claude-cli" || p.kind == "laertes" || p.base.starts_with("http"), "{}", p.name);
             assert!(!p.base.ends_with('/') && TABLE.iter().filter(|q| q.name == p.name).count() == 1, "{}", p.name);
         }
         let groq = setting(get("groq").unwrap(), None, None, None).unwrap();
@@ -210,5 +328,14 @@ mod tests {
         assert_eq!((of(&set).unwrap().name, set["model"].as_str()), ("alibaba-intl", Some("qwen-plus")));
         assert_eq!(setting(get("ollama").unwrap(), None, None, None).unwrap(), json!({"kind": "openai", "base_url": "http://localhost:11434/v1", "model": "qwen3:8b"}));
         assert!(is_env_name("GROQ_API_KEY") && !is_env_name("sk-abc123") && !is_env_name("gsk_abc") && !is_env_name(""));
+        assert_eq!(known_label("mimo-v2.6-flash"), Some("MiMo V2.6 Flash"));
+        assert_eq!(known_price("claude-haiku-5-5"), Some((0.1, 0.5)));
+        assert_eq!(known_price("a-model-without-a-price"), None);
+        let mut ctx = crate::config::load(&std::env::temp_dir().join(format!("penelope-price-{}", std::process::id())));
+        ctx.cfg["prices"] = json!({});
+        let said = use_provider(&mut ctx, &["opencode".to_string(), "--model".to_string(), "mimo-v2.6-flash".to_string()]);
+        assert!(said.contains("set: main model mimo-v2.6-flash"));
+        assert_eq!(ctx.cfg["prices"]["mimo-v2.6-flash"], json!([0.14, 0.28]));
+        assert_eq!(ctx.cfg["main"]["label"], "MiMo V2.6 Flash");
     }
 }

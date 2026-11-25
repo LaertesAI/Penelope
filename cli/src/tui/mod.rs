@@ -8,7 +8,6 @@ mod view;
 
 use crate::backend::{Chat, Event as TurnEvent};
 use crate::config::Ctx;
-use crate::memory::Memory;
 use crate::{plugins, tools};
 use art::Mood;
 use ratatui::crossterm::event::{self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event, KeyCode,
@@ -51,6 +50,8 @@ pub enum Overlay {
     Sessions { sel: usize },
     /// A question of the main model with fixed answers.
     Question { id: String, question: String, options: Vec<String>, sel: usize },
+    /// The memory map as a graph, with the vault command.
+    Brain { scroll: usize },
 }
 
 pub struct Cmd {
@@ -64,8 +65,16 @@ pub struct Cmd {
 pub const COMMANDS: &[Cmd] = &[
     Cmd { name: "/new", help: "start a new session", key: "ctrl+n", takes_text: false },
     Cmd { name: "/models", help: "choose the main and the weaker model", key: "ctrl+o", takes_text: false },
+    Cmd { name: "/model", help: "same as /models: choose a model", key: "", takes_text: false },
+    Cmd { name: "/mode", help: "auto, manual, safe, review, privacy or power", key: "", takes_text: false },
     Cmd { name: "/sessions", help: "list the stored sessions and open one", key: "f2", takes_text: false },
     Cmd { name: "/setup", help: "answer the setup questions again", key: "", takes_text: false },
+    Cmd { name: "/login", help: "sign in to Claude, or store the API key of a provider", key: "", takes_text: true },
+    Cmd { name: "/logout", help: "remove the stored key of a provider", key: "", takes_text: true },
+    Cmd { name: "/auth", help: "the login status of Claude and the providers", key: "", takes_text: false },
+    Cmd { name: "/update", help: "check for a newer Penelope", key: "", takes_text: false },
+    Cmd { name: "/audit", help: "look for key and plain-http leaks in .penelope", key: "", takes_text: false },
+    Cmd { name: "/input", help: "native pointer helper: status, install, enable", key: "", takes_text: false },
     Cmd { name: "/providers", help: "the provider table and which keys are set", key: "", takes_text: false },
     Cmd { name: "/undo", help: "take back the last change to a file", key: "", takes_text: false },
     Cmd { name: "/jobs", help: "list the background jobs", key: "", takes_text: false },
@@ -76,7 +85,29 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd { name: "/note", help: "store a rule or a fact in the memory map", key: "", takes_text: true },
     Cmd { name: "/unravel", help: "take back the last note of the memory map", key: "", takes_text: false },
     Cmd { name: "/stats", help: "how much tool output stayed away from the main model", key: "", takes_text: false },
-    Cmd { name: "/plugins", help: "list the registered plugins", key: "", takes_text: false },
+    Cmd { name: "/btw", help: "keep a quick note without interrupting the turn", key: "", takes_text: true },
+    Cmd { name: "/rules", help: "show the shared rules, or add one", key: "", takes_text: true },
+    Cmd { name: "/orchestrate", help: "run an agent on a goal", key: "", takes_text: true },
+    Cmd { name: "/agents", help: "the agents written with $name(...)", key: "", takes_text: false },
+    Cmd { name: "/brain", help: "the memory map as a graph; /brain write makes an Obsidian vault", key: "", takes_text: false },
+    Cmd { name: "/cost", help: "tokens and euro per role and model", key: "", takes_text: false },
+    Cmd { name: "/context", help: "show what @ and the memory map would send", key: "", takes_text: true },
+    Cmd { name: "/search", help: "search several engines and show the ranked results", key: "", takes_text: true },
+    Cmd { name: "/research", help: "search, read the best pages and show a cited report", key: "", takes_text: true },
+    Cmd { name: "/route", help: "the roles, their tools and their models", key: "", takes_text: false },
+    Cmd { name: "/tools", help: "every tool, its arguments and its roles", key: "", takes_text: false },
+    Cmd { name: "/consolidate", help: "keep the lasting rules of this session for every project", key: "", takes_text: false },
+    Cmd { name: "/forge", help: "write a tool from the notes at a memory waypoint", key: "", takes_text: true },
+    Cmd { name: "/plugins", help: "list, install, import, allow, deny, update or remove a plugin", key: "", takes_text: false },
+    Cmd { name: "/mcp", help: "MCP servers: list, probe, add, remove, allow, deny, call", key: "", takes_text: false },
+    Cmd { name: "/screen", help: "ScreenCodec: tools, open URL, see, click ID, desktop", key: "", takes_text: false },
+    Cmd { name: "/cursor", help: "move Penelope's cursor: /cursor X Y [click]", key: "", takes_text: false },
+    Cmd { name: "/export", help: "write this session as Markdown under .penelope/exports", key: "", takes_text: false },
+    Cmd { name: "/forget", help: "take back one note by its text", key: "", takes_text: true },
+    Cmd { name: "/price", help: "set a price: /price MODEL INPUT OUTPUT in dollars per million", key: "", takes_text: true },
+    Cmd { name: "/auto", help: "switch auto-learning on or off", key: "", takes_text: false },
+    Cmd { name: "/learn", help: "the lessons and the feedback of this folder", key: "", takes_text: false },
+    Cmd { name: "/skills", help: "the skills Penelope wrote for this project", key: "", takes_text: false },
     Cmd { name: "/doctor", help: "check the programs and models Penelope needs", key: "", takes_text: false },
     Cmd { name: "/copy", help: "copy the last answer to the clipboard", key: "", takes_text: false },
     Cmd { name: "/shot", help: "save the screen as a picture under .penelope/screens", key: "f12", takes_text: false },
@@ -92,6 +123,11 @@ enum Msg {
     Lessons(Vec<String>),
     Done(Box<Chat>, Result<String, String>),
     Learned(Vec<String>),
+    /// The context references of a prompt, expanded before the turn.
+    Context(Vec<crate::context::Ref>),
+    AgentDone(Result<String, String>),
+    /// A skill Penelope wrote from a long successful turn.
+    Skill(String),
 }
 
 /// Numbers of the side panel that come from files under `.penelope`.
@@ -109,6 +145,10 @@ pub struct Side {
     pub scout: (u64, u64),
     /// The plan of the running task: text and state of each step.
     pub plan: Vec<(String, String)>,
+    /// The euro spent so far in this folder.
+    pub cost: String,
+    /// True when Penelope can move her own cursor on this PC.
+    pub cursor: bool,
 }
 
 pub struct App {
@@ -151,9 +191,15 @@ pub struct App {
     quit: bool,
     /// The claude session this transcript belongs to. None before the first answer.
     pub session_id: Option<String>,
+    /// When the interface opened, for the short startup weave.
+    pub intro: Instant,
+    /// The references of the last prompt that were expanded from @path.
+    pub context_refs: Vec<String>,
     /// Stored sessions as tabs: id and title, oldest first.
     pub tabs: Vec<(String, String)>,
     setup: bool,
+    /// A provider whose login runs on the plain terminal before the interface comes back.
+    login: Option<String>,
 }
 
 /// Labels and icons of status lines, so that a stored transcript finds its fixed texts again.
@@ -206,6 +252,7 @@ impl App {
             chat: Some(Chat::new()), cancel: Arc::new(AtomicBool::new(false)), pid: Arc::new(AtomicU32::new(0)), tx, rx,
             tokens: (0, 0), turns: 0, tool_calls: 0, trail: Vec::new(), learned: Vec::new(), side: Side::default(),
             approve_dir, allow_all: false, seen: HashSet::new(), shot: false, quit: false, session_id: None, tabs: Vec::new(), setup: false,
+            intro: Instant::now(), context_refs: Vec::new(), login: None,
         };
         app.refresh_tabs();
         app.refresh_side();
@@ -270,10 +317,10 @@ impl App {
     }
 
     pub fn refresh_side(&mut self) {
-        let map = tools::memory_map(&self.ctx);
-        let lines: Vec<&str> = map.lines().collect();
-        self.side.waypoints = lines.len().saturating_sub(2);
-        self.side.walks = lines.last().and_then(|l| l.split_whitespace().next()).and_then(|n| n.parse().ok()).unwrap_or(0);
+        self.side.waypoints = crate::brain::counts(&self.ctx).0;
+        self.side.walks = fs::read_to_string(self.ctx.root.join("memory/paths.json")).ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|v| v.as_object().map(|o| o.len())).unwrap_or(0);
         let stats: serde_json::Value = fs::read_to_string(self.ctx.root.join("stats.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
         for (i, tool) in ["run", "fetch"].iter().enumerate() {
             let (raw, sent) = (stats[tool]["raw_chars"].as_u64().unwrap_or(0), stats[tool]["sent_chars"].as_u64().unwrap_or(0));
@@ -286,6 +333,8 @@ impl App {
         self.side.screencodec = self.ctx.cfg["screencodec"]["command"].as_str().map(|c| !c.is_empty()).unwrap_or(false)
             || crate::config::which("screencodec-mcp").is_some();
         self.side.plugins = plugins::load(&self.ctx)["plugins"].as_array().map(|a| a.len()).unwrap_or(0);
+        self.side.cost = crate::cost::summary(&self.ctx);
+        self.side.cursor = crate::cursor::backend(&self.ctx).1;
     }
 
     pub fn mood(&self) -> Mood {
@@ -375,14 +424,19 @@ impl App {
         self.scroll = 0;
         let (ctx, tx) = (self.ctx.clone(), self.tx.clone());
         std::thread::spawn(move || {
-            let (notes, trail, cached) = Memory::open(&ctx.root).recall(&text, 1600);
+            let expanded = crate::context::expand(&ctx, &text);
+            if !expanded.refs.is_empty() {
+                let _ = tx.send(Msg::Context(expanded.refs));
+            }
+            let (notes, trail, cached) = tools::recall_all(&ctx, &expanded.text, 1600);
             if !trail.is_empty() {
                 let _ = tx.send(Msg::Trail(trail, cached));
             }
-            let result = chat.turn_with(&ctx, &text, &notes, &mut |e| {
+            let result = chat.turn_with(&ctx, &expanded.text, &notes, &mut |e| {
                 let _ = tx.send(Msg::Turn(e));
             });
             let answer = result.clone().ok();
+            let ok = result.is_ok();
             let trace = chat.trace.clone();
             let _ = tx.send(Msg::Done(Box::new(chat), result));
             if let Some(a) = answer {
@@ -393,6 +447,42 @@ impl App {
             if !lessons.is_empty() {
                 let _ = tx.send(Msg::Lessons(lessons));
             }
+            if ok {
+                if let Some(name) = crate::skills::from_trace(&ctx, &text, &trace) {
+                    let _ = tx.send(Msg::Skill(name));
+                }
+            }
+        });
+    }
+
+    /// Runs a stored agent plan in the background. The interface stays live; the result arrives as one block.
+    fn start_agent(&mut self, spec: crate::agents::Spec) {
+        if self.busy.is_some() {
+            self.toast("a turn is already running. esc stops it before an agent starts.".to_string());
+            return;
+        }
+        self.items.push(Item::User(format!("${}(goal=\"{}\", max_sub_agents={})", spec.name, spec.goal, spec.max_sub_agents)));
+        self.busy = Some(Instant::now());
+        self.scroll = 0;
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.cancel = cancel.clone();
+        let (ctx, tx) = (self.ctx.clone(), self.tx.clone());
+        std::thread::spawn(move || {
+            let out = crate::agents::run_with_cancel(&ctx, &spec, Some(&cancel));
+            let _ = tx.send(Msg::AgentDone(out));
+        });
+    }
+
+    /// Runs one slow tool (ScreenCodec, a plugin MCP server) off the drawing thread. The result arrives as a reply.
+    fn start_bg(&mut self, work: impl FnOnce(Ctx) -> Result<String, String> + Send + 'static) {
+        if self.busy.is_some() {
+            self.toast("a turn is running. esc stops it first.".to_string());
+            return;
+        }
+        self.busy = Some(Instant::now());
+        let (ctx, tx) = (self.ctx.clone(), self.tx.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send(Msg::AgentDone(work(ctx)));
         });
     }
 
@@ -400,7 +490,7 @@ impl App {
         self.cancel.store(true, Ordering::SeqCst);
         let pid = self.pid.load(Ordering::SeqCst);
         if pid != 0 {
-            let _ = Command::new("kill").arg(pid.to_string()).stdout(Stdio::null()).stderr(Stdio::null()).status();
+            let _ = crate::platform::kill_tree(pid as u64);
         }
     }
 
@@ -459,7 +549,34 @@ impl App {
                     }
                     self.refresh_side();
                 }
+                Msg::Context(refs) => {
+                    self.context_refs = refs.iter().map(|r| format!("{} ({} bytes)", r.token, r.bytes)).collect();
+                    self.note("◆", "context", format!("{} attached · {}", refs.len(), refs.iter().map(|r| format!("{} {}", r.kind, r.token)).collect::<Vec<_>>().join(", ")), art::SEA);
+                }
+                Msg::Skill(name) => {
+                    self.note("✦", "skill", format!("{} (written from the tool calls of this turn)", name), art::CLAY);
+                    self.flash = Some((Mood::Learned, Instant::now()));
+                    self.save_session();
+                    self.refresh_side();
+                }
+                Msg::AgentDone(result) => {
+                    self.busy = None;
+                    match result {
+                        Ok(text) => {
+                            for line in text.lines() {
+                                self.items.push(Item::Reply(line.to_string()));
+                            }
+                        }
+                        Err(e) if e == "stopped" => self.note("■", "stopped", "the agent run was stopped".to_string(), art::ASH),
+                        Err(e) => self.items.push(Item::Error(e)),
+                    }
+                    self.scroll = 0;
+                    self.refresh_side();
+                }
                 Msg::Done(chat, result) => {
+                    if result.is_ok() && !self.trail.is_empty() {
+                        crate::memory::Memory::open(&self.ctx.root).mark_used(&self.trail);
+                    }
                     self.tokens = (chat.input_tokens, chat.output_tokens);
                     self.turns = chat.turns;
                     self.session_id = chat.session.clone().or(self.session_id.take());
@@ -487,6 +604,11 @@ impl App {
                         Err(e) => self.items.push(Item::Error(e)),
                     }
                     self.scroll = 0;
+                    // The lasting rules of this session go to the shared memory at its end, without a model call.
+                    let users: Vec<String> = self.items.iter().filter_map(|i| if let Item::User(t) = i { Some(t.clone()) } else { None }).collect();
+                    for id in tools::consolidate(&self.ctx, &users) {
+                        self.note("✦", "learned", format!("{} (shared by every project)", id), art::CLAY);
+                    }
                     self.save_session();
                     self.refresh_tabs();
                     self.refresh_side();
@@ -586,6 +708,8 @@ impl App {
                 if self.busy.is_some() {
                     self.stop_turn();
                 }
+                let users: Vec<String> = self.items.iter().filter_map(|i| if let Item::User(t) = i { Some(t.clone()) } else { None }).collect();
+                let _ = tools::consolidate(&self.ctx, &users);
                 self.save_session();
                 self.session_id = None;
                 self.items.clear();
@@ -599,7 +723,17 @@ impl App {
                 self.learned.clear();
                 self.scroll = 0;
             }
-            "/models" => self.overlay = Overlay::Models { sel: 0, weak: false },
+            "/models" | "/model" => self.overlay = Overlay::Models { sel: 0, weak: false },
+            "/mode" if !rest.is_empty() => {
+                match crate::mode::apply(&mut self.ctx, rest) {
+                    Ok(text) => {
+                        self.note("◆", "mode", text, art::SEA);
+                        self.refresh_side();
+                    }
+                    Err(e) => self.items.push(Item::Error(e)),
+                }
+            }
+            "/mode" => self.pager("Modes", crate::mode::report(&self.ctx)),
             "/map" => self.pager("Memory map", tools::memory_map(&self.ctx)),
             "/go" if !rest.is_empty() => self.pager("Memory map: the way", tools::memory_go(&self.ctx, rest)),
             "/note" if !rest.is_empty() => {
@@ -615,6 +749,28 @@ impl App {
                 self.overlay = Overlay::Sessions { sel: at };
             }
             "/setup" => self.setup = true,
+            "/auth" if rest == "verify" => self.start_bg(|ctx| Ok(crate::auth::verify(&ctx, None))),
+            "/auth" => self.pager("Login and keys", crate::auth::status(&self.ctx)),
+            "/update" => self.start_bg(|ctx| crate::update::check(&ctx)),
+            "/audit" => self.pager("Leak audit", crate::audit::run(&self.ctx)),
+            "/input" => match rest {
+                "install" => self.start_bg(|_| crate::input::install()),
+                "enable" => match crate::input::enable(&mut self.ctx) {
+                    Ok(text) => self.toast(text),
+                    Err(e) => self.items.push(Item::Error(e)),
+                },
+                _ => self.pager("Desktop pointer", crate::input::status(&self.ctx)),
+            },
+            "/login" => self.login = Some(rest.to_string()),
+            "/logout" if !rest.is_empty() => {
+                if rest == "claude" || rest == "claude-cli" {
+                    self.toast("Claude logout runs in a terminal: penelope logout claude".to_string());
+                } else {
+                    self.toast(crate::auth::remove(rest));
+                }
+                self.refresh_side();
+            }
+            "/logout" => self.toast("/logout NAME removes a stored key".to_string()),
             "/scout" => {
                 let modes = ["auto", "web", "offer", "off"];
                 let now = self.ctx.cfg["delegate"].as_str().unwrap_or("auto").to_string();
@@ -641,7 +797,242 @@ impl App {
                 self.refresh_side();
             }
             "/stats" => self.pager("Routed tool output", tools::stats(&self.ctx)),
-            "/plugins" => self.pager("Plugins", plugins::list(&self.ctx)),
+            "/plugins" => {
+                let (verb, arg) = rest.split_once(char::is_whitespace).map(|(a, b)| (a, b.trim())).unwrap_or((rest, ""));
+                let report = match verb {
+                    "install" if !arg.is_empty() => plugins::install(&self.ctx, arg),
+                    "import" => {
+                        let lines = plugins::import_known(&self.ctx);
+                        if lines.is_empty() { "no new plugin found in the folders of other harnesses".to_string() } else { lines.join("\n") }
+                    }
+                    "allow" if !arg.is_empty() => plugins::set_allow(&self.ctx, arg, true),
+                    "deny" if !arg.is_empty() => plugins::set_allow(&self.ctx, arg, false),
+                    "update" if !arg.is_empty() => plugins::update(&self.ctx, arg),
+                    "remove" if !arg.is_empty() => plugins::remove(&self.ctx, arg),
+                    "" => plugins::list(&self.ctx),
+                    other => format!("unknown plugin command {} (install LINK, import, allow NAME, deny NAME, update NAME, remove NAME)", other),
+                };
+                self.refresh_side();
+                self.pager("Plugins", report);
+            }
+            "/btw" if !rest.is_empty() => {
+                let report = tools::memory_note_scope(&self.ctx, "", rest, "project");
+                self.note("✦", "learned", report, art::CLAY);
+                self.flash = Some((Mood::Learned, Instant::now()));
+                self.refresh_side();
+            }
+            "/btw" => self.toast("/btw TEXT keeps a quick note".to_string()),
+            "/rules" if !rest.is_empty() => {
+                let report = tools::memory_note_scope(&self.ctx, "rules", rest, "global");
+                self.note("✦", "learned", report, art::CLAY);
+                self.flash = Some((Mood::Learned, Instant::now()));
+                self.refresh_side();
+            }
+            "/rules" => self.pager("Shared rules", tools::memory_go(&self.ctx, "rules")),
+            "/agents" => self.pager("Agents", crate::agents::list(&self.ctx)),
+            "/orchestrate" if !rest.is_empty() => {
+                let spec = crate::agents::parse(rest).unwrap_or_else(|_| crate::agents::Spec {
+                    name: "orchestrator".into(), role: "orchestrator".into(), thinking: "high".into(), goal: rest.to_string(),
+                    max_sub_agents: 3, max_parallel: 2, max_steps: 12, budget_eur: 0.0, model: String::new(),
+                    verify: self.ctx.cfg["agent_verify"].as_bool().unwrap_or(true), language: "en".into(), mcp: Vec::new() });
+                let _ = crate::agents::save(&self.ctx, &spec);
+                self.start_agent(spec);
+            }
+            "/orchestrate" => self.toast("/orchestrate GOAL or $name(goal=\"...\")".to_string()),
+            "/brain" if rest == "write" => {
+                match crate::brain::write_vault(&self.ctx) {
+                    Ok((path, files)) => {
+                        self.note("◆", "memory", format!("{} files in {} · open it as a vault in Obsidian", files, crate::brain::show(&path)), art::SEA);
+                        self.refresh_side();
+                    }
+                    Err(e) => self.items.push(Item::Error(e)),
+                }
+            }
+            "/brain" => self.overlay = Overlay::Brain { scroll: 0 },
+            "/cost" => self.pager("Cost in euro", crate::cost::report(&self.ctx)),
+            "/route" => self.pager("Roles and models", crate::route::report(&self.ctx)),
+            "/tools" => self.pager("Tool contracts", crate::route::table(&self.ctx)),
+            "/consolidate" => {
+                let users: Vec<String> = self.items.iter().filter_map(|i| if let Item::User(t) = i { Some(t.clone()) } else { None }).collect();
+                let ids = tools::consolidate(&self.ctx, &users);
+                if ids.is_empty() { self.toast("no lasting rule found in this session".to_string()); }
+                for id in ids { self.note("✦", "learned", format!("{} (shared by every project)", id), art::CLAY); }
+                self.refresh_side();
+            }
+            "/context" if !rest.is_empty() => {
+                let expanded = crate::context::expand(&self.ctx, rest);
+                let (notes, trail, _) = tools::recall_all(&self.ctx, &expanded.text, 1600);
+                let path = trail.last().cloned().unwrap_or_else(|| "start".into());
+                let body = format!("{} bytes after @ expansion · memory waypoint {}\n\n--- what the model would read after the request ---\n{}\n\n--- notes on the way ---\n{}",
+                                   expanded.text.len(), path, expanded.text, if notes.is_empty() { "(none)".to_string() } else { notes });
+                self.pager("Context preview", body);
+            }
+            "/context" => self.toast("/context TEXT shows what @ and the memory map would send".to_string()),
+            "/search" if rest == "health" => self.pager("Search engine health", crate::search::health(&self.ctx, false)),
+            "/search" if !rest.is_empty() => {
+                let q = rest.to_string();
+                self.start_bg(move |ctx| {
+                    let opts = crate::search::Options { limit: 8, ..Default::default() };
+                    crate::search::search_hits(&ctx, &q, &opts).map(|(hits, engines)| crate::tools::guard(&ctx, &crate::search::format_hits(&hits, &q, &engines)))
+                });
+            }
+            "/search" => self.toast("/search WORDS".to_string()),
+            "/research" if !rest.is_empty() => {
+                let q = rest.to_string();
+                self.start_bg(move |ctx| Ok(crate::research::run(&ctx, &q, "standard", 4, "")));
+            }
+            "/research" => self.toast("/research QUESTION".to_string()),
+            "/mcp" => {
+                if rest == "probe" {
+                    self.start_bg(|ctx| Ok(crate::mcpclient::list(&ctx, true)));
+                } else if rest.starts_with("call ") {
+                    let mut parts = rest[5..].splitn(3, char::is_whitespace);
+                    let server = parts.next().unwrap_or("").to_string();
+                    let tool = parts.next().unwrap_or("").to_string();
+                    let args: serde_json::Value = parts.next().and_then(|j| serde_json::from_str(j).ok()).unwrap_or_else(|| serde_json::json!({}));
+                    self.start_bg(move |ctx| crate::mcpclient::call(&ctx, &server, &tool, &args));
+                } else if rest.starts_with("add ") {
+                    let parts: Vec<&str> = rest[4..].split_whitespace().collect();
+                    if parts.len() < 2 {
+                        self.toast("/mcp add NAME COMMAND [ARGS...] [--allow]".to_string());
+                    } else {
+                        let allow = parts.iter().any(|p| *p == "--allow");
+                        let extra: Vec<String> = parts[2..].iter().filter(|p| **p != "--allow").map(|p| p.to_string()).collect();
+                        let report = crate::plugins::mcp_add(&self.ctx, parts[0], parts[1], &extra, allow);
+                        self.pager("MCP servers", report);
+                    }
+                } else if rest.starts_with("remove ") {
+                    self.pager("MCP servers", crate::plugins::mcp_remove(&self.ctx, rest[7..].trim()));
+                } else if rest.starts_with("allow ") {
+                    self.pager("MCP servers", crate::plugins::mcp_set_allow(&self.ctx, rest[6..].trim(), true));
+                } else if rest.starts_with("deny ") {
+                    self.pager("MCP servers", crate::plugins::mcp_set_allow(&self.ctx, rest[5..].trim(), false));
+                } else {
+                    self.pager("MCP servers", crate::mcpclient::list(&self.ctx, false));
+                }
+            }
+            "/screen" => {
+                let (verb, arg) = rest.split_once(char::is_whitespace).map(|(a, b)| (a, b.trim())).unwrap_or((rest, ""));
+                match verb {
+                    "" | "tools" => self.start_bg(|ctx| crate::screen::tools(&ctx).map(|list| list.iter().map(|(n, d)| format!("{}: {}", n, d.chars().take(120).collect::<String>())).collect::<Vec<_>>().join("\n"))),
+                    "open" if !arg.is_empty() => {
+                        let url = arg.to_string();
+                        self.start_bg(move |ctx| crate::screen::tool(&ctx, &serde_json::json!({"action": "open", "url": url, "task": "read this page", "level": "lean"})));
+                    }
+                    "see" | "snapshot" => self.start_bg(|ctx| crate::screen::tool(&ctx, &serde_json::json!({"action": "snapshot", "level": "lean"}))),
+                    "click" if !arg.is_empty() => {
+                        let id = arg.to_string();
+                        self.start_bg(move |ctx| crate::screen::tool(&ctx, &serde_json::json!({"action": "click", "id": id})));
+                    }
+                    "type" if !arg.is_empty() => {
+                        let (id, text) = arg.split_once(char::is_whitespace).unwrap_or((arg, ""));
+                        let (id, text) = (id.to_string(), text.to_string());
+                        self.start_bg(move |ctx| crate::screen::tool(&ctx, &serde_json::json!({"action": "type", "id": id, "text": text})));
+                    }
+                    "desktop" => self.start_bg(|ctx| crate::screen::tool(&ctx, &serde_json::json!({"action": "desktop", "level": "lean"}))),
+                    "desktop-click" if !arg.is_empty() => {
+                        let find = arg.to_string();
+                        self.start_bg(move |ctx| {
+                            let before = crate::screen::tool(&ctx, &serde_json::json!({"action": "desktop", "find": find, "level": "lean"}))?;
+                            let mut id = None;
+                            for line in before.lines() {
+                                if !line.to_lowercase().contains(&find.to_lowercase()) { continue; }
+                                if let Some(word) = line.split_whitespace().find(|w| {
+                                    let w = w.trim_matches(|c: char| !c.is_ascii_alphanumeric());
+                                    w.len() > 3 && w.chars().any(|c| c.is_ascii_digit()) && w.chars().next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false)
+                                }) {
+                                    id = Some(word.trim_matches(|c: char| !c.is_ascii_alphanumeric()).to_string());
+                                    break;
+                                }
+                            }
+                            let Some(id) = id else { return Err(format!("no element with the text \"{}\"", find)); };
+                            let click = crate::screen::tool(&ctx, &serde_json::json!({"action": "desktop_click", "id": id}))?;
+                            let after = crate::screen::tool(&ctx, &serde_json::json!({"action": "desktop", "level": "lean"}))?;
+                            Ok(format!("element {} · {}\n{}\n--- after ---\n{}", id, find, click, after))
+                        });
+                    }
+                    "call" if !arg.is_empty() => {
+                        let mut parts = arg.splitn(2, char::is_whitespace);
+                        let tool = parts.next().unwrap_or("").to_string();
+                        let args: serde_json::Value = parts.next().and_then(|j| serde_json::from_str(j).ok()).unwrap_or_else(|| serde_json::json!({}));
+                        self.start_bg(move |ctx| crate::screen::tool(&ctx, &serde_json::json!({"action": "call", "tool": tool, "arguments": args})));
+                    }
+                    other => self.toast(format!("/screen {} is none of tools, open URL, see, click ID, type ID TEXT, desktop, desktop-click TEXT, call TOOL JSON", other)),
+                }
+            }
+            "/cursor" => {
+                let mut parts = rest.split_whitespace();
+                let x: i64 = parts.next().and_then(|n| n.parse().ok()).unwrap_or(0);
+                let y: i64 = parts.next().and_then(|n| n.parse().ok()).unwrap_or(0);
+                let click = parts.any(|p| p == "click");
+                match crate::cursor::tool(&self.ctx, &serde_json::json!({"x": x, "y": y, "click": click})) {
+                    Ok(text) => self.toast(text),
+                    Err(e) => self.items.push(Item::Error(e)),
+                }
+            }
+            "/export" => {
+                let id = self.session_id.clone().unwrap_or_else(|| "new".to_string());
+                let mut body = format!("# Penelope session {}\n\nExported {}.\n\n", id, crate::sessions::stamp(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)));
+                for item in &self.items {
+                    match item {
+                        Item::User(t) => body.push_str(&format!("## User\n\n{}\n\n", t)),
+                        Item::Reply(t) => body.push_str(&format!("{}\n\n", t)),
+                        Item::Tool { name, detail, state, summary, .. } => body.push_str(&format!("- tool `{}` {} — {} · {}\n", name, detail, if *state == ToolState::Failed { "failed" } else { "ok" }, summary)),
+                        Item::Note { label, text, .. } => body.push_str(&format!("- {}: {}\n", label, text)),
+                        Item::Error(t) => body.push_str(&format!("- error: {}\n", t)),
+                    }
+                }
+                let dir = self.ctx.root.join("exports");
+                let _ = fs::create_dir_all(&dir);
+                let path = dir.join(format!("{}.md", id));
+                match fs::write(&path, body) {
+                    Ok(_) => self.toast(format!("session written to {}", crate::files::show(&path))),
+                    Err(e) => self.items.push(Item::Error(format!("the export failed: {}", e))),
+                }
+            }
+            "/skills" => {
+                let list = crate::skills::list(&self.ctx);
+                let body = if list.is_empty() {
+                    "no skill written here yet. A turn with 5 or more successful tool calls writes one; the model can write one with skill_new.".to_string()
+                } else {
+                    list.iter().map(|(n, d)| format!("{}: {}", n, d)).collect::<Vec<_>>().join("\n")
+                };
+                self.pager("Skills of this project", body);
+            }
+            "/forget" if !rest.is_empty() => {
+                let report = tools::memory_forget(&self.ctx, rest, "auto");
+                self.note("↺", "unravel", report, art::SEA);
+                self.refresh_side();
+            }
+            "/forget" => self.toast("/forget TEXT takes back one note".to_string()),
+            "/price" if !rest.is_empty() => {
+                let parts: Vec<&str> = rest.split_whitespace().collect();
+                if parts.len() != 3 || parts[1].parse::<f64>().is_err() || parts[2].parse::<f64>().is_err() {
+                    self.toast("/price MODEL INPUT OUTPUT in dollars per million tokens".to_string());
+                } else {
+                    let (model, input, output) = (parts[0], parts[1].parse::<f64>().unwrap(), parts[2].parse::<f64>().unwrap());
+                    self.ctx.cfg["prices"][model] = serde_json::json!([input, output]);
+                    save_config(&self.ctx);
+                    self.toast(format!("price for {}: {} / {} dollars per million tokens", model, input, output));
+                    self.refresh_side();
+                }
+            }
+            "/auto" => {
+                let now = self.ctx.cfg["auto_learn"].as_bool().unwrap_or(true);
+                self.ctx.cfg["auto_learn"] = serde_json::json!(!now);
+                save_config(&self.ctx);
+                self.toast(format!("auto-learning is now {}", if now { "off" } else { "on" }));
+            }
+            "/learn" => {
+                let lessons = tools::memory_go(&self.ctx, "tools");
+                let feedback = tools::memory_go(&self.ctx, "rules feedback");
+                self.pager("What Penelope learned", format!("Lessons from tool calls\n\n{}\n\nComplaints and rules\n\n{}", lessons, feedback));
+            }
+            "/forge" if !rest.is_empty() => {
+                let prompt = format!("Read the memory waypoint \"{}\". If its notes describe a command that repeats, write one tool with tool_new: a lower case name, a short description, a JSON schema and a command with {{argument}} placeholders. If the notes do not describe such a command, say so and write nothing.", rest);
+                self.start_turn(prompt);
+            }
+            "/forge" => self.toast("/forge TOPIC writes a tool from the notes at that waypoint".to_string()),
             "/doctor" => self.pager("Doctor", crate::doctor_text(&self.ctx)),
             "/copy" => self.copy_last(),
             "/shot" => self.shot = true,
@@ -677,8 +1068,22 @@ impl App {
                 let _ = writeln!(f, "{}", serde_json::to_string(&text).unwrap());
             }
         }
-        if text.starts_with('/') {
-            self.command(&text);
+        let actions = crate::context::parse(&text);
+        let many = actions.len() > 1 || matches!(actions.first(), Some(crate::context::Action::Command(_) | crate::context::Action::Agent(_)));
+        if many {
+            for action in actions {
+                match action {
+                    crate::context::Action::Command(command) => self.command(&format!("/{}", command)),
+                    crate::context::Action::Agent(call) => match crate::agents::parse(&call) {
+                        Ok(spec) => {
+                            let _ = crate::agents::save(&self.ctx, &spec);
+                            self.start_agent(spec);
+                        }
+                        Err(e) => self.items.push(Item::Error(e)),
+                    },
+                    crate::context::Action::Turn(turn) => self.start_turn(turn),
+                }
+            }
         } else {
             self.start_turn(text);
         }
@@ -763,6 +1168,22 @@ impl App {
                 KeyCode::Enter => {
                     open = Some(self.tabs.len().saturating_sub(1 + *sel));        // the list shows the newest first
                     close = true;
+                }
+                _ => {}
+            },
+            Overlay::Brain { scroll } => match key.code {
+                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => close = true,
+                KeyCode::Up => *scroll = scroll.saturating_sub(1),
+                KeyCode::Down => *scroll = (*scroll + 1).min(crate::brain::ascii(&self.ctx).lines().count().saturating_sub(1)),
+                KeyCode::PageUp => *scroll = scroll.saturating_sub(10),
+                KeyCode::PageDown => *scroll += 10,
+                KeyCode::Char('w') => {
+                    let report = match crate::brain::write_vault(&self.ctx) {
+                        Ok((path, files)) => format!("{} files in {} · open it as a vault in Obsidian", files, crate::brain::show(&path)),
+                        Err(e) => e,
+                    };
+                    self.overlay = Overlay::None;
+                    self.toast(report);
                 }
                 _ => {}
             },
@@ -911,7 +1332,7 @@ impl App {
         let path = dir.join(format!("screen-{}.svg", n));
         match fs::write(&path, svg) {
             Ok(_) => {
-                let (full, home) = (path.display().to_string(), std::env::var("HOME").unwrap_or_default());
+                let (full, home) = (path.display().to_string(), crate::platform::home_str());
                 let short = if !home.is_empty() && full.starts_with(&home) { format!("~{}", &full[home.len()..]) } else { full };
                 self.toast(format!("screen saved as {}", short));
             }
@@ -939,7 +1360,11 @@ fn help_text() -> String {
 /// Runs the interface until the person leaves it.
 pub fn run(ctx: Ctx, resume: Option<serde_json::Value>) -> Result<(), String> {
     art::detect_colour();
+    let imported = plugins::import_known(&ctx);
     let mut app = App::new(ctx);
+    for line in imported {
+        app.note("◆", "plugins", line, art::SEA);
+    }
     if let Some(entry) = resume {
         app.open_session(&entry);
     }
@@ -957,8 +1382,25 @@ pub fn run(ctx: Ctx, resume: Option<serde_json::Value>) -> Result<(), String> {
                 app.save_shot(svg);
             }
             if app.quit {
+                let users: Vec<String> = app.items.iter().filter_map(|i| if let Item::User(t) = i { Some(t.clone()) } else { None }).collect();
+                let _ = tools::consolidate(&app.ctx, &users);
                 app.save_session();
                 return Ok(());
+            }
+            if let Some(provider) = app.login.take() {   // Claude login or an API key needs the plain terminal
+                let _ = execute!(std::io::stdout(), DisableMouseCapture, DisableBracketedPaste);
+                ratatui::restore();
+                match crate::auth::login(&provider) {
+                    Ok(text) => println!("{}", text),
+                    Err(e) => eprintln!("{}", e),
+                }
+                println!("press enter to return to the interface");
+                let _ = std::io::stdin().read_line(&mut String::new());
+                terminal = ratatui::init();
+                let _ = execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste);
+                app.toast("login done".to_string());
+                app.refresh_side();
+                continue;
             }
             if app.setup {                       // the setup asks on the plain terminal, then the interface comes back
                 app.setup = false;
@@ -1158,6 +1600,46 @@ mod tests {
         assert!(rows.iter().any(|r| r.contains("8 more removed lines")), "{}", rows.join("\n"));
         let small = screen(&mut a, 80, 20);
         assert!(small.contains("-    1  old 1") && small.contains("more changed lines") && !small.contains("+    2  new 2"), "{}", small);
+    }
+
+    #[test]
+    fn several_commands_in_one_prompt_run_in_order() {
+        let mut a = app();
+        type_text(&mut a, "/note tests run with cargo test;;/cost");
+        press(&mut a, KeyCode::Enter);
+        assert!(a.items.iter().any(|i| matches!(i, Item::Note { label: "learned", .. })), "the note was not stored");
+        assert!(matches!(&a.overlay, Overlay::Pager { title, .. } if title == "Cost in euro"), "the cost page did not open");
+        assert!(a.side.waypoints >= 1);
+    }
+
+    #[test]
+    fn the_brain_opens_as_a_graph_and_the_context_preview_shows_the_block() {
+        let mut a = app();
+        a.command("/note rust errors use anyhow");
+        a.command("/brain");
+        let text = screen(&mut a, 110, 36);
+        assert!(text.contains("memory map as a graph") && text.contains("waypoints") && text.contains("● notes"), "{}", text);
+        let file = std::env::temp_dir().join(format!("penelope-tui-context-{}.txt", std::process::id()));
+        fs::write(&file, "one\ntwo\n").unwrap();
+        a.overlay = Overlay::None;
+        a.command(&format!("/context @{}", file.display()));
+        assert!(matches!(&a.overlay, Overlay::Pager { title, .. } if title == "Context preview"));
+        let _ = fs::remove_file(file);
+    }
+
+    #[test]
+    fn export_price_forget_and_learn_work() {
+        let mut a = app();
+        a.command("/note rust errors use anyhow in the binary");
+        a.command("/forget use anyhow in the binary");
+        assert!(a.items.iter().any(|i| matches!(i, Item::Note { label: "unravel", .. })));
+        a.command("/price test-model 1.5 4.5");
+        assert_eq!(a.ctx.cfg["prices"]["test-model"][1], 4.5);
+        a.command("/export");
+        let exported = a.ctx.root.join("exports/new.md");
+        assert!(exported.is_file() && fs::read_to_string(&exported).unwrap().contains("Penelope session"), "{}", exported.display());
+        a.command("/learn");
+        assert!(matches!(a.overlay, Overlay::Pager { .. }));
     }
 
     #[test]

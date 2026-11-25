@@ -8,7 +8,7 @@ use std::fs;
 use std::process::{Command, Stdio};
 
 /// The tools a scout may call: everything that looks, nothing that changes a file.
-pub const TOOLS: &[&str] = &["web_search", "fetch", "read", "find", "grep", "tree", "outline", "run", "run_detail", "memory_go"];
+pub const TOOLS: &[&str] = &["web_search", "research", "fetch", "read", "find", "grep", "tree", "outline", "run", "run_detail", "memory_go"];
 
 const SYSTEM: &str = "You are the scout of a coding agent. You get one lookup task. Find the answer with the tools: web_search and fetch \
 for the web, tree, find, grep, outline and read for files, run for read-only commands. Use as few steps as you can. Then write a report of at most 15 \
@@ -40,16 +40,11 @@ fn claude(ctx: &Ctx, task: &str, cwd: &str) -> Result<Report, String> {
         env["PENELOPE_APPROVE_DIR"] = json!(dir);
     }
     let cfg = json!({"mcpServers": {"penelope": {"command": exe.to_string_lossy(), "args": ["mcp", "--root", ctx.root.to_string_lossy()], "env": env}}}).to_string();
-    // With the search source "claude" the scout searches with the tool of the claude command itself, one process less per query.
-    let own_search = crate::search::kind(ctx) == "claude";
-    let mut allowed: Vec<String> = TOOLS.iter().filter(|t| !(own_search && **t == "web_search")).map(|t| format!("mcp__penelope__{}", t)).collect();
-    if own_search {
-        allowed.push("WebSearch".to_string());
-    }
-    let system = if own_search { SYSTEM.replace("web_search and fetch", "WebSearch and fetch") } else { SYSTEM.to_string() };
+    let allowed: Vec<String> = TOOLS.iter().map(|t| format!("mcp__penelope__{}", t)).collect();
+    let system = SYSTEM.to_string();
     let mut cmd = Command::new("claude");
     cmd.args(["-p", task, "--output-format", "json", "--model", model(ctx)["model"].as_str().unwrap_or("haiku"), "--append-system-prompt", &system,
-              "--strict-mcp-config", "--mcp-config", &cfg, "--tools", if own_search { "WebSearch" } else { "" }, "--allowedTools", &allowed.join(",")]);
+              "--strict-mcp-config", "--mcp-config", &cfg, "--tools", "", "--allowedTools", &allowed.join(",")]);
     if !cwd.is_empty() {
         cmd.current_dir(cwd);
     }
@@ -74,16 +69,13 @@ fn api(ctx: &Ctx, task: &str, cwd: &str) -> Result<Report, String> {
     let mut history = vec![crate::llm::user_message(task)];
     let mut usage = crate::llm::Usage::default();
     IN_LOOP.with(|f| f.set(true));
-    let out = crate::llm::run_loop(model(ctx), SYSTEM, &mut history, &tools, 10, None, &mut usage, &mut |call| {
+    let out = crate::route::with_role("scout", || crate::llm::run_loop(model(ctx), SYSTEM, &mut history, &tools, 10, None, &mut usage, &mut |call| {
         let mut args = call.args.clone();
         if args["cwd"].is_null() && !cwd.is_empty() {
             args["cwd"] = json!(cwd);
         }
-        match mcp::call(ctx, &call.name, &args) {
-            Ok(text) => (text, true),
-            Err(e) => (e, false),
-        }
-    }, &mut |_| {});
+        crate::tools::dispatch_retry(ctx, "scout", &call.name, &args)
+    }, &mut |_| {}));
     IN_LOOP.with(|f| f.set(false));
     Ok(Report { text: out?, steps: usage.steps, tokens_in: usage.tokens_in, tokens_out: usage.tokens_out })
 }
@@ -96,6 +88,9 @@ pub fn run(ctx: &Ctx, task: &str, cwd: &str) -> String {
     if task.trim().is_empty() {
         return "give the scout a task: the question and what you need back".to_string();
     }
+    if let Some(family) = crate::crew::family_of(model(ctx)) {
+        return format!("the scout model is {} 1, a Laertes family in training. Choose a hosted model: penelope provider use NAME --role scout.", family);
+    }
     let (task, _) = crate::tools::guard_count(ctx, task);
     let start = std::time::Instant::now();
     let result = match model(ctx)["kind"].as_str().unwrap_or("claude-cli") {
@@ -104,6 +99,7 @@ pub fn run(ctx: &Ctx, task: &str, cwd: &str) -> String {
     };
     match result {
         Ok(r) => {
+            crate::cost::record(ctx, "scout", model(ctx)["model"].as_str().unwrap_or(""), r.tokens_in, r.tokens_out);
             let path = ctx.root.join("stats.json");
             let mut v: Value = fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(json!({}));
             let e = &mut v["scout"];
@@ -111,7 +107,8 @@ pub fn run(ctx: &Ctx, task: &str, cwd: &str) -> String {
                         "tokens_in": e["tokens_in"].as_u64().unwrap_or(0) + r.tokens_in, "tokens_out": e["tokens_out"].as_u64().unwrap_or(0) + r.tokens_out});
             let _ = fs::write(path, serde_json::to_string_pretty(&v).unwrap());
             format!("report of the scout on {}: {} steps, {} tokens in, {} out, {} s. None of these tokens reached the main model.\n{}",
-                    model(ctx)["model"].as_str().unwrap_or("?"), r.steps, r.tokens_in, r.tokens_out, start.elapsed().as_secs(), r.text)
+                    model(ctx)["model"].as_str().unwrap_or("?"), r.steps, r.tokens_in, r.tokens_out, start.elapsed().as_secs(),
+                    crate::tools::guard(ctx, &r.text))
         }
         Err(e) => format!("the scout failed: {}", e),
     }

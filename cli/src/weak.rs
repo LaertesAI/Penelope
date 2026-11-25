@@ -6,9 +6,18 @@ use std::process::{Command, Stdio};
 
 /// One question to a model described by `{"kind": ..., "model": ...}`. Returns the answer text.
 pub fn ask(model: &Value, system: &str, user: &str) -> Result<String, String> {
+    ask_count(model, system, user).map(|(text, _, _)| text)
+}
+
+/// The same question, with the tokens the endpoint counted. The claude command in text form reports no usage, so its
+/// two numbers stay zero rather than a guess.
+pub fn ask_count(model: &Value, system: &str, user: &str) -> Result<(String, u64, u64), String> {
+    if let Some(family) = crate::crew::family_of(model) {
+        return Err(format!("{} 1 is one of the Laertes families and is in training. Choose a hosted model for this role.", family));
+    }
     match model["kind"].as_str().unwrap_or("claude-cli") {
         kind if crate::llm::is_api(kind) => ask_api(model, system, user),
-        _ => ask_claude_cli(model, system, user),
+        _ => ask_claude_cli(model, system, user).map(|t| (t, 0, 0)),
     }
 }
 
@@ -30,10 +39,10 @@ fn ask_claude_cli(model: &Value, system: &str, user: &str) -> Result<String, Str
 }
 
 /// One question through an HTTP endpoint, in the format of the setting's kind and without tools.
-fn ask_api(model: &Value, system: &str, user: &str) -> Result<String, String> {
+fn ask_api(model: &Value, system: &str, user: &str) -> Result<(String, u64, u64), String> {
     let reply = crate::llm::chat(model, system, &[crate::llm::user_message(user)], &[])?;
     if reply.text.is_empty() {
         return Err(format!("no answer text in the response (stop reason {})", reply.stop));
     }
-    Ok(reply.text)
+    Ok((reply.text, reply.tokens_in, reply.tokens_out))
 }

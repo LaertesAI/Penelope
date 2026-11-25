@@ -4,13 +4,14 @@
 
 use crate::config::Ctx;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::io::Read;
+use std::path::{Component, Path, PathBuf};
 
 /// Folders no search walks into.
 const SKIP: &[&str] = &[".git", "target", "node_modules", ".venv", "venv", "__pycache__", ".penelope", "dist", ".cache"];
 
 pub fn resolve(path: &str, cwd: &str) -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = crate::platform::home_str();
     let p = match path.strip_prefix("~/") {
         Some(rest) if !home.is_empty() => Path::new(&home).join(rest),
         _ => PathBuf::from(path),
@@ -26,7 +27,7 @@ pub fn resolve(path: &str, cwd: &str) -> PathBuf {
 
 /// A path for a message, with the home folder written as `~`. `resolve` reads that form again.
 pub fn show(p: &Path) -> String {
-    let (text, home) = (p.display().to_string(), std::env::var("HOME").unwrap_or_default());
+    let (text, home) = (p.display().to_string(), crate::platform::home_str());
     match text.strip_prefix(&home) {
         Some(rest) if home.len() > 1 && rest.starts_with('/') => format!("~{}", rest),
         _ => text,
@@ -176,6 +177,9 @@ pub fn undo(ctx: &Ctx) -> String {
 
 /// None if the change may happen, else the text of the refusal. `diff` holds the changed lines for the question.
 fn permit(ctx: &Ctx, what: &str, cwd: &str, diff: &str) -> Option<String> {
+    if ctx.cfg["edit_policy"].as_str() == Some("never") {
+        return Some("NOT changed. The mode is safe: file changes are refused. Switch with /mode auto or penelope mode auto.".to_string());
+    }
     if ctx.cfg["edit_policy"].as_str() == Some("all") {
         return None;
     }
@@ -184,6 +188,183 @@ fn permit(ctx: &Ctx, what: &str, cwd: &str, diff: &str) -> Option<String> {
         Some(false) => Some("NOT changed. The user declined this change.".to_string()),
         None => Some("NOT changed. Outside the full screen interface nobody can answer the question. The user can allow every change \
                       with \"edit_policy\": \"all\" in .penelope/config.json.".to_string()),
+    }
+}
+
+/// What a ZIP holds, before anything is written. The list is the question the person sees.
+pub struct ZipPlan {
+    pub files: usize,
+    pub folders: usize,
+    pub bytes: u64,
+    pub names: Vec<String>,
+}
+
+/// What an unpacked ZIP left behind.
+pub struct Unpacked {
+    pub files: usize,
+    pub folders: usize,
+    pub bytes: u64,
+    pub target: PathBuf,
+    /// A single wrapping folder in the archive, if the archive has one.
+    pub top: Option<PathBuf>,
+}
+
+const ZIP_MAX_ENTRIES: usize = 10_000;
+const ZIP_MAX_BYTES: u64 = 200 * 1024 * 1024;
+const ZIP_MAX_FILE: u64 = 50 * 1024 * 1024;
+
+/// Reads the directory of a ZIP without writing. Every name is checked: no absolute path, no parent escape, no
+/// symbolic link. This is the same rule the extractor applies, so the question cannot promise something else.
+pub fn zip_plan(archive: &Path) -> Result<ZipPlan, String> {
+    let file = std::fs::File::open(archive).map_err(|e| format!("cannot open {}: {}", show(archive), e))?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("{} is no readable ZIP: {}", show(archive), e))?;
+    if zip.len() > ZIP_MAX_ENTRIES {
+        return Err(format!("NOT unpacked. The archive has {} entries; the limit is {}.", zip.len(), ZIP_MAX_ENTRIES));
+    }
+    let (mut files, mut folders, mut bytes) = (0usize, 0usize, 0u64);
+    let mut names = Vec::new();
+    for i in 0..zip.len() {
+        let entry = zip.by_index_raw(i).map_err(|e| format!("entry {} cannot be read: {}", i, e))?;
+        let name = entry.enclosed_name().ok_or_else(|| "NOT unpacked. An entry has a path outside the target.".to_string())?;
+        if entry.is_symlink() {
+            return Err(format!("NOT unpacked. Entry {} is a symbolic link.", name.display()));
+        }
+        if name.to_string_lossy().contains('\\') || name.to_string_lossy().contains(':') {
+            return Err(format!("NOT unpacked. Entry {} has a platform-dependent path.", name.display()));
+        }
+        if entry.size() > ZIP_MAX_FILE {
+            return Err(format!("NOT unpacked. Entry {} is {} MB; the limit per file is {} MB.", name.display(), entry.size() / 1_048_576, ZIP_MAX_FILE / 1_048_576));
+        }
+        bytes = bytes.saturating_add(entry.size());
+        if bytes > ZIP_MAX_BYTES {
+            return Err(format!("NOT unpacked. The unpacked size is over {} MB.", ZIP_MAX_BYTES / 1_048_576));
+        }
+        if entry.is_dir() { folders += 1; } else { files += 1; }
+        names.push(name.display().to_string());
+    }
+    Ok(ZipPlan { files, folders, bytes, names })
+}
+
+/// Unpacks a checked ZIP into an empty or new target folder. The caller asks the person first when this is a tool call.
+pub fn extract_zip(archive: &Path, target: &Path) -> Result<Unpacked, String> {
+    let plan = zip_plan(archive)?;
+    if target.exists() {
+        if std::fs::symlink_metadata(target).map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+            return Err(format!("NOT unpacked. {} is a symbolic link.", show(target)));
+        }
+        if !target.is_dir() {
+            return Err(format!("NOT unpacked. {} is a file.", show(target)));
+        }
+        if std::fs::read_dir(target).map(|mut d| d.next().is_some()).unwrap_or(true) {
+            return Err(format!("NOT unpacked. {} is not empty. Give another folder or remove it first.", show(target)));
+        }
+    } else {
+        std::fs::create_dir_all(target).map_err(|e| format!("cannot make {}: {}", show(target), e))?;
+    }
+    let result = (|| -> Result<Unpacked, String> {
+        let file = std::fs::File::open(archive).map_err(|e| format!("cannot open {}: {}", show(archive), e))?;
+        let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("{} is no readable ZIP: {}", show(archive), e))?;
+        let mut top_names = Vec::new();
+        let mut written = 0u64;
+        for i in 0..zip.len() {
+            let mut entry = zip.by_index(i).map_err(|e| format!("entry {} cannot be read: {}", i, e))?;
+            let name = entry.enclosed_name().ok_or_else(|| "an entry has a path outside the target".to_string())?;
+            if let Some(first) = name.components().next() {
+                let first = first.as_os_str().to_string_lossy().to_string();
+                if !top_names.contains(&first) { top_names.push(first); }
+            }
+            let out = target.join(&name);
+            if entry.is_dir() {
+                std::fs::create_dir_all(&out).map_err(|e| format!("cannot make {}: {}", show(&out), e))?;
+            } else {
+                if let Some(parent) = out.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| format!("cannot make {}: {}", show(parent), e))?;
+                }
+                let mut sink = std::fs::File::create(&out).map_err(|e| format!("cannot write {}: {}", show(&out), e))?;
+                let copied = std::io::copy(&mut entry.by_ref().take(ZIP_MAX_FILE + 1), &mut sink)
+                    .map_err(|e| format!("cannot unpack {}: {}", show(&out), e))?;
+                if copied > ZIP_MAX_FILE {
+                    return Err(format!("NOT unpacked. {} grows past {} MB.", name.display(), ZIP_MAX_FILE / 1_048_576));
+                }
+                written = written.saturating_add(copied);
+                if written > ZIP_MAX_BYTES {
+                    return Err(format!("NOT unpacked. The unpacked size is over {} MB.", ZIP_MAX_BYTES / 1_048_576));
+                }
+            }
+        }
+        // `a/` and nothing else at the top is the usual layout. When that folder has the name of the target, its
+        // content moves up one level, so `bundle.zip` into `bundle` does not make `bundle/bundle`.
+        let mut top = if top_names.len() == 1 {
+            let only = target.join(&top_names[0]);
+            if only.is_dir() && std::fs::read_dir(target).map(|mut d| d.all(|e| e.map(|e| e.path() == only).unwrap_or(false))).unwrap_or(false) {
+                Some(only)
+            } else { None }
+        } else { None };
+        if let (Some(only), Some(name)) = (top.clone(), target.file_name()) {
+            if only.file_name() == Some(name) {
+                let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+                let staging = target.with_file_name(format!(".penelope-flat-{}-{}", std::process::id(), stamp));
+                std::fs::create_dir(&staging).map_err(|e| format!("cannot make {}: {}", show(&staging), e))?;
+                for entry in std::fs::read_dir(&only).map_err(|e| format!("cannot read {}: {}", show(&only), e))? {
+                    let entry = entry.map_err(|e| e.to_string())?;
+                    std::fs::rename(entry.path(), staging.join(entry.file_name()))
+                        .map_err(|e| format!("cannot move {}: {}", show(&entry.path()), e))?;
+                }
+                std::fs::remove_dir_all(target).map_err(|e| format!("cannot clean {}: {}", show(target), e))?;
+                std::fs::rename(&staging, target).map_err(|e| format!("cannot finish {}: {}", show(target), e))?;
+                top = None;
+            }
+        }
+        Ok(Unpacked { files: plan.files, folders: plan.folders, bytes: plan.bytes, target: target.to_path_buf(), top })
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_dir_all(target);
+    }
+    result
+}
+
+fn in_workspace(base: &Path, target: &Path) -> bool {
+    let Ok(rel) = target.strip_prefix(base) else { return false; };
+    !rel.components().any(|c| matches!(c, Component::ParentDir))
+}
+
+/// The tool `unzip`: check, ask once with the file list, then unpack into the working folder.
+pub fn unzip(ctx: &Ctx, archive: &str, into: &str, cwd: &str) -> String {
+    let base = if cwd.is_empty() { std::env::current_dir().unwrap_or_default() } else { PathBuf::from(cwd) };
+    let base = std::fs::canonicalize(&base).unwrap_or(base);
+    let file = resolve(archive, cwd);
+    if !file.is_file() {
+        return format!("NOT unpacked. {} is no file.", show(&file));
+    }
+    let target = if into.trim().is_empty() {
+        let stem = file.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "unpacked".to_string());
+        let stem: String = stem.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '-' }).collect();
+        base.join(if stem.is_empty() { "unpacked" } else { &stem })
+    } else {
+        resolve(into, cwd)
+    };
+    if !in_workspace(&base, &target) {
+        return format!("NOT unpacked. {} is outside the working folder {}.", show(&target), show(&base));
+    }
+    if target == file || target.starts_with(&file) {
+        return "NOT unpacked. The target would overwrite the archive.".to_string();
+    }
+    let plan = match zip_plan(&file) { Ok(p) => p, Err(e) => return e };
+    let preview: Vec<String> = plan.names.iter().take(24).cloned().collect();
+    let size = if plan.bytes >= 1024 { format!("{} KB", plan.bytes / 1024) } else { format!("{} bytes", plan.bytes) };
+    let manifest = format!("{} files, {} folders, {}.\n{}{}", plan.files, plan.folders, size,
+                           preview.join("\n"), if plan.names.len() > preview.len() { format!("\n... {} more", plan.names.len() - preview.len()) } else { String::new() });
+    if let Some(refusal) = permit(ctx, &format!("Unpack {} into {}", show(&file), show(&target)), cwd, &manifest) {
+        return refusal;
+    }
+    match extract_zip(&file, &target) {
+        Ok(u) => {
+            let names: Vec<String> = plan.names.iter().take(5).cloned().collect();
+            let size = if u.bytes >= 1024 { format!("{} KB", u.bytes / 1024) } else { format!("{} bytes", u.bytes) };
+            format!("unpacked {} files, {} folders ({}) into {}{}", u.files, u.folders, size, show(&u.target),
+                    if names.is_empty() { String::new() } else { format!(" · {}", names.join(", ")) })
+        }
+        Err(e) => e,
     }
 }
 
@@ -556,11 +737,55 @@ mod tests {
     }
 
     #[test]
+    fn unzip_writes_inside_the_workspace_and_refuses_an_escape() {
+        let (ctx, dir) = ctx("unzip", "all");
+        let cwd = dir.to_string_lossy().to_string();
+        let archive = dir.join("bundle.zip");
+        let mut zip = zip::ZipWriter::new(fs::File::create(&archive).unwrap());
+        let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        use std::io::Write;
+        zip.start_file("bundle/readme.txt", opts).unwrap();
+        zip.write_all(b"hello from the zip").unwrap();
+        zip.start_file("bundle/notes/today.txt", opts).unwrap();
+        zip.write_all(b"note").unwrap();
+        zip.finish().unwrap();
+        let said = unzip(&ctx, &archive.to_string_lossy(), "", &cwd);
+        assert!(said.contains("unpacked 2 files") && said.contains("bundle"), "{}", said);
+        assert_eq!(fs::read_to_string(dir.join("bundle/readme.txt")).unwrap(), "hello from the zip");
+        assert!(unzip(&ctx, &archive.to_string_lossy(), "../outside", &cwd).contains("outside the working folder"));
+        fs::create_dir_all(dir.join("full")).unwrap();
+        fs::write(dir.join("full/x"), "x").unwrap();
+        assert!(unzip(&ctx, &archive.to_string_lossy(), "full", &cwd).contains("is not empty"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_zip_entry_that_climbs_out_is_refused_before_anything_is_written() {
+        let (ctx, dir) = ctx("zip-slip", "all");
+        let cwd = dir.to_string_lossy().to_string();
+        let archive = dir.join("evil.zip");
+        let mut zip = zip::ZipWriter::new(fs::File::create(&archive).unwrap());
+        let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        use std::io::Write;
+        zip.start_file("../escape.txt", opts).unwrap();
+        zip.write_all(b"outside").unwrap();
+        zip.finish().unwrap();
+        let said = unzip(&ctx, &archive.to_string_lossy(), "", &cwd);
+        assert!(said.contains("outside the target"), "{}", said);
+        assert!(!dir.parent().unwrap().join("escape.txt").exists());
+        assert!(!dir.join("evil").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_change_without_an_answer_is_refused() {
-        let (ctx, dir) = ctx("ask", "ask");
+        let (ask_ctx, dir) = ctx("ask", "ask");
         let cwd = dir.to_string_lossy().to_string();
         std::env::remove_var("PENELOPE_APPROVE_DIR");
-        assert!(write(&ctx, "a.txt", "x", &cwd).starts_with("NOT changed"));
+        assert!(write(&ask_ctx, "a.txt", "x", &cwd).starts_with("NOT changed"));
+        let (safe_ctx, safe_dir) = ctx("safe", "never");
+        assert!(write(&safe_ctx, "a.txt", "x", &safe_dir.to_string_lossy()).contains("mode is safe"));
+        assert!(!safe_dir.join("a.txt").exists());
         assert!(!dir.join("a.txt").exists());
         let _ = fs::remove_dir_all(&dir);
     }
