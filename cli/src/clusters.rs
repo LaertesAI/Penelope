@@ -100,6 +100,12 @@ pub struct Profile {
     /// A named profile that rewrites the task before the workers of this profile start. The named profile must be
     /// read-only and must not name a `before` of its own, so there is no hidden chain of prompt clusters.
     pub before: Option<String>,
+    /// A factory schedule: `every` repeats after a duration such as `3h`. The two fields are exclusive.
+    pub every: Option<String>,
+    /// A factory schedule: `at` is a time of day, `HH:MM`, once a day.
+    pub at: Option<String>,
+    /// The one purpose of a factory profile. A factory uses it as the cluster goal when its registry entry has none.
+    pub purpose: Option<String>,
 }
 
 /// A number that may arrive as `3`, `"3"` or `"3 reports"`.
@@ -305,7 +311,31 @@ fn parse_profile(value: &Value, fallback_name: &str) -> Result<Profile, String> 
         }
         None => None,
     };
-    Ok(Profile { name, workers: list, validator, max_models, max_depth, max_parallel, budget_eur, max_steps, retries, report_every, stuck_after, worktree, before })
+    // A factory profile carries its schedule. The two forms are exclusive and are validated here, so a timer is never
+    // written from a typo. The runner only reads the fields; the schedule itself lives in the operating system.
+    let every = match value.get("every") {
+        Some(Value::String(text)) => Some(crate::factories::normalize_every(text)
+            .map_err(|e| format!("profile {}: {}", name, e))?),
+        Some(value) if value.as_u64().is_some() => {
+            let seconds = value.as_u64().unwrap_or(0);
+            if seconds == 0 { return Err(format!("profile {}: every needs a duration such as 3h or 30m", name)); }
+            Some(crate::factories::normalize_every(&format!("{}s", seconds))
+                .map_err(|e| format!("profile {}: {}", name, e))?)
+        }
+        Some(Value::Null) | None => None,
+        Some(_) => return Err(format!("profile {}: every needs a duration such as 3h or 30m", name)),
+    };
+    let at = match value.get("at") {
+        Some(Value::String(text)) => Some(crate::factories::normalize_at(text)
+            .map_err(|e| format!("profile {}: {}", name, e))?),
+        Some(Value::Null) | None => None,
+        Some(_) => return Err(format!("profile {}: at needs a time of day such as 09:30", name)),
+    };
+    if every.is_some() && at.is_some() {
+        return Err(format!("profile {}: use every or at, not both", name));
+    }
+    let purpose = value["purpose"].as_str().map(str::trim).filter(|s| !s.is_empty()).map(|s| s.chars().take(1000).collect::<String>());
+    Ok(Profile { name, workers: list, validator, max_models, max_depth, max_parallel, budget_eur, max_steps, retries, report_every, stuck_after, worktree, before, every, at, purpose })
 }
 
 fn builtin(name: &str) -> Option<Profile> {
@@ -641,10 +671,12 @@ pub fn profiles_text(ctx: &Ctx) -> String {
             Ok(p) => {
                 let parts: Vec<String> = p.workers.iter().map(|w| format!("{} ({})", w.name, w.role))
                     .chain(p.validator.iter().map(|v| format!("{} (validator)", v.name))).collect();
-                out.push_str(&format!("{:<12} {} · max {} parts, depth {}, {} parallel, {} retries, report every {}s, stuck after {}{}{}\n  {}\n", name, parts.join(", "),
+                out.push_str(&format!("{:<12} {} · max {} parts, depth {}, {} parallel, {} retries, report every {}s, stuck after {}{}{}{}\n  {}\n", name, parts.join(", "),
                                       p.max_models, p.max_depth, p.max_parallel, p.retries, p.report_every, p.stuck_after,
                                       if p.worktree { " · worktree" } else { "" },
                                       p.before.as_deref().map(|b| format!(" · before {}", b)).unwrap_or_default(),
+                                      p.every.as_deref().map(|e| format!(" · every {}", e))
+                                          .or_else(|| p.at.as_deref().map(|a| format!(" · daily at {}", a))).unwrap_or_default(),
                                       if p.budget_eur > 0.0 { format!("{:.2} EUR budget", p.budget_eur) } else { "no euro limit".to_string() }));
             }
             Err(e) => out.push_str(&format!("{:<12} {}\n", name, e)),
@@ -2491,6 +2523,31 @@ fn respawn_inner(ctx: &Ctx, id: &str, extra: &str, session_before: Option<f64>) 
     save(ctx, &new)?;
     let said = run_cluster_inner(ctx, &new.id, session_before)?;
     Ok((new.id.clone(), format!("cluster {} respawned ({} of 2) as {}\n{}", old.id, new.respawns, new.id, said)))
+}
+
+/// A profile as JSON again. A factory uses it to copy a base profile into its own profile file, which then carries the
+/// schedule and one purpose. Every part field that `parse_profile` reads is written back, so the copy is complete.
+pub fn profile_json(p: &Profile, name: &str) -> Value {
+    let part_value = |part: &Part| {
+        let mut value = json!({"name": part.name, "role": part.role, "slot": part.slot, "task": part.task, "model": part.model});
+        if !part.task_type.is_empty() { value["task_type"] = json!(part.task_type); }
+        if !part.mcp.is_empty() { value["mcp"] = json!(part.mcp); }
+        if !part.depends_on.is_empty() { value["needs"] = json!(part.depends_on); }
+        value
+    };
+    let mut value = json!({
+        "name": name,
+        "workers": p.workers.iter().map(part_value).collect::<Vec<_>>(),
+        "max_models": p.max_models, "max_depth": p.max_depth, "max_parallel": p.max_parallel,
+        "budget_eur": p.budget_eur, "max_steps": p.max_steps, "retries": p.retries,
+        "report_every": p.report_every, "stuck_after": p.stuck_after, "worktree": p.worktree
+    });
+    if let Some(validator) = &p.validator { value["validator"] = part_value(validator); }
+    if let Some(before) = &p.before { value["before"] = json!(before); }
+    if let Some(every) = &p.every { value["every"] = json!(every); }
+    if let Some(at) = &p.at { value["at"] = json!(at); }
+    if let Some(purpose) = &p.purpose { value["purpose"] = json!(purpose); }
+    value
 }
 
 /// Creates or changes a profile file. The result is parsed by the same `parse_profile` as a profile loaded from disk,
