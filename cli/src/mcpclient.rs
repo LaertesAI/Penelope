@@ -20,9 +20,13 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+/// Keeps two saved files apart even when they arrive in the same millisecond.
+static NEXT_FILE: AtomicU64 = AtomicU64::new(0);
 
 /// How long the handshake may take. A server object may shorten or lengthen it with `"timeout": SECONDS`.
 const INIT_TIMEOUT: Duration = Duration::from_secs(20);
@@ -321,7 +325,8 @@ fn save_media(ctx: &Ctx, tool: &str, kind: &str, mime: &str, uri: Option<&str>, 
     let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
     let base: String = tool.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' }).take(40).collect();
     let base = if base.trim_matches('-').is_empty() { kind.to_string() } else { base };
-    let path = dir.join(format!("{}-{}-{}.{}", base, stamp, index, extension_for(mime, uri)));
+    let sequence = NEXT_FILE.fetch_add(1, Ordering::Relaxed);
+    let path = dir.join(format!("{}-{}-{}-{}.{}", base, stamp, sequence, index, extension_for(mime, uri)));
     std::fs::write(&path, data).ok()?;
     Some(path)
 }
@@ -332,7 +337,8 @@ fn save_resource(ctx: &Ctx, tool: &str, mime: &str, uri: Option<&str>, data: &[u
     let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
     let base: String = tool.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' }).take(40).collect();
     let base = if base.trim_matches('-').is_empty() { "resource".to_string() } else { base };
-    let path = dir.join(format!("{}-{}-{}.{}", base, stamp, index, extension_for(mime, uri)));
+    let sequence = NEXT_FILE.fetch_add(1, Ordering::Relaxed);
+    let path = dir.join(format!("{}-{}-{}-{}.{}", base, stamp, sequence, index, extension_for(mime, uri)));
     std::fs::write(&path, data).ok()?;
     Some(path)
 }
