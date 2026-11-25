@@ -28,7 +28,11 @@ working tree of 0.11.0; the rest is ordered by risk to the user, not by how inte
 | `unzip` tool with zip-slip, symlink and size limits | built | 2 tests, live ZIP, one question |
 | Self-written skills | built | live 5-call turn wrote a playbook |
 | Native Wayland cursor and uinput click | built | live counter 0 → 1 → 2 |
-| Leak audit and retry | built | 109 tests, live 0 findings |
+| Worktree lifecycle: new, list, diff, apply, remove | built | 1 test, live git worktree |
+| Daily search probe and SearXNG instance list | built | 1 test, live probe marker |
+| CSS/fake-system injection warnings | built | 2 tests, live hidden HTML |
+| CI matrix, `cargo audit` and `pip-audit` | built | workflow files; Windows/macOS experimental |
+| Leak audit and retry | built | 112 tests, live 0 findings |
 | Updater client and blueprint | built | 1 test, no server |
 
 ## P0 — before another person uses it daily
@@ -72,7 +76,7 @@ on the named OS.
 
 - First step: a GitHub Actions matrix (`ubuntu-24.04`, `windows-2025`, `macos-15`) that runs `cargo test`, the
   contract test and a `--help` smoke test; sign the macOS binary with a Developer ID when one exists.
-- Acceptance: 109 tests green on all three; one live `ask` with a local model on each; `penelope input status` chooses the
+- Acceptance: 112 tests green on all three; one live `ask` with a local model on each; `penelope input status` chooses the
   right backend.
 - Measure: build time, test failures, install size.
 

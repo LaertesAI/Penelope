@@ -1,7 +1,7 @@
 # Penelope 0.12 — gap audit and plan
 
 **Date:** 2026-11-25  
-**Baseline:** working tree of 0.11.0, 109 tests, 42 tools, 45 Rust files, 15,571 lines  
+**Baseline:** working tree of 0.11.0 + first 0.12 work, 112 tests, 42 tools, 46 Rust files  
 **Method:** code and docs audit, `cargo test`, `penelope doctor`, live `auth verify`, live TUI/plain chat, live plugin
 and MCP administration, live HTTP calls against `penelope serve`  
 **Scope:** what is genuinely missing after the 0.11.0 second pass, in the order that reduces risk for a daily user
@@ -16,7 +16,7 @@ These are not road-map rows. They were exercised on this PC.
 | Area | Evidence | Confidence |
 |---|---|---|
 | Normal use | `penelope ask` → `ok`; `chat --plain` completed a turn; TUI started in tmux at 120×40 and quit with code 0 | high for Linux/claude-cli |
-| Tool layer | 42 tools, one spec table, role and schema gate, `cargo test` 109 passed | high |
+| Tool layer | 42 tools, one spec table, role and schema gate, `cargo test` 112 passed | high |
 | Search | 8 live hits from Startpage + DuckDuckGo + Bing; cache, canonical URLs, health file, reranker client | medium: keyless engines rate-limit |
 | Reading | static HTML to Markdown, local PDF through `pdftotext`, optional reader API | medium: no OCR, no JavaScript renderer of its own |
 | Local server | `penelope serve`: `/search`, `/read`, `/embed`, `/rerank`, `/redact`, `/whoami`; token, 120 req/min | high for loopback, untested TLS/proxy |
@@ -33,11 +33,11 @@ the platform dependable. **P2** is polish.
 
 | ID | Area | Gap | Risk | Priority |
 |---|---|---|---|---|
-| G01 | Safety | A worker changes the live tree. The worktree + judge gate is designed in `PLAN.md` but not built. | high: one bad agent edit is expensive | P0 |
-| G02 | Search | Keyless engines still rate-limit. No daily probe, no `search instances add`, no bundled SearXNG. | high: search stops on a bad day | P0 |
-| G03 | Injection | `scrape::scan` catches text lines, zero-width and bidi text. CSS-hidden blocks, fake system blocks and suspicious links are not covered. | high: a page can still steer a model | P0 |
-| G04 | Tests | One full run failed once with 105/109 and then passed eight times. The test was not identified. | medium: a real failure can hide as a flake | P0 |
-| G05 | Platforms | Windows and macOS code paths exist, but no CI or hardware run. No signed/notarised macOS build. | high for anyone not on Linux | P0 |
+| G01 | Safety | `work new/list/diff/apply/remove` is built and tested. A model worker and a judge gate inside the worktree are still open. | high: one bad agent edit is expensive | P0 part |
+| G02 | Search | `search probe [--daily]` and `search instances add/list` are built. A running SearXNG and the systemd timer still need to be installed. | medium: the tools exist, the instance does not | P0 part |
+| G03 | Injection | `scrape::scan` now catches CSS-hidden blocks, `hidden`, `aria-hidden`, fake system/assistant lines, zero-width/bidi text and instruction lines. A link-host audit and the 20+20 corpus are still open. | medium | P0 part |
+| G04 | Tests | The suite is 112/112 green now; the one 105/109 flake from 2026-11-25 is still unexplained. | medium: a real failure can hide as a flake | P0 |
+| G05 | Platforms | A matrix workflow exists for Linux/Windows/macOS and `cargo audit`/`pip-audit`; Windows/macOS are marked experimental until a runner proves them. | high for anyone not on Linux | P0 part |
 | G06 | Server models | No `/chat/completions`, `/route`, `/check`, `/filter` or `/train` for the eight families. | high: the server is not a model platform yet | P1 |
 | G07 | Auth | API providers take a pasted key; no OAuth device flow, refresh or `/whoami` for them. `auth verify` checks roles, not search/reader keys. | medium: key handling is manual | P1 |
 | G08 | MCP | One process per call; allow is per plugin, not per tool; no env/cwd in `mcp add`; no remote HTTP/SSE MCP. | medium: stateful servers are unusable | P1 |
@@ -50,11 +50,11 @@ the platform dependable. **P2** is polish.
 | G15 | Files | ZIP only; no `.tar.gz`, `.7z`, `.docx`/`.odt`. | low: workaround exists | P2 |
 | G16 | Memory | Hybrid memory search is lexical; embeddings are deterministic hashes, not semantic. | low: tree still works | P2 |
 | G17 | Web login | No HTML login page for the server. `/whoami` verifies a bearer token; there is no user database, cookie session or OAuth callback. | low for API use, medium if a browser UI is wanted | P2 |
-| G18 | Polish | `NEXT.md` still describes prompt-injection and search as open P0 items that are now partly built. | low: docs drift | P0 docs |
-| G19 | Website account | The existing Django backend has a real `/sign-in/`; the prototype now uses it, but account/admin/downloads views are still mock. | medium: a user can sign in but sees demo data | P1 |
+| G18 | Polish | `NEXT.md` still describes prompt-injection and search as open P0 items that are now partly built. `FEATURES-BUGS.md` is the current list. | low: docs drift | P0 docs |
+| G19 | Website account | The account API, session list and admin overview are real; the prototype account/admin views read them. Downloads are an honest empty list. Forms in the admin view are still demo. | low: UI forms, not data | P1 part |
 | G20 | Website tools | **Built in this pass:** the Django backend exposes `/account/tools/*` (session + CSRF) and `/api/v1/tools/*` (API key), forwarding only an allowlist to `penelope serve`. | low: tests and a live search passed | P1 done |
-| G21 | Website security | No 2FA, no session list, no new-device mail; production TLS/mail/PostgreSQL are not deployed. | medium before a public start | P1 |
-| G22 | Website ops | No deployment, domain, TLS proxy or real mail service. | medium | P1 |
+| G21 | Website security | **Built in this pass:** TOTP for staff (enable/disable, login code), session list/revoke, new-address mail. Recovery codes and last-use times are open. | low | P1 part |
+| G22 | Website ops | Dockerfile, Caddy TLS, Postgres compose, SMTP config, `check_email`, WAF checklist. Domain, certificate, mailbox and a live WAF are not available here. | medium for launch | P1 part |
 
 ## 2b. The existing website backend
 
@@ -79,10 +79,11 @@ What was missing and is now added in that repository:
 - a tool gateway: `/account/tools/{search,read,embed,rerank,redact}` for a signed-in session (CSRF) and
   `/api/v1/tools/*` for an `lae_` API key, forwarding only the allowlist to the loopback `penelope serve` with
   `PENELOPE_TOOLS_TOKEN`. Live: a signed-in customer searched through Django → Penelope → Startpage and got 2 hits.
-  Tests: 376 pass, 4 new ones cover forwarding, auth, unknown tools, body limits and a 502 without a token leak.
+  Tests: 385 pass, 4 new ones cover forwarding, auth, unknown tools, body limits and a 502 without a token leak.
 
-Still open in that repository: account/admin/download views are mock, no 2FA, no session list, no real
-mail/TLS/PostgreSQL deployment. Those are G19, G21 and G22 below.
+Still open in that repository: the admin write forms and the download buttons are demo; recovery codes, a real
+mailbox, a domain/certificate and a live WAF are deployment items. The account/admin read views, 2FA, session list and
+new-address mail are built. Those are G19, G21 and G22 below.
 
 ## 3. The plan
 
@@ -101,45 +102,40 @@ mail/TLS/PostgreSQL deployment. Those are G19, G21 and G22 below.
 
 #### G01 — Worker in a worktree with a judge gate
 
-This is the largest remaining safety hole.
+The safe half is built: `penelope work new NAME` creates `.penelope/worktrees/NAME` on `agent/NAME`, `diff` shows the
+patch, `apply` writes it to the live tree only when the person asks, `remove --force` discards it. A test creates a
+real git repo, changes a file, applies and removes.
 
-- First step: `penelope work start ID`, `git worktree add .penelope/worktrees/ID -b agent/ID`, run the worker with
-  `cwd` in the worktree, collect its diff.
-- Judge step: the judge reads the diff and the test output; the person sees one diff and says yes/no.
-- Yes: apply the diff to the live tree, remove the worktree, keep the transcript. No: keep the worktree for
-  `penelope work show ID`.
-- Files: new `work.rs`, `agents.rs`, `files.rs`, `tui/mod.rs`, `spec.rs` if a `work` tool is exposed.
+Still open: run a model worker inside that worktree, let the judge read the diff and test output, and show one yes/no.
+- Next: a `cwd` on the agent spec, passed to every tool call; `work run NAME --goal ...`; judge call before `apply`.
+- Files: `work.rs`, `agents.rs`, `files.rs`, `tui/mod.rs`, `spec.rs` if a `work` tool is exposed.
 - Acceptance: 10 real tasks from the Telemach set; no task touches the live tree before the yes; a failed judge leaves
-  the worktree; `penelope worktrees` lists and removes them.
+  the worktree; `penelope work list` lists and removes them.
 - Measure: solved tasks, lead tokens, wall time, wrong “done” claims caught.
-- Effort: L (5–8 days).
+- Effort: remaining M (3–5 days).
 
 #### G02 — Search that survives a rate limit
 
-The client now has `search health`, `search.urls`, Startpage and an optional API. That is not yet a daily guarantee.
+`search probe [--daily]` writes a daily marker and one health row per engine. `search instances add URL` appends a
+SearXNG base to `search.urls`, `search instances` lists the pool. The systemd timer is in `deploy/`.
 
-- First step: `penelope search probe --daily` writes one health row per engine once a day; `penelope search instances
-  add URL` appends a SearXNG base to `search.urls`.
-- Add a small `docs/SEARXNG.md` with a Docker command and the JSON setting.
+Still open: install and run a real SearXNG, and run 100 queries against the pool.
 - Fallback order stays: server API → SearXNG pool → Startpage → DuckDuckGo → Bing → Wikipedia.
 - Acceptance: 20 queries in a row return at least one result; `doctor` says which source is alive and when it was last
   checked; a dead instance is skipped in under 2 s.
 - Measure: success rate over 100 queries, p95 latency, cache hit rate.
-- Effort: M (3–5 days).
+- Effort: remaining S (1–2 days) plus the instance.
 
 #### G03 — Prompt-injection defence in the reader
 
-The scanner exists but is textual. A page can hide an instruction in CSS, a fake system block or a link that looks
-like a citation.
+Built: CSS-hidden blocks, `hidden`, `aria-hidden`, fake `system:`/`assistant:` lines, fake tokens, zero-width/bidi text
+and instruction lines all become warnings. The page is still evidence, never a silent drop.
 
-- First step: extend `scrape::scan` with CSS `display:none`/`visibility:hidden`, `aria-hidden`, white-on-white,
-  off-screen and tiny-font detection; fake `system:`/`assistant:` blocks; a link-allowlist warning for a URL whose
-  host differs from the page.
-- Keep the rule: warning, never silent drop; the page is still evidence.
+Still open: white-on-white/off-screen/tiny-font detection, a link-host warning, and the 20 attack + 20 normal corpus.
 - Test corpus: the 20 ScreenCodec attacks plus 20 normal pages; target recall 100 %, false positives under 10 %.
 - Files: `scrape.rs`, `research.rs`, `tools.rs`.
 - Measure: attacks caught, false positives, added milliseconds.
-- Effort: M (3–5 days).
+- Effort: remaining S (1–2 days).
 
 #### G04 — Test-suite stability
 
@@ -153,7 +149,7 @@ like a citation.
 - GitHub Actions matrix: `ubuntu-24.04`, `windows-2025`, `macos-15`.
 - Jobs: `cargo test`, `--help`, `doctor`, one fake-provider `ask`, `penelope input status`.
 - macOS: sign with a Developer ID when one exists; otherwise state “unsigned, Gatekeeper blocks” in the release notes.
-- Acceptance: 109 tests green on all three; one live local-model ask on each; input status chooses the right backend.
+- Acceptance: 112 tests green on all three; one live local-model ask on each; input status chooses the right backend.
 - Effort: M (3–5 days), plus certificate time.
 
 ### Milestone 0.13.0 — the platform (target: 4–6 weeks after 0.12)
@@ -165,22 +161,24 @@ like a citation.
   the log, and `PENELOPE_TOOLS_TOKEN` never leaves the server.
 - Acceptance met: a signed-in customer searched through Django → `penelope serve` → Startpage; anonymous and bad-key
   requests are 401; an unknown tool is 404; a non-JSON body is 415; an upstream 500 becomes 502 with no token in the
-  answer. Tests: 376 pass in the website backend.
+  answer. Tests: 385 pass in the website backend.
 
-#### G19 — Real account views in the prototype
+#### G19 — Real account views in the prototype (built)
 
-- `GET /api/v1/account` returns the signed-in profile, plan, usage and keys (without key material).
-- The prototype account view reads it instead of the demo data; admin view reads the console counts for admins only.
-- Acceptance: a real customer sees their own address and plan; a demo URL still shows the demo; no account data in the
-  static HTML.
-- Effort: M (3–5 days).
+- `GET /api/v1/account` returns the signed-in profile, plan, usage, keys (without key material), sessions and an empty
+  download list with the reason.
+- `GET /api/v1/admin/overview` returns the six counts and the last ten audit rows for an admin.
+- The prototype account/edit views read those endpoints; the demo still works without `?auth-api`.
+- Acceptance met by API tests and a live profile. The admin forms and download buttons remain demo because there is no
+  file and no write endpoint yet.
 
-#### G21 — 2FA, sessions and mail
+#### G21 — 2FA, sessions and mail (built)
 
-- TOTP for console users; a session table with device, last use and revoke; a mail on a new device.
-- Real SMTP in production; confirmation and reset mails leave the terminal.
-- Acceptance: an admin without TOTP cannot enter the console; a session can be revoked; a mail arrives in a test inbox.
-- Effort: L (6–10 days).
+- TOTP RFC 6238 for staff, setup at `/account/2fa/` with a one-step window; login asks for the code when enabled.
+- Session list with browser, IP, expiry and revoke; a new-address sign-in sends exactly one mail.
+- `check_email` sends a test message through the configured backend; SMTP variables are documented.
+- Acceptance met by 8 auth tests, 6 account/2FA tests and a live new-address test. Recovery codes and a real mailbox are
+  still open.
 
 #### G06 — Model endpoints for the eight families
 

@@ -3,7 +3,7 @@
 <p align="center">
   <a href="cli/Cargo.toml"><img src="https://img.shields.io/badge/version-0.11.0-C4623E?style=flat-square&labelColor=1C1A17" alt="version 0.11.0"></a>
   <a href="cli/Cargo.toml"><img src="https://img.shields.io/badge/Rust_edition-2021-C4623E?style=flat-square&labelColor=1C1A17" alt="Rust edition 2021"></a>
-  <a href="#build"><img src="https://img.shields.io/badge/tests-109_passing-C4623E?style=flat-square&labelColor=1C1A17" alt="109 tests passing"></a>
+  <a href="#build"><img src="https://img.shields.io/badge/tests-112_passing-C4623E?style=flat-square&labelColor=1C1A17" alt="112 tests passing"></a>
   <a href="#status"><img src="https://img.shields.io/badge/platform-Linux-C4623E?style=flat-square&labelColor=1C1A17" alt="platform Linux"></a>
   <a href="#parts"><img src="https://img.shields.io/badge/MCP_tools-42-C4623E?style=flat-square&labelColor=1C1A17" alt="42 MCP tools"></a>
   <a href="docs/PROVIDERS.md"><img src="https://img.shields.io/badge/providers-35-C4623E?style=flat-square&labelColor=1C1A17" alt="35 providers"></a>
@@ -26,11 +26,11 @@ model, keeps notes in a memory map, and asks before every change to a file.
 | Date | 2026-11-25 |
 | Stage | alpha: one developer, one PC, no packaged release |
 | Repository | https://github.com/LaertesAI/Penelope, branch `main` |
-| Source | [`cli/`](cli), 45 Rust files, 15,571 lines |
-| Binary | `cli/target/release/penelope`, 6.9 MB (7,233,256 bytes), built from source |
+| Source | [`cli/`](cli), 46 Rust files, 15,878 lines |
+| Binary | `cli/target/release/penelope`, 6.9 MB (7,268,368 bytes), built from source |
 | Build | `cargo build --release`, profile `release` with `opt-level = 2` and `strip = true` |
 | Toolchain | rustc 1.99.1, edition 2021 |
-| Tests | 109 passed, 0 failed, no test needs a key. Live runs are listed in the devlog. |
+| Tests | 112 passed, 0 failed, no test needs a key. Live runs are listed in the devlog. |
 | Real runs | 29 with the `claude` command up to 0.10.0, plus live runs with OpenCode Go on 2026-11-24: a tool call, an agent step and a ScreenCodec open/click/snapshot sequence. See [`DEVLOG.md`](docs/DEVLOG.md). |
 | Platform | Linux. Background jobs read `/proc`. Windows and macOS are untried. |
 | Settings folder | `.penelope/` in the project, else `~/.penelope/` |
@@ -61,7 +61,7 @@ Needed: a Rust toolchain, Linux, and one model source (the `claude` command, an 
 ```bash
 cd cli
 cargo build --release
-cargo test                          # 109 tests, no model call
+cargo test                          # 112 tests, no model call
 ./target/release/penelope doctor    # one line per program and setting Penelope depends on
 ```
 
@@ -111,6 +111,8 @@ penelope provider use openai --base-url http://localhost:9000/v1 --model NAME
 | MCP server | `penelope mcp` offers all 42 tools to any MCP client. | 0.1 | every turn |
 | MCP management | `penelope mcp add/remove/allow/deny/list/call` manages standalone servers next to the plugin servers. | 0.11 | 1 test, live echo server |
 | Local HTTP API | `penelope serve` answers `/search`, `/read`, `/embed`, `/rerank`, `/redact` and `/whoami` on loopback, with a bearer token for a remote bind and 120 requests per minute. | 0.11 | 6 tests, live curl |
+| Worktrees | `penelope work new/list/diff/apply/remove` keeps a task on its own branch; the live tree changes only on `apply`. | 0.12 | 1 test, live git worktree |
+| Search ops | `search probe [--daily]`, `search instances add URL`, health file and a systemd timer. | 0.12 | 1 test, daily marker |
 | Eyes | With `screencodec-mcp` installed, pages and pictures arrive as text. | 0.1 | wired, no run in the harness |
 | Auto-learning | After each answer the weaker model files lasting rules of the user at a waypoint. | 0.2 | 2 runs |
 | Plugins | `penelope plugin add DIR` registers a plugin folder of Claude Code with its skills and MCP servers. | 0.2 | 1 plugin, 9 skills, 7 servers |
@@ -145,7 +147,7 @@ penelope provider use openai --base-url http://localhost:9000/v1 --model NAME
 | Web search, ranked | 10 sources, cache, canonical URLs, diversity, scores, rate-limit fallback. A server search API and a reranker follow the same JSON contract. | 0.11 | 9 tests, live 8 results, live health rows |
 | Scraper | HTML to Markdown: article, metadata, JSON-LD, lists, tables, code, boilerplate removed. | 0.11 | 6 tests |
 | Research | several queries, the pages behind the hits, a cited report on the weak model. | 0.11 | 1 test, live cited report |
-| Page warnings | The scraper flags lines that try to instruct the agent, and zero-width or bidi text, instead of obeying them. | 0.11 | 1 test |
+| Page warnings | The scraper flags instruction lines, zero-width/bidi text, CSS-hidden blocks, `hidden`/`aria-hidden` and fake system lines instead of obeying them. | 0.11 | 2 tests |
 | PDF and reader API | `fetch` reads a PDF with the local `pdftotext`; a scan or a JavaScript page can fall back to one configured reader endpoint. A private target is refused before the request. | 0.11 | live PDF, 2 tests, live `/read` |
 | Login and verification | `penelope login` signs in to Claude or stores an API key in the Secret Service (file fallback, mode 0600). `penelope auth` shows the state; `penelope auth verify` asks each provider for its model list. | 0.11 | live Claude verify, 1 fake-server test, 1 keyring test |
 | Modes | `auto`, `manual`, `safe`, `review`, `privacy`, `power` as presets of delegate, run, edit, privacy and verify. | 0.11 | 1 test, sidebar row |
@@ -261,6 +263,11 @@ penelope memory unravel 2         # take back the last two notes
 penelope search "ratatui terminal library"    # ranked results
 penelope search --engine bing --fresh "ratatui"
 penelope search health --probe                # one small query per engine, then the counters
+penelope search probe --daily                 # one probe a day, for a timer
+penelope search instances add http://127.0.0.1:8080
+penelope work new task-1                      # a git worktree on branch agent/task-1
+penelope work diff task-1                     # the patch, live tree untouched
+penelope work apply task-1                    # one explicit yes
 penelope research "How does tokio select work?" --depth standard --pages 4
 penelope scout "Where does this project parse its settings?"
 penelope run --ask "which test fails?" cargo test
@@ -473,7 +480,7 @@ families.
 | [`cli/`](cli) | the Rust crate with the command `penelope` |
 | [`cli/src/tui/`](cli/src/tui) | the full screen interface |
 | [`brand/`](brand) | mark, lockup and the four pictures of the interface, see [`BRAND.md`](brand/BRAND.md) |
-| [`docs/`](docs) | [`ROADMAP.md`](docs/ROADMAP.md), [`PLAN.md`](docs/PLAN.md), [`PROVIDERS.md`](docs/PROVIDERS.md), [`RUNS.md`](docs/RUNS.md), [`DEVLOG.md`](docs/DEVLOG.md), [`AUTOUPDATE.md`](docs/AUTOUPDATE.md), [`SEARCH.md`](docs/SEARCH.md), [`SERVER.md`](docs/SERVER.md), [`SERVER-APIS.md`](docs/SERVER-APIS.md), [`NEXT.md`](docs/NEXT.md), [`PLAN-0.12.md`](docs/PLAN-0.12.md), [`Penelope 0.11.0 Devlog.pdf`](docs/Penelope%200.11.0%20Devlog.pdf), screen pictures |
+| [`docs/`](docs) | [`ROADMAP.md`](docs/ROADMAP.md), [`PLAN.md`](docs/PLAN.md), [`PROVIDERS.md`](docs/PROVIDERS.md), [`RUNS.md`](docs/RUNS.md), [`DEVLOG.md`](docs/DEVLOG.md), [`AUTOUPDATE.md`](docs/AUTOUPDATE.md), [`SEARCH.md`](docs/SEARCH.md), [`SERVER.md`](docs/SERVER.md), [`SERVER-APIS.md`](docs/SERVER-APIS.md), [`NEXT.md`](docs/NEXT.md), [`PLAN-0.12.md`](docs/PLAN-0.12.md), [`FEATURES-BUGS.md`](docs/FEATURES-BUGS.md), [`Penelope 0.11.0 Devlog.pdf`](docs/Penelope%200.11.0%20Devlog.pdf), screen pictures |
 
 ## Name
 

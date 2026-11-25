@@ -5,7 +5,7 @@
 **Scope:** one contract layer for every tool, models in every role, agents written with `$`, shared memory and an
 Obsidian brain, cost in euro, ScreenCodec and Penelope's own cursor, plugin install and import, a startup weave, and
 the commands and views that make these reachable.  
-**Tests:** 109 passed, 0 failed. No test needs a key. The live runs against OpenCode Go are written down below and used no test fixture.
+**Tests:** 112 passed, 0 failed. No test needs a key. The live runs against OpenCode Go are written down below and used no test fixture.
 
 This is a working increment, not a claim that every limit is gone. The last section names what is still open and how
 each claim can be checked on this machine.
@@ -727,6 +727,25 @@ nothing. Live: an echo server was added, probed (`echo — echo one text`), call
 The server token has its own check: `GET /whoami` returns 401 without the bearer token and the service identity with
 it. That is the closest thing to a login page, and it is on purpose: the server has no HTML and no user database.
 
+### Worktrees, daily probes and CI
+
+`penelope work` is the safe half of the worker plan. `work new NAME` runs `git worktree add` under
+`.penelope/worktrees/NAME` on branch `agent/NAME`; `diff` stages the worktree and prints one binary patch; `apply` pipes
+that patch into `git apply` in the live tree; `remove --force` throws it away. A test creates a real repository, changes
+a file in the worktree, sees the live file unchanged, applies, and checks the new content. What is still missing is the
+model worker inside the worktree and the judge gate before `apply`.
+
+Search now has a daily probe: `penelope search probe --daily` writes one health row per engine and a marker under
+`.penelope/search/probe.json`; a second call the same day is a no-op. `penelope search instances add URL` appends a
+SearXNG base to `search.urls` and writes `config.json`; `search instances` lists the pool. `deploy/` holds a systemd
+timer for the probe.
+
+The reader's scanner grew teeth: `scan_html` flags CSS-hidden blocks, the `hidden` attribute and `aria-hidden`; `scan`
+adds fake `system:`/`assistant:` lines and instruction tokens. The page is still read, and the warning travels with it.
+
+CI is now a matrix for Linux, Windows and macOS; Windows and macOS are marked experimental until a runner proves them.
+`cargo audit` and the website's `pip-audit` run in the same workflows.
+
 ## Startup animation
 
 `cli/src/startup.rs` draws five frames: the loose thread grows `~`, `~~`, `~~~`, `~~~~`, and the name and model line
@@ -776,7 +795,7 @@ New CLI commands: `tools`, `tool list`, `tool call NAME JSON`, `route`, `agents`
 
 ## Tests and evidence
 
-`cargo test` in `cli/`: **109 passed, 0 failed**. The new tests, all without a real provider:
+`cargo test` in `cli/`: **112 passed, 0 failed**. The new tests, all without a real provider:
 
 | Test | What it proves |
 |---|---|
@@ -835,6 +854,9 @@ New CLI commands: `tools`, `tool list`, `tool call NAME JSON`, `route`, `agents`
 | `search::a_server_search_api_and_a_reranker_are_read_with_a_strict_shape` | server search body and shape, reranker order, fallback on a broken answer |
 | `search::engine_health_is_counted` | calls, failures and the last error in `health.json` |
 | `search::doctor_names_the_server_search_api_and_its_last_success` | doctor line, counters and last success |
+| `search::a_searxng_instance_is_added_once_and_a_daily_probe_is_idempotent` | config write, duplicate refusal, daily marker |
+| `scrape::hidden_html_and_a_fake_system_block_are_flagged` | CSS-hidden, `hidden`, fake system lines |
+| `work::a_worktree_is_made_diffed_applied_and_removed` | real git worktree, live tree untouched until apply |
 | `search::ranking_deduplicates_and_prefers_a_diverse_list` | one result per URL, one host does not fill the list |
 | `search::parses_the_three_keyed_shapes` | Tavily, Exa and Firecrawl response shapes |
 | `scrape::an_article_becomes_markdown_and_the_noise_is_gone` | main article, JSON-LD, table, code, boilerplate |
@@ -900,12 +922,14 @@ body.
 
 ```bash
 cd cli
-cargo test                     # 109 tests, no model, no key
+cargo test                     # 112 tests, no model, no key
 
 ./target/release/penelope tools
 ./target/release/penelope serve --print-config
 ./target/release/penelope tool call unzip '{"archive": "bundle.zip"}'   # asks first
 ./target/release/penelope auth verify
+./target/release/penelope work list
+./target/release/penelope search probe --daily
 ./target/release/penelope mcp add echo /path/to/server --allow
 ./target/release/penelope mcp list --probe
 ./target/release/penelope plugin update NAME
