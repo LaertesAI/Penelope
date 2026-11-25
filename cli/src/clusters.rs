@@ -653,6 +653,7 @@ pub fn profiles_text(ctx: &Ctx) -> String {
     out.push_str("\nA profile is a file under .penelope/clusters/profiles/NAME.json or NAME.cluster. A part names a role, a slot and a\nmodel: \"main\", \"weak\", \"scout\", \"judge\", \"worker\" or a full model setting such as an OpenCode model.\n");
     out.push_str("A cluster file is one line: $dev(parts=[researcher, coder*3, validator, tool], max_models=8, max_depth=3, budget_eur=2).\nIt names built-in parts and repetitions only; it cannot carry a model, a tool or code.\n");
     out.push_str("A part with role \"human\" waits for yes or no. Without an interface set \"human\": \"yes\" or \"no\" in\nconfig.json; Penelope never assumes yes. A profile field \"before\": \"PROFILE\" sends the task through that read-only\nprompt cluster before its workers start; the prompt profile must not name a before of its own.\n");
+    out.push_str("A part may set \"task_type\" (for example \"rust-fix\"); validator results are scored per part and task type,\nwith the profile name as the default. `penelope cluster advise [NAME]` prints the parts that fail often.\n");
     out
 }
 
@@ -2330,6 +2331,50 @@ pub fn orchestrate(ctx: &Ctx, goal: &str, hint: Option<&str>, parallel: bool) ->
     Ok(format!("{} clusters started: {}\n\n{}", created.len(), ids.join(", "), summary))
 }
 
+/// The parts a name refers to: a cluster id or name, a profile, or one part name. Used by `cluster advise NAME`.
+fn part_names_for(ctx: &Ctx, name: &str) -> Vec<String> {
+    let cluster = load(ctx, name).ok().or_else(|| list(ctx).into_iter().find(|c| c.name == name));
+    if let Some(c) = cluster {
+        let mut names: Vec<String> = c.parts.iter().map(|p| p.name.clone()).collect();
+        if let Ok(p) = profile(ctx, &c.profile) {
+            names.extend(p.workers.iter().map(|w| w.name.clone()));
+            names.extend(p.validator.iter().map(|v| v.name.clone()));
+        }
+        return names;
+    }
+    if let Ok(p) = profile(ctx, name) {
+        return p.workers.iter().map(|w| w.name.clone()).chain(p.validator.iter().map(|v| v.name.clone())).collect();
+    }
+    vec![name.to_string()]
+}
+
+/// `penelope cluster advise [NAME]`: one sentence per part and task type that the validator rejected often enough.
+/// Without a name every pair is shown; a name narrows it to a cluster, a profile or one part. Worst share first.
+pub fn advise_text(ctx: &Ctx, name: Option<&str>) -> Result<String, String> {
+    let path = scores_path(ctx);
+    if !path.exists() {
+        return Ok(format!("no cluster scores yet. A validator writes them to {} after a cluster run.\n", path.display()));
+    }
+    let table = crate::advise::load(&path)?;
+    let all = crate::advise::suggestions(&table);
+    let filter = name.map(str::trim).filter(|n| !n.is_empty());
+    let picked: Vec<&crate::advise::Suggestion> = match filter {
+        None => all.iter().collect(),
+        Some(n) => {
+            let names = part_names_for(ctx, n);
+            all.iter().filter(|s| names.iter().any(|known| known == &s.part)).collect()
+        }
+    };
+    if picked.is_empty() {
+        let scope = filter.map(|n| format!(" for {}", n)).unwrap_or_default();
+        return Ok(format!("no suggestion{}: a pair needs at least {} results and {} % rejected.\n",
+                           scope, crate::advise::MIN_RESULTS, crate::advise::MIN_REJECTED_PERCENT));
+    }
+    let mut out = String::new();
+    for suggestion in picked { out.push_str(&format!("{}\n", suggestion.sentence())); }
+    Ok(out)
+}
+
 pub fn status_text(ctx: &Ctx, id: Option<&str>) -> String {
     if let Some(id) = id.filter(|s| !s.is_empty()) {
         let c = match load(ctx, id) { Ok(c) => c, Err(e) => return e };
@@ -3674,6 +3719,88 @@ mod tests {
         assert!(text.contains("fact one") && text.contains("fact two") && text.contains("fact three"), "{}", text);
         assert!(!text.contains("STALE-SECRET") && !text.contains("[note n7 ") && !text.contains("[note n8 "),
                 "a stale note reached the part prompt: {}", text);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn scoring_profile(ctx: &Ctx) {
+        write_profile(ctx, "scored", json!({
+            "name": "scored",
+            "workers": [{"name": "coder-4", "role": "worker", "slot": "Telemach", "model": "main",
+                         "task": "Do the task.", "task_type": "rust-fix"}],
+            "validator": {"name": "check", "role": "judge", "slot": "Argos", "model": "judge", "task": "Check it."},
+            "max_models": 2, "max_depth": 1, "retries": 0, "worktree": false
+        }));
+    }
+
+    fn failed_pair() -> Vec<(u16, String)> {
+        vec![(200, text_reply("worker done")), (200, text_reply("FAIL: not right"))]
+    }
+
+    fn passed_pair() -> Vec<(u16, String)> {
+        vec![(200, text_reply("worker done")),
+             (200, tool_reply("read", json!({"path": "Cargo.toml"}))),
+             (200, text_reply("PASS: the check passed"))]
+    }
+
+    fn run_scored(ctx: &Ctx, name: &str) {
+        let p = profile(ctx, "scored").unwrap();
+        let c = new_cluster(ctx, &p, name, "score this part", None, Vec::new(), 0).unwrap();
+        let _ = run_cluster(ctx, &c.id).unwrap();
+    }
+
+    #[test]
+    fn four_rejections_of_five_in_the_validator_give_one_suggestion_naming_the_part() {
+        let mut replies = Vec::new();
+        for _ in 0..4 { replies.extend(failed_pair()); }
+        replies.extend(passed_pair());
+        let (address, _seen) = crate::llm::fake::serve(replies);
+        let (mut ctx, dir) = ctx();
+        fake_models(&mut ctx, &address);
+        scoring_profile(&ctx);
+        for i in 0..5 { run_scored(&ctx, &format!("score-{}", i)); }
+
+        let table: Value = serde_json::from_str(&fs::read_to_string(scores_path(&ctx)).unwrap()).unwrap();
+        assert_eq!(table["coder-4"]["rust-fix"]["rejected"], 4);
+        assert_eq!(table["coder-4"]["rust-fix"]["accepted"], 1);
+        let text = advise_text(&ctx, Some("scored")).unwrap();
+        assert_eq!(text.lines().count(), 1, "{}", text);
+        assert!(text.contains("coder-4") && text.contains("4 of 5") && text.contains("rust-fix"), "{}", text);
+        // A cluster name, a profile name and one part name all narrow the same table.
+        assert!(advise_text(&ctx, Some("score-0")).unwrap().contains("coder-4"));
+        assert!(advise_text(&ctx, Some("coder-4")).unwrap().contains("coder-4"));
+        assert!(advise_text(&ctx, None).unwrap().contains("coder-4"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn four_results_are_below_the_threshold_and_give_no_suggestion() {
+        let mut replies = Vec::new();
+        for _ in 0..4 { replies.extend(failed_pair()); }
+        let (address, _seen) = crate::llm::fake::serve(replies);
+        let (mut ctx, dir) = ctx();
+        fake_models(&mut ctx, &address);
+        scoring_profile(&ctx);
+        for i in 0..4 { run_scored(&ctx, &format!("score-{}", i)); }
+        let text = advise_text(&ctx, None).unwrap();
+        assert!(!text.contains("was rejected"), "{}", text);
+        assert!(text.contains("no suggestion") && text.contains("at least 5"), "{}", text);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn accepted_runs_do_not_create_a_false_suggestion() {
+        let mut replies = Vec::new();
+        for _ in 0..5 { replies.extend(passed_pair()); }
+        let (address, _seen) = crate::llm::fake::serve(replies);
+        let (mut ctx, dir) = ctx();
+        fake_models(&mut ctx, &address);
+        scoring_profile(&ctx);
+        for i in 0..5 { run_scored(&ctx, &format!("score-{}", i)); }
+        let table: Value = serde_json::from_str(&fs::read_to_string(scores_path(&ctx)).unwrap()).unwrap();
+        assert_eq!(table["coder-4"]["rust-fix"]["accepted"], 5);
+        assert_eq!(table["coder-4"]["rust-fix"]["rejected"], 0);
+        let text = advise_text(&ctx, None).unwrap();
+        assert!(!text.contains("was rejected"), "{}", text);
         let _ = fs::remove_dir_all(&dir);
     }
 

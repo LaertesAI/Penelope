@@ -1485,3 +1485,24 @@ text. Measured: `cd cli && cargo test` → 242 unit tests + 4 integration tests,
 
 Open: notes belong to one cluster id, so a later run of the same task starts a fresh note folder; there is no carry-over
 between runs yet. The validator's own PASS/FAIL is still only in `memory.md`, not a note.
+
+### 2.2 A score per part and task type, with advice
+
+`validate()` now writes every verdict with `advise::record` into `.penelope/clusters/scores.json`, one result per
+non-human worker part of the profile. A profile part may name a `task_type` (for example `rust-fix`); without one the
+profile name is the task type, so the same part name in two profiles stays apart. A PASS counts as accepted, a FAIL as
+rejected; every attempt counts, so retries are visible.
+
+`advise::suggestions` returns the pairs with at least 5 results and a rejection share of 60 % or more, worst share
+first; `advise` still renders the same sentences as before. `penelope cluster advise [NAME]` reads the table and
+prints one suggestion per pair. Without a name it shows every pair; a name narrows to a cluster id or name, a profile,
+or one part name. The HELP text and the `cluster` usage line name the command.
+
+Tests: 4 rejections and 1 acceptance of one part produce exactly one suggestion, `coder-4 was rejected 4 of 5 times on
+rust-fix: change its model.`; 4 results stay below the threshold; 5 accepted runs produce no suggestion; the CLI test
+runs `penelope cluster advise` against a written table and checks the empty case. Measured:
+`cd cli && cargo test` → 245 unit tests + 5 integration tests, 0 failed (2026-11-26).
+
+Open: a validator verdict belongs to the whole cluster, so every worker of a rejected attempt gets the rejection; there
+is no per-part cause yet. The table is project-wide and has no reset command. `advise` does not change a part
+automatically; routing by the table is still block 10.
