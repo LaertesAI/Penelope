@@ -91,6 +91,69 @@ are not built here. Patterns are line-based and can miss a command split across 
 binary scripts are skipped rather than inspected. An `update` that finds a problem does not remove the old registry
 entry; it only refuses to re-register. The weak-model summary is off by default.
 
+### 1.3 Stop a running model call, hard budget
+
+`run_cluster()` now starts a watcher on the cluster's `kill` file and keeps an `Arc<AtomicBool>` in a process-wide
+slot. The flag reaches `llm::run_loop` through the new `run_loop_with`; `chat_cancel` sends the HTTP request from a
+worker thread and returns as soon as the flag is set, so a kill ends a part that is still waiting for the provider.
+`cluster kill ID` also sets the flag directly when the cluster runs in the same process. A Claude CLI part is started
+as a child and kept in a process slot; on cancel the child and its descendants are killed, not only the parent.
+
+The budget is checked after every model answer with the usage of the loop that is still running. `budget_eur` on the
+profile is joined by `session_budget_eur` in `config.json`; the orchestration takes one euro baseline and every cluster
+of the session shares it. A crossing returns `BUDGET: ...`, the cluster ends `blocked`, and no worktree patch is
+applied. A model without a price cannot be stopped in euro and is not guessed.
+
+Measured: `cd cli && cargo test` → `184 passed; 0 failed` (2026-11-25). New tests: a fake server sleeps five seconds,
+`cluster kill` returns the run in under two seconds after the kill, state `killed`; a reply with one million input and
+output tokens against a 0.01 EUR cluster budget blocks after one request and leaves `hello.txt` at `base`; the same
+crossing against `session_budget_eur` blocks a cluster that has no budget of its own.
+
+Open: an abandoned HTTP request keeps its socket until the provider's timeout; the part is over, but the provider may
+still bill the answer. The Claude kill path has no live Claude login in this environment and is covered by unit
+structure only, not by a real `claude` child.
+
+### 1.4 Zombie watch, dump and respawn
+
+A profile now has `report_every` (seconds, `0` turns the periodic report off) and `stuck_after` (default 3). A
+`ZombieThread` writes one report per interval while a part runs and feeds the `P:`/`F:` pair to the watch; three
+equal pairs mark the cluster stuck. Every part also writes its tool calls to `calls.jsonl`, and `stuck_after` equal
+calls in a row are a second, independent cause. A stuck cluster sets its cancel flag, removes its worktree, writes
+`dump.txt` and `dump.json` with the cause, and ends `S:stuck`; no patch is merged.
+
+`cluster_dump` prints the stored dump. `cluster_respawn` refuses without a dump cause, kills first, then creates a new
+cluster with the old task plus `Cause from the dump: ...`, and records `respawns` (limit 2) and `respawned_from`.
+`cluster_profile` writes or merges a profile file and parses it with the same `parse_profile` as a profile read from
+disk. `orchestrate` respawns a zombie automatically, at most twice, before it marks the plan step done. The CLI has
+`cluster dump`, `cluster respawn ID [EXTRA]` and `cluster profile NAME [JSON]`; the three tools are in `spec.rs` and
+`mcp.rs`.
+
+Measured: `cd cli && cargo test` → `188 passed; 0 failed` (2026-11-25). New tests: a cluster whose model sleeps five
+seconds writes three one-second reports, is dumped and respawned, and the second model prompt contains the exact
+`Cause:` line of the dump; three equal tool calls are a zombie cause; a respawn without a dump is refused and a third
+respawn is refused; a profile written by the tool keeps `report_every: "2m"` as 120 seconds and `"4 reports"` as 4.
+
+Open: the zombie watch is a heuristic. A part that needs longer than `stuck_after × report_every` without a finished
+part is killed even if it is working; profiles that use long parts must raise `report_every` or `stuck_after`.
+
+### 1.5 Parts of one cluster in parallel
+
+A profile has `max_parallel` (default 1, clamped to 8). A part may name `needs: [other-part]`; a part without a
+dependency starts at once, and a dependent part waits until every named part finished. Unknown names and cycles are
+refused by `parse_profile`, so a broken plan never starts. `run_workers` runs a ready wave of up to `max_parallel`
+parts in threads and joins them; only the main thread applies results, writes `memory.md` (also behind
+`MEMORY_LOCK`) and writes the cluster JSON. The validator runs after the last worker wave. The cancel flag, the euro
+limits and the zombie watch are shared with every thread; a kill cancels all running parts, and each Claude child has
+its own process slot under `cluster id/part name`.
+
+Measured: `cd cli && cargo test` → `190 passed; 0 failed` (2026-11-25). New test: three parts against a fake server
+that sleeps one second per answer, with `max_parallel=3`, finish clearly faster than the same three parts at
+`max_parallel=1` (roughly 1 s against 3 s plus the validator), and the memory file holds all three sections. A second
+test parses `needs`, refuses an unknown part and refuses a cycle.
+
+Open: a wave is filled before it starts and not refilled while it runs, so one slow part can leave a slot idle until
+the wave ends. Parallel parts see the memory as it was before the wave, not the sections written by their neighbours.
+
 This is a working increment, not a claim that every limit is gone. The last section names what is still open and how
 each claim can be checked on this machine.
 

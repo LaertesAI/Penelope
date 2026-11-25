@@ -36,6 +36,7 @@ pub fn default_config() -> Value {
         "cursor": {"command": "", "enabled": true},
         "eur_per_usd": 0.92,
         "monthly_budget_eur": 0.0,
+        "session_budget_eur": 0.0,
         "prices": {"opus": [15.0, 75.0], "sonnet": [3.0, 15.0], "haiku": [0.8, 4.0],
                    "claude-haiku-5-5": [0.1, 0.5], "deepseek-v4.1": [0.15, 0.6], "mimo-v2.6": [0.14, 0.28],
                    "glm-5.3": [0.2, 0.8], "qwen3.8": [0.2, 0.6], "kimi-k3": [0.6, 2.5]},
