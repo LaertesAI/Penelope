@@ -111,6 +111,8 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd { name: "/rules", help: "show the shared rules, or add one", key: "", takes_text: true },
     Cmd { name: "/orchestrate", help: "run an agent on a goal", key: "", takes_text: true },
     Cmd { name: "/agents", help: "the agents written with $name(...)", key: "", takes_text: false },
+    Cmd { name: "/cluster", help: "orchestrate clusters: /cluster GOAL, profiles, status ID, kill ID", key: "", takes_text: true },
+    Cmd { name: "/clusters", help: "the cluster tree with reports and memory", key: "", takes_text: false },
     Cmd { name: "/brain", help: "the memory map as a graph; /brain write makes an Obsidian vault", key: "", takes_text: false },
     Cmd { name: "/cost", help: "tokens and euro per role and model", key: "", takes_text: false },
     Cmd { name: "/context", help: "show what @ and the memory map would send", key: "", takes_text: true },
@@ -166,6 +168,8 @@ pub struct Side {
     pub routed: [(u64, u64); 2],
     pub screencodec: bool,
     pub plugins: usize,
+    /// Clusters that are queued, working, validating or being killed.
+    pub clusters: usize,
     /// Secrets the privacy filter masked in tool output.
     pub masked: u64,
     /// Tasks the scout ran on the weaker model, and the tokens it spent there.
@@ -246,7 +250,7 @@ pub struct App {
 }
 
 /// Labels and icons of status lines, so that a stored transcript finds its fixed texts again.
-const NOTE_KINDS: &[(&str, &str)] = &[("memory", "◆"), ("learned", "✦"), ("utis", "◆"), ("resumed", "↺"), ("unravel", "↺"), ("stopped", "■"), ("lesson", "✦"), ("scout", "◆"), ("note", "◆")];
+const NOTE_KINDS: &[(&str, &str)] = &[("memory", "◆"), ("learned", "✦"), ("utis", "◆"), ("resumed", "↺"), ("unravel", "↺"), ("stopped", "■"), ("lesson", "✦"), ("scout", "◆"), ("note", "◆"), ("cluster", "◆")];
 
 fn item_json(item: &Item) -> serde_json::Value {
     use serde_json::json;
@@ -378,6 +382,7 @@ impl App {
             || crate::config::which("screencodec-mcp").is_some();
         self.plugin_rows = plugins::entries(&self.ctx);
         self.side.plugins = self.plugin_rows.len();
+        self.side.clusters = crate::clusters::working(&self.ctx);
         self.side.cost = crate::cost::budget_summary(&self.ctx);
         self.side.cursor = crate::cursor::backend(&self.ctx).1;
         self.side.claude = crate::auth::claude_status();
@@ -736,6 +741,7 @@ impl App {
     }
 
     fn drain(&mut self) {
+        if self.tick % 25 == 0 { self.side.clusters = crate::clusters::working(&self.ctx); }
         while let Ok(msg) = self.rx.try_recv() {
             match msg {
                 Msg::Trail(trail, cached) => {
@@ -1125,6 +1131,51 @@ impl App {
             }
             "/rules" => self.pager("Shared rules", tools::memory_go(&self.ctx, "rules")),
             "/agents" => self.pager("Agents", crate::agents::list(&self.ctx)),
+            "/clusters" => {
+                self.refresh_side();
+                self.pager("Clusters", crate::clusters::status_text(&self.ctx, None));
+            }
+            "/cluster" if rest.is_empty() => {
+                self.refresh_side();
+                self.pager("Clusters", crate::clusters::status_text(&self.ctx, None));
+            }
+            "/cluster" if rest.starts_with("profiles") => self.pager("Cluster profiles", crate::clusters::profiles_text(&self.ctx)),
+            "/cluster" if rest.starts_with("status ") => {
+                let id = rest.trim_start_matches("status ").trim().to_string();
+                self.pager("Cluster", crate::clusters::status_text(&self.ctx, Some(&id)));
+            }
+            "/cluster" if rest.starts_with("dump ") => {
+                let id = rest.trim_start_matches("dump ").trim().to_string();
+                self.pager("Cluster", crate::clusters::dump(&self.ctx, &id));
+            }
+            "/cluster" if rest.starts_with("kill ") => {
+                let id = rest.trim_start_matches("kill ").trim().to_string();
+                let report = crate::clusters::kill(&self.ctx, &id);
+                self.refresh_side();
+                self.note("■", "cluster", report, art::ASH);
+            }
+            "/cluster" if !rest.is_empty() => {
+                let mut words = Vec::new();
+                let mut profile = None;
+                let mut parallel = true;
+                let mut parts = rest.split_whitespace().peekable();
+                if parts.peek().map(|p| *p == "run").unwrap_or(false) { parts.next(); }
+                while let Some(word) = parts.next() {
+                    match word {
+                        "--profile" => { profile = parts.next().map(str::to_string); }
+                        "--sequential" => { parallel = false; }
+                        _ => words.push(word.to_string()),
+                    }
+                }
+                let goal = words.join(" ");
+                if goal.is_empty() {
+                    self.toast("/cluster GOAL [--profile NAME] [--sequential], or /cluster profiles".to_string());
+                } else {
+                    let profile = profile.clone();
+                    self.start_bg(move |ctx| crate::clusters::orchestrate(&ctx, &goal, profile.as_deref(), parallel));
+                }
+            }
+
             "/orchestrate" if !rest.is_empty() => {
                 let spec = crate::agents::parse(rest).unwrap_or_else(|_| crate::agents::Spec {
                     name: "orchestrator".into(), role: "orchestrator".into(), thinking: "high".into(), goal: rest.to_string(),
@@ -2215,6 +2266,24 @@ mod tests {
         let said = a.rewind(2);
         assert!(said.contains("turn 0"), "{}", said);
         assert!(a.turns == 0 && a.items.len() == 1 && matches!(&a.items[0], Item::User(t) if t == "first"));
+    }
+
+    #[test]
+    fn the_cluster_commands_show_the_tree_and_the_profiles() {
+        let mut a = app();
+        a.command("/clusters");
+        match &a.overlay {
+            Overlay::Pager { lines, .. } => assert!(lines.join("\n").contains("no cluster yet")),
+            _ => panic!("clusters must open the pager"),
+        }
+        a.command("/cluster profiles");
+        match &a.overlay {
+            Overlay::Pager { lines, .. } => {
+                let text = lines.join("\n");
+                assert!(text.contains("coding") && text.contains("backend (worker)") && text.contains("live-test"), "{}", text);
+            }
+            _ => panic!("profiles must open the pager"),
+        }
     }
 
     #[test]

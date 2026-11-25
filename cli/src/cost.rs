@@ -7,6 +7,10 @@
 use crate::config::Ctx;
 use serde_json::{json, Value};
 use std::fs;
+use std::sync::Mutex;
+
+/// Parallel clusters add their rows at the same time; one writer at a time keeps usage.json readable.
+static USAGE_LOCK: Mutex<()> = Mutex::new(());
 
 fn key(role: &str, model: &str) -> String {
     format!("{}|{}", role, model)
@@ -16,6 +20,7 @@ pub fn record(ctx: &Ctx, role: &str, model: &str, tokens_in: u64, tokens_out: u6
     if model.is_empty() || (tokens_in == 0 && tokens_out == 0) {
         return;
     }
+    let _guard = USAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let path = ctx.root.join("usage.json");
     let mut v: Value = fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_else(|| json!({"models": {}}));
     if !v["models"].is_object() {

@@ -498,6 +498,7 @@ fn sidebar(f: &mut Frame, app: &App, area: Rect) {
         ("screen".into(), if app.side.screencodec { "● ScreenCodec".into() } else { "○ not installed".into() }, if app.side.screencodec { SEA } else { DIM }),
         ("cursor".into(), if app.side.cursor { "● own cursor".into() } else { "○ no cursor command".into() }, if app.side.cursor { SEA } else { DIM }),
         ("plugins".into(), format!("{}", app.side.plugins), PAPER),
+        ("clusters".into(), if app.side.clusters > 0 { format!("{} working", app.side.clusters) } else { "none working".to_string() }, if app.side.clusters > 0 { CLAY } else { DIM }),
         ("policy".into(), app.ctx.cfg["run_policy"].as_str().unwrap_or("safe").to_string(), PAPER),
     ]);
 }

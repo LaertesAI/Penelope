@@ -22,7 +22,6 @@ thread_local! {
 }
 
 /// Runs a block with a list of MCP servers. The list is passed from the lead to the worker and the judge of a run.
-#[cfg(test)]
 pub fn with_mcp_scope<T>(list: &[String], f: impl FnOnce() -> T) -> T {
     let before = MCP_ALLOW.with(|m| m.replace(if list.is_empty() { None } else { Some(list.to_vec()) }));
     let out = f();

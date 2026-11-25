@@ -106,6 +106,12 @@ pub(crate) fn call_raw(ctx: &Ctx, name: &str, a: &Value) -> Result<String, Strin
         "git_diff" => Ok(tools::git_diff(ctx, &s("path"), a["staged"].as_bool().unwrap_or(false), &s("cwd"))),
         "clipboard" => Ok(tools::clipboard(ctx, &s("action"), &s("text"))),
         "agent" => Ok(tools::agent(ctx, a)),
+        "cluster_start" => {
+            let profile = a["profile"].as_str().filter(|p| !p.trim().is_empty());
+            Ok(crate::clusters::start(ctx, &s("goal"), profile, a["parallel"].as_bool().unwrap_or(true)))
+        }
+        "cluster_status" => Ok(crate::clusters::status_text(ctx, a["id"].as_str())),
+        "cluster_kill" => Ok(crate::clusters::kill(ctx, &s("id"))),
         "computer" => Ok(tools::computer(ctx, &s("task"), n("max_steps"))),
         "screen" => crate::screen::tool(ctx, a).map(|text| tools::guard(ctx, &text)),
         "cursor" => crate::cursor::tool(ctx, a),

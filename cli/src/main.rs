@@ -7,6 +7,7 @@ mod backend;
 mod brain;
 mod loom;
 mod config;
+mod clusters;
 mod context;
 mod cost;
 mod crew;
@@ -61,6 +62,12 @@ penelope update [--check]     check the update server, or install a newer signed
 penelope audit                look for keys and plain-http leaks in the settings folder
 penelope input [install|enable|status]
                               a native Wayland pointer for ScreenCodec, without ydotool
+penelope cluster run GOAL [--profile NAME] [--sequential]
+                              ask the orchestrator for clusters and run them; profiles: coding, backend, frontend, live-test, research, solo
+penelope cluster list        the cluster tree
+penelope cluster status ID   one cluster with its parts, report and memory
+penelope cluster profiles    the parts of every profile
+penelope cluster kill ID     stop a cluster before its next part
 penelope models [PROVIDER]   the chat models the provider reports, with its effort levels
 penelope provider use NAME [--role main|weak|scout] [--model MODEL] [--workspace ID] [--base-url URL]
                               write one model setting from the table to config.json
@@ -236,6 +243,55 @@ fn main() {
             match cursor::tool(&ctx, &serde_json::json!({"x": x, "y": y, "click": click})) {
                 Ok(text) => println!("{}", text),
                 Err(e) => { loom::warn(&e); std::process::exit(2); }
+            }
+        }
+        "cluster" => {
+            let verb = args.get(1).map(String::as_str).unwrap_or("");
+            match verb {
+                "list" | "" => print!("{}", clusters::status_text(&ctx, None)),
+                "status" => print!("{}", clusters::status_text(&ctx, args.get(2).map(String::as_str))),
+                "dump" => {
+                    let id = args.get(2).cloned().unwrap_or_default();
+                    if id.is_empty() { loom::warn("usage: penelope cluster dump ID"); std::process::exit(2); }
+                    print!("{}", clusters::dump(&ctx, &id));
+                }
+                "profiles" => print!("{}", clusters::profiles_text(&ctx)),
+                "kill" => {
+                    let id = args.get(2).cloned().unwrap_or_default();
+                    if id.is_empty() { loom::warn("usage: penelope cluster kill ID"); std::process::exit(2); }
+                    println!("{}", clusters::kill(&ctx, &id));
+                }
+                "run" => {
+                    let mut profile = None;
+                    let mut parallel = true;
+                    let mut words = Vec::new();
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--profile" => { profile = args.get(i + 1).cloned(); i += 2; }
+                            "--sequential" => { parallel = false; i += 1; }
+                            other => { words.push(other.to_string()); i += 1; }
+                        }
+                    }
+                    let goal = words.join(" ");
+                    if goal.trim().is_empty() { loom::warn("usage: penelope cluster run GOAL [--profile NAME] [--sequential]"); std::process::exit(2); }
+                    match clusters::orchestrate(&ctx, &goal, profile.as_deref(), parallel) {
+                        Ok(text) => println!("{}", text),
+                        Err(e) => { loom::warn(&e); std::process::exit(2); }
+                    }
+                }
+                other => {
+                    // A bare word after cluster is the goal, not a verb.
+                    let goal = args[1..].join(" ");
+                    if other.starts_with('-') || goal.trim().is_empty() {
+                        loom::warn("usage: penelope cluster run GOAL [--profile NAME] | list | status [ID] | dump ID | profiles | kill ID");
+                        std::process::exit(2);
+                    }
+                    match clusters::orchestrate(&ctx, &goal, None, true) {
+                        Ok(text) => println!("{}", text),
+                        Err(e) => { loom::warn(&e); std::process::exit(2); }
+                    }
+                }
             }
         }
         "agents" => print!("{}", agents::list(&ctx)),
