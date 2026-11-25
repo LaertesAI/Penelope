@@ -1,7 +1,7 @@
 # Plan for the coding agent: everything that is still missing in Penelope
 
 Written on 2026-11-25 from a talk with the owner and from a read of the code at commit `10bac25`
-(version 0.11.0, 198 tests, 52 files in `cli/src/`). The reader is a coding agent such as DeepSeek in OpenCode.
+(version 0.11.0, 207 tests, 52 files in `cli/src/`). The reader is a coding agent such as DeepSeek in OpenCode.
 Bug numbers such as B33 point into `docs/FEATURES-BUGS.md`. Block numbers point into `docs/CLUSTER-IDEAS.md`.
 
 ## How to work
@@ -68,14 +68,16 @@ These packages decide whether the idea can be shown. Do them in this order.
   treats `S:done` without `V:` as a failure of the cluster.
 - Done when: a cluster whose validator ran no check ends as failed, and the `solo` cluster ends with `V:cat hello.txt ok`.
 
-### 1.3 Stop a running model call, hard budget (B12)
+### 1.3 Stop a running model call, hard budget (B12) — done
+- Result: `8c8bb10`, PR #6. Cancel flag reaches the HTTP loop; Claude child killed as a tree; cluster and session euro budgets block without merge. Open: abandoned socket until provider timeout; Claude kill path not live-tested; session budget cluster-only.
 - State: `kill()` sets a flag that is read between two parts. `budget_eur` is checked between two parts.
 - Build: keep the child process or the HTTP request of every part and end it on kill. Check the budget while tokens
   arrive. Add a budget for the whole session.
 - Done when: `cluster kill ID` ends a part within 2 seconds, and a cluster with a budget of 0.01 EUR stops in the call
   that crosses it.
 
-### 1.4 Zombie watch, dump and respawn
+### 1.4 Zombie watch, dump and respawn — done
+- Result: `c641742`, PR #6. report_every/stuck_after, equal P/F or calls, dump, respawn (max 2), cluster_dump/respawn/profile tools. Open: heuristic can kill a long working part.
 - State: missing. `report_every` and `stuck_after` are named in `CLUSTERS.md` and are not in the code. The tools
   `cluster_dump`, `cluster_respawn` and `cluster_profile` do not exist.
 - Build: a profile gets `report_every` (seconds) and `stuck_after` (number of reports). The orchestrator marks a
@@ -85,7 +87,8 @@ These packages decide whether the idea can be shown. Do them in this order.
 - Done when: a test cluster that repeats one report three times is killed and started again, and its second prompt
   contains the text of the dump.
 
-### 1.5 Parts of one cluster in parallel (B11)
+### 1.5 Parts of one cluster in parallel (B11) — done
+- Result: `ae828ff`, PR #6. max_parallel 1–8 and needs dependencies, serialized memory/state, validator after the wave. Open: batch waves are not refilled; parallel parts see pre-wave memory.
 - State: clusters run in threads, the parts of one cluster run in order. `max_parallel` is stored and unused.
 - Build: parts without a dependency run at the same time up to `max_parallel`. Writes to `memory.md` stay serialized.
 - Done when: a cluster with 3 coding parts and `max_parallel=3` takes less wall time than with `max_parallel=1` in a
