@@ -1,7 +1,7 @@
 # Penelope 0.12 — gap audit and plan
 
 **Date:** 2026-11-25
-**Baseline:** working tree of 0.11.0 + 0.12 work, 162 tests, 46 tools, 47 Rust files
+**Baseline:** working tree of 0.11.0 + 0.12 work, 162 tests, 46 tools, 50 Rust files
 **Method:** code and docs audit, `cargo test`, `penelope doctor`, live `auth verify`, live TUI/plain chat, live plugin
 and MCP administration, live HTTP calls against `penelope serve`
 **Scope:** what is genuinely missing after the 0.11.0 second pass, in the order that reduces risk for a daily user
