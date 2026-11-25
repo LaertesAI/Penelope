@@ -5,7 +5,7 @@
 **Scope:** one contract layer for every tool, models in every role, agents written with `$`, shared memory and an
 Obsidian brain, cost in euro, ScreenCodec and Penelope's own cursor, plugin install and import, a startup weave, and
 the commands and views that make these reachable.  
-**Tests:** 118 passed, 0 failed. No test needs a key. The live runs against OpenCode Go are written down below and used no test fixture.
+**Tests:** 124 passed, 0 failed. No test needs a key. The live runs against OpenCode Go are written down below and used no test fixture.
 
 This is a working increment, not a claim that every limit is gone. The last section names what is still open and how
 each claim can be checked on this machine.
@@ -334,6 +334,14 @@ the next section.
 - The TUI and the plain chat run the import **once**: a marker `.penelope/imported.json` keeps it to one pass per
   folder.
 - A new plugin still starts with its MCP tools denied; `/plugins allow NAME` changes that.
+- A plugin's `commands/*.md` files are registered too. The file name or the `name` in the front matter becomes the
+  command, `description` and `argument-hint` are shown. `$ARGUMENTS` and `$1` to `$9` are replaced before the prompt is
+  sent; without a placeholder the arguments are appended.
+- `/plugins` opens a filterable screen: type to filter by plugin or command, `tab` switches all / with commands / with
+  MCP servers, `enter` opens the command list, `A` allows or denies the tools, `U` updates, `X` twice removes. A command
+  is inserted into the input line and runs as `/plugin:command ARGS`.
+- `penelope plugin commands [NAME]` prints the command list; `penelope plugin command NAME ARGS` prints the expanded
+  prompt for a script.
 
 The tests build a fake Claude folder, import it once, prove the second call is empty, install a local folder, and
 clone a local git repository through a `file://` link.
@@ -555,9 +563,11 @@ The old search tried one source and returned its list. The new one has ten sourc
 Secret Service, the same store as a model key. `penelope auth` lists them under `search and reader keys`. The
 environment variable wins.
 
-`fanout` asks every configured engine at once and merges. Without a key or server that is Startpage + DuckDuckGo +
-Bing; a key or server adds a source above them. It costs one call per engine, so it can be switched off. A query is cached for an hour by default; `--fresh` skips it and a
-new `web_search` call can pass `fresh: true`.
+`fanout` is on by default: every configured engine is asked in one thread each, then the hits are deduplicated,
+scored and merged. Without a key or server that is Startpage + DuckDuckGo + Bing; a key or server adds a source above
+them. It costs one call per engine. `/search fanout on|off` (or `penelope search fanout on|off`) switches it, and
+`search health` names the engines and the current mode. A query is cached for an hour by default; `--fresh` skips it
+and a new `web_search` call can pass `fresh: true`.
 
 ### The ranking
 
@@ -763,7 +773,12 @@ removes the current transcript, its history and its tab. A first F6 only shows t
   stores and `esc` cancels;
 - `r` opens the crew model list: tool calls, processing, research/web search, coding, judge, router and filter;
 - `m` lists exact names (`claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`, the full OpenCode Go list);
-- `e` cycles the model's effort (`low`, `medium`, `high`, `max`, and the OpenCode levels where offered).
+- `e` cycles the model's effort. The levels come from the model, not from a global list: Claude 5 and 4.6+ take
+  `low`, `medium`, `high`, `max`; OpenAI reasoning models take their list; DeepSeek rejects `medium` and uses
+  `low`/`high`/`max`; Qwen, GLM, Kimi, Grok, Gemini and OpenRouter have their own columns; every OpenCode model shows
+  the exact column of the catalog. A model without the field shows `no effort` and no parameter is sent. The check
+  sits in `providers::supports_effort` and `llm::effort`, so the Claude command, the Anthropic messages API, the
+  OpenAI body, the scout, the weaker model and every agent step use the same answer.
 
 `/rules session TEXT` keeps a rule in the project; `/rules global TEXT` keeps it for every project. A tip appears in
 the transcript every four turns and points at F5/F6, the role models, exact names and effort.
@@ -781,6 +796,19 @@ the transcript every four turns and points at F5/F6, the role models, exact name
 - `penelope ask --json "..."` emits newline-delimited JSON events (`start`, `delta`, `text`, `tool_start`, `tool_end`,
   `masked_request`, `masked_answer`, `result`, `error`) for CI and editors.
 - The `pr_create` tool opens a pull request with `gh` after a question. It never pushes.
+
+### Plugin commands and the command screen
+
+The first plugin pass registered skills and MCP servers only. Commands in `commands/*.md` were invisible, so a plugin
+that ships `/deploy` or `/review` could not be used. The registry now scans that folder, keeps name, description,
+argument hint and file, and the command becomes `/plugin:command ARGS` in the interface. The same text is available to
+scripts through `penelope plugin command`.
+
+`/plugins` is a screen now, not a pager: a filter field, a sorted list (plugins with commands first, then MCP servers,
+then the rest), a detail pane with path, commands, skills and servers, and actions on uppercase keys so lowercase
+letters can filter. Enter on a command puts `/plugin:command ` into the input line; the person adds arguments and
+presses enter. The live test used a demo plugin with `commands/echo.md`, typed `/plugins`, filtered with `echo`, opened
+the command, inserted `/demo:echo `, typed `plugin-ok` and got `plugin-ok` back from the model.
 
 ## Startup animation
 
@@ -831,7 +859,7 @@ New CLI commands: `tools`, `tool list`, `tool call NAME JSON`, `route`, `agents`
 
 ## Tests and evidence
 
-`cargo test` in `cli/`: **118 passed, 0 failed**. The new tests, all without a real provider:
+`cargo test` in `cli/`: **124 passed, 0 failed**. The new tests, all without a real provider:
 
 | Test | What it proves |
 |---|---|
@@ -899,6 +927,12 @@ New CLI commands: `tools`, `tool list`, `tool call NAME JSON`, `route`, `agents`
 | `files::rewind_to_a_turn_restores_every_later_change` | file rewind by turn |
 | `tools::the_sandbox_has_no_network_and_only_the_project_is_writable` | bwrap argv |
 | `tools::a_confirmed_command_is_kept_hashed_for_the_project` | project allowlist |
+| `providers::the_table_is_well_formed_and_a_setting_names_the_variable_only` | effort only where the model has the field |
+| `llm::effort_is_sent_only_to_a_model_that_has_the_field` | Claude, OpenAI, OpenCode and unsupported models |
+| `llm::effort_reaches_the_anthropic_and_the_openai_body` | `output_config.effort` and `reasoning_effort` |
+| `plugins::commands_are_registered_shown_and_expanded_with_their_arguments` | `$ARGUMENTS`, `$1`, command list |
+| `tui::the_plugins_screen_lists_a_plugin_and_inserts_its_command` | filter, tab, command insert |
+| `search::the_fanout_switch_is_written_and_the_health_line_names_every_engine` | fanout setting and health line |
 | `search::ranking_deduplicates_and_prefers_a_diverse_list` | one result per URL, one host does not fill the list |
 | `search::parses_the_three_keyed_shapes` | Tavily, Exa and Firecrawl response shapes |
 | `scrape::an_article_becomes_markdown_and_the_noise_is_gone` | main article, JSON-LD, table, code, boilerplate |
@@ -964,7 +998,7 @@ body.
 
 ```bash
 cd cli
-cargo test                     # 118 tests, no model, no key
+cargo test                     # 124 tests, no model, no key
 
 ./target/release/penelope tools
 ./target/release/penelope serve --print-config

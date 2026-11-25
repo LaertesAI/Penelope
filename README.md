@@ -3,7 +3,7 @@
 <p align="center">
   <a href="cli/Cargo.toml"><img src="https://img.shields.io/badge/version-0.11.0-C4623E?style=flat-square&labelColor=1C1A17" alt="version 0.11.0"></a>
   <a href="cli/Cargo.toml"><img src="https://img.shields.io/badge/Rust_edition-2021-C4623E?style=flat-square&labelColor=1C1A17" alt="Rust edition 2021"></a>
-  <a href="#build"><img src="https://img.shields.io/badge/tests-118_passing-C4623E?style=flat-square&labelColor=1C1A17" alt="118 tests passing"></a>
+  <a href="#build"><img src="https://img.shields.io/badge/tests-124_passing-C4623E?style=flat-square&labelColor=1C1A17" alt="124 tests passing"></a>
   <a href="#status"><img src="https://img.shields.io/badge/platform-Linux-C4623E?style=flat-square&labelColor=1C1A17" alt="platform Linux"></a>
   <a href="#parts"><img src="https://img.shields.io/badge/MCP_tools-43-C4623E?style=flat-square&labelColor=1C1A17" alt="43 MCP tools"></a>
   <a href="docs/PROVIDERS.md"><img src="https://img.shields.io/badge/providers-35-C4623E?style=flat-square&labelColor=1C1A17" alt="35 providers"></a>
@@ -26,11 +26,11 @@ model, keeps notes in a memory map, and asks before every change to a file.
 | Date | 2026-11-25 |
 | Stage | alpha: one developer, one PC, no packaged release |
 | Repository | https://github.com/LaertesAI/Penelope, branch `main` |
-| Source | [`cli/`](cli), 46 Rust files, 16,695 lines |
-| Binary | `cli/target/release/penelope`, 7.0 MB (7,395,848 bytes), built from source |
+| Source | [`cli/`](cli), 46 Rust files, 17,416 lines |
+| Binary | `cli/target/release/penelope`, 7.2 MB (7,533,040 bytes), built from source |
 | Build | `cargo build --release`, profile `release` with `opt-level = 2` and `strip = true` |
 | Toolchain | rustc 1.99.1, edition 2021 |
-| Tests | 118 passed, 0 failed, no test needs a key. Live runs are listed in the devlog. |
+| Tests | 124 passed, 0 failed, no test needs a key. Live runs are listed in the devlog. |
 | Real runs | 29 with the `claude` command up to 0.10.0, plus live runs with OpenCode Go on 2026-11-24: a tool call, an agent step and a ScreenCodec open/click/snapshot sequence. See [`DEVLOG.md`](docs/DEVLOG.md). |
 | Platform | Linux. Background jobs read `/proc`. Windows and macOS are untried. |
 | Settings folder | `.penelope/` in the project, else `~/.penelope/` |
@@ -61,7 +61,7 @@ Needed: a Rust toolchain, Linux, and one model source (the `claude` command, an 
 ```bash
 cd cli
 cargo build --release
-cargo test                          # 118 tests, no model call
+cargo test                          # 124 tests, no model call
 ./target/release/penelope doctor    # one line per program and setting Penelope depends on
 ```
 
@@ -75,7 +75,7 @@ penelope ask "Run the tests and tell me what fails"
 
 ## Models and providers
 
-A provider table with 23 entries names the address, the wire format and the key variable of each provider.
+A provider table with 35 entries names the address, the wire format and the key variable of each provider.
 `penelope providers` prints the table and says per entry whether its key is set.
 
 | Kind | Entries |
@@ -99,8 +99,11 @@ In the full screen interface `/models` opens the provider list. Arrow keys choos
 - `config.json` stores the name of the environment variable. A key is read at the start of a request and stored nowhere.
 - The setup refuses a pasted key in place of a variable name.
 - A Claude subscription works through the `claude` command only. Penelope has no login of its own.
-- Tested with real models: the `claude` command. The two HTTP formats have 4 tests against a local test server.
-- No request has reached a real provider, because no key was set on the test PC.
+- Tested with real models: the `claude` command and OpenCode Go. The two HTTP formats have tests against a local test server.
+- Effort is sent only when the model has the field: `--effort` for the Claude command, `output_config.effort` and
+  adaptive thinking for the Anthropic messages API, and `reasoning_effort` for OpenAI, OpenRouter, xAI, DeepSeek,
+  Alibaba/Qwen, Zhipu/GLM, Moonshot/Kimi, Gemini and the OpenCode catalog. The levels are per model, not one global
+  list. A model without the field shows `no effort` and no parameter is sent.
 - [`docs/PROVIDERS.md`](docs/PROVIDERS.md) names the source of every address, read on 2026-11-24, and every field of a model setting.
 
 ## Parts
@@ -118,14 +121,14 @@ In the full screen interface `/models` opens the provider list. Arrow keys choos
 | Worktrees | `penelope work new/list/diff/apply/remove` keeps a task on its own branch; the live tree changes only on `apply`. | 0.12 | 1 test, live git worktree |
 | Checkpoints and rewind | A checkpoint at every turn; `/rewind N` restores the transcript and the file changes of the last N turns. | 0.12 | 2 tests |
 | Role models | `/models` → `r`: tool calls, processing, research/web search, coding, judge, router and filter, each with its own provider. | 0.12 | 1 test |
-| Exact models and effort | `/models` → `m` lists exact Claude and OpenCode model names; `e` cycles the effort level. | 0.12 | 1 test, live menu |
+| Exact models and effort | `/models` → `m` lists exact Claude and OpenCode model names; `e` cycles the effort level. The level is only sent when the model has the field; `no effort` means none is sent. | 0.12 | 2 tests, live menu |
 | Monthly budget | `/budget 20`, consumption and the rest of the month in the side panel and `/cost`. | 0.12 | 1 test |
 | Sandbox and allowlist | `/sandbox on` runs shell commands through bubblewrap without network; a confirmed command is kept hashed for this project. | 0.12 | 2 tests, live bwrap |
 | CI event stream | `penelope ask --json` writes newline-delimited events for CI and editors. | 0.12 | live Claude event stream |
-| Search ops | `search probe [--daily]`, `search instances add URL`, health file and a systemd timer. | 0.12 | 1 test, daily marker |
+| Search ops | `search probe [--daily]`, `search instances add URL`, health file and a systemd timer. `fanout` is on by default: every configured engine is asked in parallel, then the hits are deduplicated, scored and merged. `/search fanout on|off` switches it. | 0.12 | 1 test, live 3 engines |
 | Eyes | With `screencodec-mcp` installed, pages and pictures arrive as text. | 0.1 | wired, no run in the harness |
 | Auto-learning | After each answer the weaker model files lasting rules of the user at a waypoint. | 0.2 | 2 runs |
-| Plugins | `penelope plugin add DIR` registers a plugin folder of Claude Code with its skills and MCP servers. | 0.2 | 1 plugin, 9 skills, 7 servers |
+| Plugins | `penelope plugin add DIR` registers a plugin folder of Claude Code with its commands, skills and MCP servers. `/plugins` is a filterable screen; a command runs as `/plugin:command ARGS`. | 0.2 / 0.12 | 3 tests, live command turn |
 | ZIP and server | `unzip` unpacks a ZIP inside the workspace after one question; `penelope serve` runs the local search, read, embed, rerank and redact API. | 0.11 | 3 tests, live ZIP, live HTTP API |
 | Statistic | `penelope stats` counts the characters kept away from the main model and the masked items. | 0.2 | yes |
 | Full screen interface | Transcript, input box, side panel with the woven mark, command list on `/`, palette on `ctrl+p`. | 0.3 | 12 turns |
@@ -219,7 +222,8 @@ Commands: `/new` (or F5), `/models` (providers; `r` role models, `m` exact names
 `/learn`, `/skills`, `/consolidate`, `/mode [NAME]`, `/login [NAME]`, `/logout NAME`, `/auth [verify]`, `/rewind N`,
 `/budget [EUR]`, `/sandbox on|off`,
 `/input [install|enable]`, `/audit`, `/update`,
-`/plugins install LINK|import|allow NAME|deny NAME|update NAME|remove NAME`, `/doctor`, `/copy`, `/shot`, `/sidebar`,
+`/plugins` (screen: filter, tab all/commands/MCP, A allow, U update, X twice removes), `/plugin:command ARGS`,
+`/search fanout on|off`, `/doctor`, `/copy`, `/shot`, `/sidebar`,
 `/help`, `/quit`.
 
 One prompt may hold several commands, separated by a newline or `;;`:
@@ -281,6 +285,8 @@ penelope work diff task-1                     # the patch, live tree untouched
 penelope work apply task-1                    # one explicit yes
 penelope allow                                # confirmed commands for this project, masked
 penelope ask --json "run the tests"           # event stream for CI
+penelope plugin commands                      # slash commands provided by plugins
+penelope plugin command notes:summarize a.md  # print the expanded prompt
 penelope research "How does tokio select work?" --depth standard --pages 4
 penelope scout "Where does this project parse its settings?"
 penelope run --ask "which test fails?" cargo test

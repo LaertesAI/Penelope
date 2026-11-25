@@ -7,7 +7,7 @@ The repository is public at https://github.com/LaertesAI/Penelope. Licence: MIT,
 
 | Part | Where | Evidence |
 |---|---|---|
-| Command `penelope` in Rust | `cli/` | 118 tests |
+| Command `penelope` in Rust | `cli/` | 124 tests |
 | Full screen terminal interface | `cli/src/tui/` | 8 tests, 9 real turns |
 | Text that appears piece by piece | `cli/src/backend.rs`, `cli/src/tui/mod.rs` | 1 test, 15 words arrived in 7 pieces |
 | Privacy filter for the request and for tool output, level `pii` for e-mail addresses and IBANs | `cli/src/privacy.rs`, `cli/src/tools.rs` | 4 tests, a made-up token stayed hidden in 4 real turns |

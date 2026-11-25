@@ -1,7 +1,7 @@
 # Penelope 0.12 — gap audit and plan
 
 **Date:** 2026-11-25
-**Baseline:** working tree of 0.11.0 + 0.12 work, 118 tests, 43 tools, 46 Rust files
+**Baseline:** working tree of 0.11.0 + 0.12 work, 124 tests, 43 tools, 46 Rust files
 **Method:** code and docs audit, `cargo test`, `penelope doctor`, live `auth verify`, live TUI/plain chat, live plugin
 and MCP administration, live HTTP calls against `penelope serve`
 **Scope:** what is genuinely missing after the 0.11.0 second pass, in the order that reduces risk for a daily user
@@ -16,7 +16,7 @@ These are not road-map rows. They were exercised on this PC.
 | Area | Evidence | Confidence |
 |---|---|---|
 | Normal use | `penelope ask` → `ok`; `chat --plain` completed a turn; TUI started in tmux at 120×40 and quit with code 0 | high for Linux/claude-cli |
-| Tool layer | 43 tools, one spec table, role and schema gate, `cargo test` 118 passed | high |
+| Tool layer | 43 tools, one spec table, role and schema gate, `cargo test` 124 passed | high |
 | Interface | crisp start screen, F5/F6, provider list, role models, exact names, effort, OpenCode list, monthly budget, checkpoints, sandbox, allowlist, `ask --json` | high for the tested paths |
 | Search | 8 live hits from Startpage + DuckDuckGo + Bing; cache, canonical URLs, health file, reranker client | medium: keyless engines rate-limit |
 | Reading | static HTML to Markdown, local PDF through `pdftotext`, optional reader API | medium: no OCR, no JavaScript renderer of its own |
@@ -37,7 +37,7 @@ the platform dependable. **P2** is polish.
 | G01 | Safety | `work new/list/diff/apply/remove` is built and tested. A model worker and a judge gate inside the worktree are still open. | high: one bad agent edit is expensive | P0 part |
 | G02 | Search | `search probe [--daily]` and `search instances add/list` are built. A running SearXNG and the systemd timer still need to be installed. | medium: the tools exist, the instance does not | P0 part |
 | G03 | Injection | `scrape::scan` now catches CSS-hidden blocks, `hidden`, `aria-hidden`, fake system/assistant lines, zero-width/bidi text and instruction lines. A link-host audit and the 20+20 corpus are still open. | medium | P0 part |
-| G04 | Tests | The suite is 118/118 green now; the one 105/109 flake from 2026-11-25 is still unexplained. | medium: a real failure can hide as a flake | P0 |
+| G04 | Tests | The suite is 124/124 green now; the one 105/109 flake from 2026-11-25 is still unexplained. | medium: a real failure can hide as a flake | P0 |
 | G05 | Platforms | A matrix workflow exists for Linux/Windows/macOS and `cargo audit`/`pip-audit`; Windows/macOS are marked experimental until a runner proves them. | high for anyone not on Linux | P0 part |
 | G06 | Server models | No `/chat/completions`, `/route`, `/check`, `/filter` or `/train` for the eight families. | high: the server is not a model platform yet | P1 |
 | G07 | Auth | API providers take a pasted key; no OAuth device flow, refresh or `/whoami` for them. `auth verify` checks roles, not search/reader keys. | medium: key handling is manual | P1 |
@@ -150,7 +150,7 @@ Still open: white-on-white/off-screen/tiny-font detection, a link-host warning, 
 - GitHub Actions matrix: `ubuntu-24.04`, `windows-2025`, `macos-15`.
 - Jobs: `cargo test`, `--help`, `doctor`, one fake-provider `ask`, `penelope input status`.
 - macOS: sign with a Developer ID when one exists; otherwise state “unsigned, Gatekeeper blocks” in the release notes.
-- Acceptance: 118 tests green on all three; one live local-model ask on each; input status chooses the right backend.
+- Acceptance: 124 tests green on all three; one live local-model ask on each; input status chooses the right backend.
 - Effort: M (3–5 days), plus certificate time.
 
 ### Milestone 0.13.0 — the platform (target: 4–6 weeks after 0.12)
