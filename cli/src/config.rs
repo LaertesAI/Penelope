@@ -42,6 +42,7 @@ pub fn default_config() -> Value {
                    "glm-5.3": [0.2, 0.8], "qwen3.8": [0.2, 0.6], "kimi-k3": [0.6, 2.5]},
         "plugin_dirs": null,
         "plugin_home": null,
+        "brief": {"hosts": [], "roots": []},
         "update": {"url": "", "channel": "stable", "public_key": ""},
         "global_memory": null,
         "clipboard": {"read": "", "write": ""}

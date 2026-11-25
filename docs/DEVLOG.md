@@ -1553,3 +1553,45 @@ Open:
   can race on `last_run`; the cluster state and the worktree stay separate.
 - `factory new` refuses a name that is already a profile. To rename a factory, stop it and create a new one; there is no
   rename or delete command.
+
+## Phase 3.2: the brief (branch `feat/mcp-brief`, 2026-11-26)
+
+New `cli/src/brief.rs` holds the extension `io.github.laertesai/brief`. The client (`mcpclient.rs`) reads the
+announcement from the `initialize` answer and keeps the `tools/list` result of the process. A call is packed only when
+the server announced the extension **and** the called tool has a property `brief`; every other call, and every foreign
+server, keeps the old path byte for byte.
+
+The client turns the short form into items with `id`, `kind`, `name`, `mime`, `bytes` and `sha256`. A local file is
+resolved only below the project folder, the registered plugin folders, the plugin home, the cwd of the named server and
+the optional `brief.roots`. A text file up to 256 KB travels as `text`, an image as base64 `data`, a binary file as
+`data`, and a file over 256 KB goes through the announced upload tool in 96 KB chunks before the real call. An absolute
+path, a `..` path or a symlink that leaves those folders is refused; so is a file over 256 KB when the server announces
+no upload tool. HTTP links travel as `uri`; the client never opens them.
+
+`mcp.rs` announces the same extension under `capabilities.experimental` and `capabilities.extensions` and adds two
+tools: `brief_check` (opens a brief or a stored `brief_id`) and `brief_put` (one upload chunk). The server checks
+version, task length, item count, kind, the exactly-one-way rule, base64, the inline limit, the announced byte count and
+SHA-256. A `file://` item is read only inside the same roots; an `http(s)` item is refused unless its host is in
+`brief.hosts` (default: empty). `brief_check` reads an allowed link with no redirects and a 10 s timeout, then returns
+real steps, findings and a `next:` JSON line with the next call. The text of an attachment is never returned to the
+model.
+
+Tests: `cd cli && cargo test` → 274 unit tests + 5 integration tests, 0 failed (2026-11-26). New coverage includes a
+fake server that announces the extension and receives a small text brief, an image brief, a 300 KB file that is
+uploaded in chunks, the same 300 KB file refused when no upload tool is announced, a path outside the project, a link
+host outside the allow list, two identical large files (two upload ids), a foreign server that gets the short form
+unchanged, a normal call without a brief, a brief reopened by id after the file was deleted, and an injected sentence in
+an attachment that does not appear in the answer.
+
+Open:
+
+- **The 22 checks of the Python prototype are not all reached.** The format and process checks are covered; the two
+  page-check checks (`pagecheck.py`: CSS/colour findings and `page_fix`) and the three ways comparison are not ported.
+  `brief_check` is a generic intake and check tool, not the design-rules checker of the prototype.
+- **No ScreenCodec round-trip.** Penelope packs a brief for any MCP server that announces the extension, but the
+  ScreenCodec server in this tree does not announce it and no test sends a picture through it.
+- Links are only fetched by `brief_check`; a link kept as `uri` for another tool is host-checked but not read by the
+  client. Redirects are not followed. The host list defaults to empty, so a user must set `brief.hosts`.
+- Briefs and uploads live in the memory of one `penelope mcp` process. There is no TTL, no size cap for the store and
+  no on-disk brief. A restart loses the ids.
+- `brief.roots` adds folders; it does not restrict the default project/plugin folders.
