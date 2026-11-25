@@ -717,6 +717,64 @@ fn plugin_commands_dialog(f: &mut Frame, app: &App, area: Rect, plugin: &str, se
     put(f, inner, inner.x, inner.bottom().saturating_sub(1), "↑↓ choose · enter inserts · esc back", on(CLAY, RAISED));
 }
 
+fn apps_dialog(f: &mut Frame, app: &App, area: Rect, sel: usize, scroll: usize) {
+    let rows = &app.app_rows;
+    let active = crate::apps::active(&app.ctx);
+    let inner = dialog(f, area, "Apps", 108, if rows.is_empty() { 12 } else { rows.len().min(12) as u16 + 8 });
+    let summary = if rows.is_empty() {
+        "No app installed · the first app is the cluster view".to_string()
+    } else {
+        format!("{} app{} · {} · enter shows · o opens an HTML app in the browser", rows.len(),
+                if rows.len() == 1 { "" } else { "s" },
+                active.as_deref().map(|name| format!("active {}", name)).unwrap_or_else(|| "no active app".to_string()))
+    };
+    put(f, inner, inner.x, inner.y, &clip(&summary, inner.width as usize), on(DIM, RAISED));
+    if rows.is_empty() {
+        put(f, inner, inner.x, inner.y + 2, "/app install LINK|DIR     check the scripts, show the rights, install after a yes", on(ASH, RAISED));
+        put(f, inner, inner.x, inner.y + 3, "apps live in .penelope/apps/NAME/; the manifest is .penelope-app.json or app.json", on(ASH, RAISED));
+        put(f, inner, inner.x, inner.y + 4, "the first app is the cluster view: \"view\": \"clusters\"", on(ASH, RAISED));
+        put(f, inner, inner.x, inner.bottom().saturating_sub(1), "esc closes · f7 opens this list", on(DIM, RAISED));
+        return;
+    }
+    let visible = (inner.height as usize).saturating_sub(4).min(rows.len()).max(1);
+    let first = scroll.min(rows.len().saturating_sub(visible));
+    for (i, entry) in rows.iter().skip(first).take(visible).enumerate() {
+        let y = inner.y + 2 + i as u16;
+        let chosen = first + i == sel.min(rows.len().saturating_sub(1));
+        let bg = if chosen { NIGHT } else { RAISED };
+        fill(f, Rect::new(inner.x.saturating_sub(1), y, inner.width + 2, 1), bg);
+        let on_app = active.as_deref() == Some(entry.name.as_str());
+        put(f, inner, inner.x, y, if on_app { "●" } else { "○" }, on(if on_app { SEA } else { CLAY }, bg));
+        put(f, inner, inner.x + 2, y, &clip(&entry.name, 22), on(PAPER, bg).add_modifier(if chosen { Modifier::BOLD } else { Modifier::empty() }));
+        put(f, inner, inner.x + 26, y, &clip(&entry.version, 9), on(DIM, bg));
+        put(f, inner, inner.x + 37, y, &clip(&entry.view.name(), 22), on(ASH, bg));
+        put(f, inner, inner.x + 61, y, &clip(&format!("rights {}", entry.rights.summary()), inner.width.saturating_sub(62) as usize), on(DIM, bg));
+    }
+    if let Some(entry) = rows.get(sel.min(rows.len().saturating_sub(1))) {
+        let note = if entry.description.is_empty() { entry.source.clone() } else { entry.description.clone() };
+        let note = if note.is_empty() { crate::files::show(&entry.dir) } else { note };
+        put(f, inner, inner.x, inner.bottom().saturating_sub(2), &clip(&note, inner.width as usize), on(ASH, RAISED));
+    }
+    put(f, inner, inner.x, inner.bottom().saturating_sub(1),
+        "↑↓ · enter shows · o browser · a on/off · xx remove · esc", on(CLAY, RAISED));
+}
+
+fn app_install_dialog(f: &mut Frame, area: Rect, prepared: &crate::apps::Prepared) {
+    let inner = dialog(f, area, "Install app", 96, 24);
+    put(f, inner, inner.x, inner.y,
+        &clip(&format!("The local install check is done. Nothing is installed under .penelope/apps/{} before your yes.", prepared.app.name),
+              inner.width as usize), on(PAPER, RAISED).add_modifier(Modifier::BOLD));
+    let report = prepared.report();
+    let lines: Vec<&str> = report.lines().collect();
+    let room = inner.height.saturating_sub(6) as usize;
+    for (i, line) in lines.iter().take(room).enumerate() {
+        let colour = if line.starts_with("rights:") { CLAY } else if line.starts_with("check:") { SEA } else { ASH };
+        put(f, inner, inner.x, inner.y + 2 + i as u16, &clip(line, inner.width as usize), on(colour, RAISED));
+    }
+    put(f, inner, inner.x, inner.bottom().saturating_sub(2), "A yes stores the checked copy and shows the rights in /app list.", on(DIM, RAISED));
+    put(f, inner, inner.x, inner.bottom().saturating_sub(1), "y or enter installs · n or esc cancels and removes the checked copy", on(CLAY, RAISED));
+}
+
 fn api_key_dialog(f: &mut Frame, app: &App, area: Rect, label: &str, input: &[char], cursor: usize, error: &str) {
     let _ = app;
     let inner = dialog(f, area, "API key", 66, 11);
@@ -748,6 +806,8 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
         Overlay::Roles { sel } => roles_dialog(f, app, area, *sel),
         Overlay::Plugins { sel, scroll, filter, mode } => plugins_dialog(f, app, area, *sel, *scroll, filter, *mode),
         Overlay::PluginCommands { plugin, sel, scroll } => plugin_commands_dialog(f, app, area, plugin, *sel, *scroll),
+        Overlay::Apps { sel, scroll } => apps_dialog(f, app, area, *sel, *scroll),
+        Overlay::AppInstall { prepared } => app_install_dialog(f, area, prepared),
         Overlay::ApiKey { label, input, cursor, error, .. } => api_key_dialog(f, app, area, label, input, *cursor, error),
         Overlay::None => {}
         Overlay::Palette { query, sel } => {

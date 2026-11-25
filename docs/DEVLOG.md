@@ -1595,3 +1595,57 @@ Open:
 - Briefs and uploads live in the memory of one `penelope mcp` process. There is no TTL, no size cap for the store and
   no on-disk brief. A restart loses the ids.
 - `brief.roots` adds folders; it does not restrict the default project/plugin folders.
+
+## DeepSeek phase 4.4 (branch `feat/apps-launcher`)
+
+### Apps and a launcher
+
+An app is a folder under `.penelope/apps/NAME/` with a manifest, `.penelope-app.json` or `app.json`. The manifest names
+the app, its version, a description, its entry and its rights. `entry` is an HTML file inside the app folder;
+`entry` or `view` may also name the built-in view `clusters`. Every manifest path goes through one check: no root, no
+drive prefix, no `..`, no `~`, no backslash, and a canonicalized file must stay inside the app folder. A symlink that
+points out is refused.
+
+The launcher is `penelope app ...` on the command line and `/app` or F7 in the interface. `penelope app list` lists
+installed apps with version, view and rights; `/app` opens the launcher screen. Enter shows a built-in app in the TUI
+and opens an HTML app in the browser; `o` opens the HTML entry, `a` switches the chosen app on or off and `xx` removes
+one. `penelope app show NAME` prints the built-in view or the HTML path. `/app list`, `/app install LINK|DIR`,
+`/app on NAME`, `/app off`, `/app remove NAME` and `/app show NAME` are also in the command table, and the new commands
+are in `penelope --help`.
+
+Installs run `plugins::check` on the copied or cloned folder and show the result and the rights. A dangerous script is
+refused with its file and line and the staging folder is removed; nothing reaches `.penelope/apps/NAME`. In the
+interface the person sees an install dialog and only `y`/enter moves the checked folder into place. On the command line
+a terminal gets the same report and a `[y/N]` question. `--yes` is the unattended path and needs the agreement in
+`config.json`: `"apps": {"allow_install": true, "rights": {"files": true, "network": false, "shell": false}}`. A pipe
+without `--yes` is refused before anything is copied. The registry `.penelope/apps.json` keeps the chosen app and the
+install source of every app.
+
+Rights are enforced at one gate per kind of access. `file_text` and `data_dir` read only inside `.penelope` and reject
+traversal and symlink escapes; `fetch` needs `network`; `shell` needs `shell`. The built-in cluster view may read
+`.penelope/clusters` without a declared `files` right; it still has no network and no shell unless the manifest grants
+them. The cluster view shows every running cluster with id, state and progress and lists its parts. The sample app in
+`apps/cluster-view/` installs with `penelope app install apps/cluster-view`.
+
+Measured: `cd cli && cargo test` → 260 unit tests + 11 integration tests, 0 failed (2026-11-26). New tests cover a
+clean local install, list/on/off/remove, a dangerous install refused by `plugins::check` with `install.sh:2`, a git
+clone via `file://`, the two-cluster view with progress, the config gate for `--yes`, manifest traversal, file
+traversal and the shell/network refusals. A manual smoke run installed `apps/cluster-view` into a temporary root and
+`app show cluster-view` printed `alpha-1 working P:1/2` and `beta-2 validating P:2/3`.
+
+Open:
+
+- **No live GitHub install was run.** The clone path is tested against a local `file://` git repository, not against
+  github.com; this session had no network dependency for the tests.
+- **HTML apps are not sandboxed by Penelope.** Paths and the entry are checked, but once the browser opens the page the
+  browser owns its network and file access. Only the built-in TUI app is fully behind the rights gate. There is no
+  HTML renderer in the interface.
+- **No app update command and no ZIP install.** An app is installed from a folder or a git link; a ZIP is reported as
+  neither. To update, remove and install again.
+- `shell` and `fetch` are gated library calls; no built-in app uses them yet, so their allowed path is not live-tested.
+  The refusal path is tested.
+- A refused or cancelled install removes its hidden staging folder. A Penelope process that is killed in the middle of
+  the install question can leave `.penelope/apps/.NAME-install-*` behind; it is ignored by the launcher and can be
+  deleted by hand.
+- The built-in cluster view reads all cluster state files under `.penelope/clusters`; a very large history is read on
+  every opening. There is no cache.

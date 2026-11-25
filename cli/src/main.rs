@@ -3,6 +3,7 @@
 #[allow(dead_code)]
 mod advise;
 mod agents;
+mod apps;
 mod audit;
 mod auth;
 mod backend;
@@ -95,6 +96,13 @@ penelope factory install NAME [--dry] [--yes]
                               show the unit files; --yes writes them and enables the timer
 penelope factory run NAME    run one factory now, through `cluster run`, without the interface
 penelope factory stop NAME   stop the timer and remove its unit files; the profile stays
+penelope app list            installed apps with version, view and rights
+penelope app install LINK|DIR [--yes]
+                              check the scripts, show the rights, install after a yes; --yes needs apps.allow_install
+penelope app on NAME         the app the launcher marks as chosen
+penelope app off             no app is the chosen one; the folders stay
+penelope app remove NAME     delete an installed app and its folder
+penelope app show NAME       the TUI view of a built-in app, or the path of its HTML entry
 penelope models [PROVIDER]   the chat models the provider reports, with its effort levels
 penelope provider use NAME [--role main|weak|scout] [--model MODEL] [--workspace ID] [--base-url URL]
                               write one model setting from the table to config.json
@@ -362,6 +370,10 @@ fn main() {
             }
         }
         "factory" => match factories::cli(&ctx, &args[1..]) {
+            Ok(text) => print!("{}", text),
+            Err(e) => { loom::warn(&e); std::process::exit(2); }
+        },
+        "app" => match apps::cli(&ctx, &args[1..]) {
             Ok(text) => print!("{}", text),
             Err(e) => { loom::warn(&e); std::process::exit(2); }
         },

@@ -43,6 +43,7 @@ pub fn default_config() -> Value {
         "plugin_dirs": null,
         "plugin_home": null,
         "brief": {"hosts": [], "roots": []},
+        "apps": {"allow_install": false, "rights": {"files": false, "network": false, "shell": false}},
         "update": {"url": "", "channel": "stable", "public_key": ""},
         "global_memory": null,
         "clipboard": {"read": "", "write": ""}
