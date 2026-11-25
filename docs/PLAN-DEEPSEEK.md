@@ -1,7 +1,7 @@
 # Plan for the coding agent: everything that is still missing in Penelope
 
 Written on 2026-11-25 from a talk with the owner and from a read of the code at commit `10bac25`
-(version 0.11.0, 229 tests, 53 files in `cli/src/`). The reader is a coding agent such as DeepSeek in OpenCode.
+(version 0.11.0, 240 tests, 53 files in `cli/src/`). The reader is a coding agent such as DeepSeek in OpenCode.
 Bug numbers such as B33 point into `docs/FEATURES-BUGS.md`. Block numbers point into `docs/CLUSTER-IDEAS.md`.
 
 ## How to work
@@ -109,13 +109,15 @@ These packages decide whether the idea can be shown. Do them in this order.
   cluster for design options.
 - Done when: a test shows the question in the memory file of the target and the answer in the memory file of the asker.
 
-### 1.8 A prompt cluster in between, and a slot for a human (block 5)
+### 1.8 A prompt cluster in between, and a slot for a human (block 5) — done
+- Result: `83c564e`, PR #9. `before: PROFILE` rewrites the task; self/chain/writing prompt profiles refused; human part waits for yes/no and never assumes yes. Open: kill during prompt/human seen after return; rewritten task capped 6,000.
 - Build: a profile field `before: "prompt"` sends the task through a named cluster that rewrites it. A part with
   `role: "human"` stops and waits for yes or no.
 - Done when: the task text a worker receives differs from the text the orchestrator wrote, and a cluster with a human
   part before `git push` does not push after a no.
 
-### 1.9 A cluster as a file, and the cost before the start (block 4)
+### 1.9 A cluster as a file, and the cost before the start (block 4) — done
+- Result: `46bcbbc`, PR #9. `.cluster` parser into Profile, `--dry` with parts/models and heuristic cost, no model call or state. Open: heuristic estimate; parts cannot carry per-part task/model/tools; --dry without profile lists all profiles.
 - State: a profile is JSON. Requests already know `$name(role=..., goal="...")` and `;;`.
 - Build: a cluster file in the same language as requests, for example
   `$dev(parts=[researcher, coder*3, validator, tool], max_models=8, max_depth=3, budget_eur=2)`. It is parsed into the
