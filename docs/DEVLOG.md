@@ -68,6 +68,29 @@ Open: an abandoned HTTP request keeps its socket until the provider's timeout; t
 still bill the answer. The Claude kill path has no live Claude login in this environment and is covered by unit
 structure only, not by a real `claude` child.
 
+### 1.4 Zombie watch, dump and respawn
+
+A profile now has `report_every` (seconds, `0` turns the periodic report off) and `stuck_after` (default 3). A
+`ZombieThread` writes one report per interval while a part runs and feeds the `P:`/`F:` pair to the watch; three
+equal pairs mark the cluster stuck. Every part also writes its tool calls to `calls.jsonl`, and `stuck_after` equal
+calls in a row are a second, independent cause. A stuck cluster sets its cancel flag, removes its worktree, writes
+`dump.txt` and `dump.json` with the cause, and ends `S:stuck`; no patch is merged.
+
+`cluster_dump` prints the stored dump. `cluster_respawn` refuses without a dump cause, kills first, then creates a new
+cluster with the old task plus `Cause from the dump: ...`, and records `respawns` (limit 2) and `respawned_from`.
+`cluster_profile` writes or merges a profile file and parses it with the same `parse_profile` as a profile read from
+disk. `orchestrate` respawns a zombie automatically, at most twice, before it marks the plan step done. The CLI has
+`cluster dump`, `cluster respawn ID [EXTRA]` and `cluster profile NAME [JSON]`; the three tools are in `spec.rs` and
+`mcp.rs`.
+
+Measured: `cd cli && cargo test` → `188 passed; 0 failed` (2026-11-25). New tests: a cluster whose model sleeps five
+seconds writes three one-second reports, is dumped and respawned, and the second model prompt contains the exact
+`Cause:` line of the dump; three equal tool calls are a zombie cause; a respawn without a dump is refused and a third
+respawn is refused; a profile written by the tool keeps `report_every: "2m"` as 120 seconds and `"4 reports"` as 4.
+
+Open: the zombie watch is a heuristic. A part that needs longer than `stuck_after × report_every` without a finished
+part is killed even if it is working; profiles that use long parts must raise `report_every` or `stuck_after`.
+
 This is a working increment, not a claim that every limit is gone. The last section names what is still open and how
 each claim can be checked on this machine.
 

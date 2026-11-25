@@ -11,8 +11,9 @@
 
 use crate::config::Ctx;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -23,6 +24,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 static WRITE_LOCK: Mutex<()> = Mutex::new(());
 /// Two clusters may merge at the same time after their validators. One patch lands, the second sees a conflict.
 static MERGE_LOCK: Mutex<()> = Mutex::new(());
+/// The zombie watch reads the report history and parallel parts may add to it; one writer at a time.
+static REPORT_LOCK: Mutex<()> = Mutex::new(());
+/// Parallel parts append to one `memory.md`; one writer at a time keeps the sections whole.
+static MEMORY_LOCK: Mutex<()> = Mutex::new(());
 /// The cancel flag of every cluster that is running in this process. `kill()` sets it at once; a watcher on the kill
 /// file reaches a cluster started by another process within 100 ms.
 static CANCELS: Mutex<Vec<(String, Arc<AtomicBool>)>> = Mutex::new(Vec::new());
@@ -52,8 +57,33 @@ pub struct Profile {
     pub budget_eur: f64,
     pub max_steps: usize,
     pub retries: usize,
+    /// Seconds between two reports of a running part. 0 reports after every model answer.
+    pub report_every: u64,
+    /// Consecutive reports with one `P:` and `F:`, or repeated equal tool calls, before the cluster is stuck.
+    pub stuck_after: usize,
     /// A cluster that may write gets its own git worktree. Research and live-test profiles turn this off.
     pub worktree: bool,
+}
+
+/// A number that may arrive as `3`, `"3"` or `"3 reports"`.
+fn count_of(value: &Value) -> Option<usize> {
+    if let Some(n) = value.as_u64() { return Some(n as usize); }
+    let text = value.as_str()?.trim();
+    let digits: String = text.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
+}
+
+/// Seconds that may arrive as `30`, `"30s"`, `"5m"` or `"1h"`.
+fn seconds_of(value: &Value) -> Option<u64> {
+    if let Some(n) = value.as_u64() { return Some(n); }
+    let text = value.as_str()?.trim().to_lowercase();
+    let digits: String = text.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let n: u64 = digits.parse().ok()?;
+    Some(match text.chars().last() {
+        Some('m') => n * 60,
+        Some('h') => n * 3600,
+        _ => n,
+    })
 }
 
 #[derive(Clone, Debug, Default)]
@@ -93,6 +123,10 @@ pub struct Cluster {
     pub branch: String,
     /// The working directory for every tool call of this cluster: the worktree, or empty for the live tree.
     pub cwd: String,
+    /// How often this cluster was already started again from a dump. The limit is 2.
+    pub respawns: usize,
+    /// The cluster this one was respawned from.
+    pub respawned_from: String,
     pub parts: Vec<PartRun>,
 }
 
@@ -182,10 +216,12 @@ fn parse_profile(value: &Value, fallback_name: &str) -> Result<Profile, String> 
     let budget_eur = value["budget_eur"].as_f64().unwrap_or(0.0).max(0.0);
     let max_steps = value["max_steps"].as_u64().unwrap_or(12).clamp(1, 30) as usize;
     let retries = value["retries"].as_u64().unwrap_or(1).min(3) as usize;
+    let report_every = seconds_of(&value["report_every"]).unwrap_or(0);
+    let stuck_after = count_of(&value["stuck_after"]).unwrap_or(3).max(1);
     // A profile with a worker part writes, so it gets a worktree unless it says otherwise. A research or live-test
     // profile has no writer and can be set to false explicitly.
     let worktree = value["worktree"].as_bool().unwrap_or_else(|| list.iter().any(|p| p.role == "worker"));
-    Ok(Profile { name, workers: list, validator, max_models, max_depth, budget_eur, max_steps, retries, worktree })
+    Ok(Profile { name, workers: list, validator, max_models, max_depth, budget_eur, max_steps, retries, report_every, stuck_after, worktree })
 }
 
 fn builtin(name: &str) -> Option<Profile> {
@@ -282,8 +318,8 @@ pub fn profiles_text(ctx: &Ctx) -> String {
             Ok(p) => {
                 let parts: Vec<String> = p.workers.iter().map(|w| format!("{} ({})", w.name, w.role))
                     .chain(p.validator.iter().map(|v| format!("{} (validator)", v.name))).collect();
-                out.push_str(&format!("{:<12} {} · max {} parts, depth {}, {} retries{}\n  {}\n", name, parts.join(", "),
-                                      p.max_models, p.max_depth, p.retries,
+                out.push_str(&format!("{:<12} {} · max {} parts, depth {}, {} retries, report every {}s, stuck after {}{}\n  {}\n", name, parts.join(", "),
+                                      p.max_models, p.max_depth, p.retries, p.report_every, p.stuck_after,
                                       if p.worktree { " · worktree" } else { "" },
                                       if p.budget_eur > 0.0 { format!("{:.2} EUR budget", p.budget_eur) } else { "no euro limit".to_string() }));
             }
@@ -315,6 +351,17 @@ fn part_model_name(p: &Part, model: &Value) -> String {
 
 fn save(ctx: &Ctx, c: &Cluster) -> Result<(), String> {
     let _guard = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // `kill` writes `killing` while the run may write `killed` at the same moment. A late kill must never downgrade
+    // a final state; the run is the authority on how it stopped.
+    if c.state == "killing" {
+        if let Ok(text) = fs::read_to_string(cluster_file(ctx, &c.id)) {
+            if let Ok(value) = serde_json::from_str::<Value>(&text) {
+                if matches!(value["state"].as_str().unwrap_or(""), "done" | "failed" | "killed" | "stuck") {
+                    return Ok(());
+                }
+            }
+        }
+    }
     let dir = cluster_dir(ctx, &c.id);
     fs::create_dir_all(&dir).map_err(|e| format!("cannot make {}: {}", dir.display(), e))?;
     let parts: Vec<Value> = c.parts.iter().map(|p| json!({"name": p.name, "slot": p.slot, "role": p.role, "model": p.model,
@@ -324,7 +371,8 @@ fn save(ctx: &Ctx, c: &Cluster) -> Result<(), String> {
         "depth": c.depth, "state": c.state, "done": c.done, "total": c.total, "started": c.started, "updated": c.updated,
         "output": c.output, "error": c.error, "memory": c.memory, "parts": parts,
         "evidence": c.evidence,
-        "project": c.project, "worktree": c.worktree, "branch": c.branch, "cwd": c.cwd
+        "project": c.project, "worktree": c.worktree, "branch": c.branch, "cwd": c.cwd,
+        "respawns": c.respawns, "respawned_from": c.respawned_from
     });
     let path = cluster_file(ctx, &c.id);
     let tmp = path.with_extension("json.tmp");
@@ -361,6 +409,8 @@ fn cluster_from(v: &Value) -> Cluster {
         worktree: v["worktree"].as_str().unwrap_or("").to_string(),
         branch: v["branch"].as_str().unwrap_or("").to_string(),
         cwd: v["cwd"].as_str().unwrap_or("").to_string(),
+        respawns: v["respawns"].as_u64().unwrap_or(0) as usize,
+        respawned_from: v["respawned_from"].as_str().unwrap_or("").to_string(),
         parts: v["parts"].as_array().map(|a| a.iter().map(|p| PartRun {
             name: p["name"].as_str().unwrap_or("").to_string(), slot: p["slot"].as_str().unwrap_or("").to_string(),
             role: p["role"].as_str().unwrap_or("").to_string(), model: p["model"].as_str().unwrap_or("").to_string(),
@@ -402,8 +452,14 @@ fn report(ctx: &Ctx, c: &Cluster, focus: &str, error: &str) -> String {
         v: if c.evidence.trim().is_empty() { None } else { Some(c.evidence.clone()) },
     };
     let line = format!("{}\n", crate::proof::render(&r));
-    let _ = fs::create_dir_all(cluster_dir(ctx, &c.id));
-    let _ = fs::write(cluster_dir(ctx, &c.id).join("report.txt"), &line);
+    let dir = cluster_dir(ctx, &c.id);
+    let _guard = REPORT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _ = fs::create_dir_all(&dir);
+    let _ = fs::write(dir.join("report.txt"), &line);
+    // The history is what the zombie watch reads: one line per report, with the time it was written.
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(dir.join("reports.jsonl")) {
+        let _ = writeln!(file, "{} {}", now(), line.trim_end());
+    }
     line
 }
 
@@ -412,11 +468,12 @@ fn memory_path(ctx: &Ctx, id: &str) -> PathBuf {
 }
 
 fn memory_line(ctx: &Ctx, c: &Cluster, part: &Part, model: &Value, text: &str, state: &str) {
+    let _guard = MEMORY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = cluster_dir(ctx, &c.id);
     let _ = fs::create_dir_all(&dir);
     let entry = format!("\n## {} · {} · {}\nmodel: {} · state: {}\n\n{}\n", part.name, part.role,
                         if part.slot.is_empty() { "part" } else { &part.slot }, part_model_name(part, model), state, text.trim());
-    let _ = fs::OpenOptions::new().create(true).append(true).open(memory_path(ctx, &c.id)).and_then(|mut f| std::io::Write::write_all(&mut f, entry.as_bytes()));
+    let _ = fs::OpenOptions::new().create(true).append(true).open(memory_path(ctx, &c.id)).and_then(|mut f| f.write_all(entry.as_bytes()));
 }
 
 fn kill_requested(ctx: &Ctx, id: &str) -> bool {
@@ -523,6 +580,56 @@ impl Drop for CancelGuard {
     }
 }
 
+/// Writes the periodic report of a running cluster and hands it to the zombie watch. A report interval of 0 turns the
+/// watch off, which is the default for a short cluster: only a cluster that asked for reports can be idle that way.
+struct ZombieThread {
+    stop: Arc<AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl ZombieThread {
+    fn start(ctx: &Ctx, id: &str, report_every: u64, watch: Arc<Mutex<Watch>>, focus: Arc<Mutex<String>>,
+             cancel: Arc<AtomicBool>) -> ZombieThread {
+        let stop = Arc::new(AtomicBool::new(false));
+        let idle = stop.clone();
+        let handle = if report_every == 0 {
+            None
+        } else {
+            let ctx = ctx.clone();
+            let id = id.to_string();
+            Some(std::thread::spawn(move || {
+                let mut last = now();
+                while !idle.load(Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(250));
+                    if now().saturating_sub(last) < report_every { continue; }
+                    last = now();
+                    let Ok(c) = load(&ctx, &id) else { continue };
+                    if c.state != "working" && c.state != "validating" { continue; }
+                    let focus = focus.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                    if focus.is_empty() { continue; }
+                    report(&ctx, &c, &focus, "");
+                    let cause = watch.lock().unwrap_or_else(|e| e.into_inner()).note_report(&c, &focus);
+                    if cause.is_some() {
+                        cancel.store(true, Ordering::SeqCst);
+                        kill_children(&id);
+                        break;
+                    }
+                }
+            }))
+        };
+        ZombieThread { stop, handle }
+    }
+}
+
+impl Drop for ZombieThread {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
 /// The two hard limits of a part: the budget of its cluster and the budget of the whole session. Both are checked
 /// after every model answer with the usage of the loop that is still running, so the call that crosses a limit is the
 /// last call of the part.
@@ -552,6 +659,79 @@ impl Limits {
         let session_spent = (crate::cost::total_eur(ctx) - self.session_before).max(0.0) + pending;
         if self.session > 0.0 && session_spent >= self.session {
             return Some(format!("BUDGET: the session used {:.4} of {:.2} EUR in the call that crossed its limit", session_spent, self.session));
+        }
+        None
+    }
+}
+
+/// The zombie watch of one cluster. It counts reports with one `P:` and `F:` per focus and equal tool calls per part.
+/// `stuck_after` of either marks the cluster stuck; the cause goes into the dump that the next prompt names.
+struct Watch {
+    stuck_after: usize,
+    reports: HashMap<String, (String, String, usize, u64)>,
+    calls: HashMap<String, Vec<String>>,
+    cause: Option<String>,
+}
+
+impl Watch {
+    fn new(stuck_after: usize) -> Watch {
+        Watch { stuck_after: stuck_after.max(1), reports: HashMap::new(), calls: HashMap::new(), cause: None }
+    }
+
+    fn cause(&self) -> Option<String> {
+        self.cause.clone()
+    }
+
+    fn note_report(&mut self, c: &Cluster, focus: &str) -> Option<String> {
+        if self.cause.is_some() { return self.cause.clone(); }
+        let p = format!("{}/{}", c.done, c.total);
+        let f = focus.to_string();
+        let at = now();
+        let entry = self.reports.entry(f.clone()).or_insert((p.clone(), f.clone(), 0, at));
+        if entry.0 == p && entry.1 == f {
+            entry.2 += 1;
+        } else {
+            *entry = (p.clone(), f.clone(), 1, at);
+        }
+        entry.3 = at;
+        if entry.2 >= self.stuck_after {
+            let cause = format!("repeated report {} times at P:{} F:{}", entry.2, p, f);
+            self.cause = Some(cause.clone());
+            return Some(cause);
+        }
+        None
+    }
+
+    /// Every tool call of a part goes into `calls.jsonl`. `stuck_after` equal calls in a row are a zombie.
+    fn note_call(&mut self, ctx: &Ctx, c: &Cluster, part: &Part, name: &str, args: &Value) -> Option<String> {
+        let sig = format!("{} {}", name, serde_json::to_string(args).unwrap_or_else(|_| "null".to_string()));
+        let dir = cluster_dir(ctx, &c.id);
+        let _ = fs::create_dir_all(&dir);
+        if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(dir.join("calls.jsonl")) {
+            let _ = writeln!(file, "{} {} {}", now(), part.name, sig.chars().take(500).collect::<String>());
+        }
+        if self.cause.is_some() { return self.cause.clone(); }
+        let repeated = {
+            let list = self.calls.entry(part.name.clone()).or_default();
+            list.push(sig.clone());
+            while list.len() > self.stuck_after { list.remove(0); }
+            list.len() >= self.stuck_after && list.iter().all(|item| item == &sig)
+        };
+        if repeated {
+            let cause = format!("repeated tool call {} times: {}", self.stuck_after, sig.chars().take(200).collect::<String>());
+            self.cause = Some(cause.clone());
+            return Some(cause);
+        }
+        None
+    }
+
+    /// A Claude part writes its calls to a log; the same rule applies after the command ended.
+    fn note_checks(&mut self, ctx: &Ctx, c: &Cluster, part: &Part, checks: &[Check]) -> Option<String> {
+        for check in checks {
+            let args = json!({"target": check.target});
+            if let Some(cause) = self.note_call(ctx, c, part, &check.name, &args) {
+                return Some(cause);
+            }
         }
         None
     }
@@ -636,7 +816,7 @@ fn args_with_cwd(name: &str, args: &Value, cwd: &str) -> Value {
 }
 
 fn run_model(ctx: &Ctx, c: &Cluster, part: &Part, system: &str, task: &str, max_steps: usize,
-             cancel: &AtomicBool, limits: Limits) -> Result<Done, String> {
+             cancel: &AtomicBool, limits: Limits, watch: &Arc<Mutex<Watch>>) -> Result<Done, String> {
     let model = model_for_part(ctx, part)?;
     if let Some(family) = crate::crew::family_of(&model) {
         return Err(format!("{} slot is in training and cannot answer yet", family));
@@ -650,18 +830,32 @@ fn run_model(ctx: &Ctx, c: &Cluster, part: &Part, system: &str, task: &str, max_
         let cluster_cwd = c.cwd.clone();
         let model_name = model["model"].as_str().unwrap_or("").to_string();
         let mut checks: Vec<Check> = Vec::new();
-        let mut tick = |usage: &crate::llm::Usage| limits.check(ctx, &model_name, usage);
+        let mut tick = |usage: &crate::llm::Usage| {
+            if let Some(stop) = limits.check(ctx, &model_name, usage) { return Some(stop); }
+            if let Some(cause) = watch.lock().unwrap_or_else(|e| e.into_inner()).cause() {
+                cancel.store(true, Ordering::SeqCst);
+                return Some(format!("STUCK: {}", cause));
+            }
+            None
+        };
         let out = crate::agents::with_mcp_scope(&part.mcp, || crate::route::with_role(&role, || {
             crate::llm::run_loop_with(&model, system, &mut history, &tools, max_steps, Some(cancel), &mut usage, &mut tick,
                 &mut |call| {
                     // A part works in its cluster folder. A tool call without a cwd gets the worktree, never the live tree.
                     let args = args_with_cwd(&call.name, &call.args, &cluster_cwd);
                     let (text, ok) = crate::tools::dispatch_retry(ctx, &role, &call.name, &args);
+                    if watch.lock().unwrap_or_else(|e| e.into_inner()).note_call(ctx, c, part, &call.name, &args).is_some() {
+                        cancel.store(true, Ordering::SeqCst);
+                    }
                     checks.push(Check { name: call.name.clone(), target: check_target(&call.name, &args), ok: check_ok(&call.name, &text, ok) });
                     (text, ok)
                 }, &mut |_| {})
-        }))?;
+        }));
         crate::cost::record(ctx, &format!("cluster:{}", c.name), &model_name, usage.tokens_in, usage.tokens_out);
+        if let Some(cause) = watch.lock().unwrap_or_else(|e| e.into_inner()).cause() {
+            return Err(format!("STUCK: {}", cause));
+        }
+        let out = out?;
         if let Some(stop) = limits.over(ctx) { return Err(stop); }
         return Ok(Done { text: out, checks });
     }
@@ -732,6 +926,9 @@ fn run_model(ctx: &Ctx, c: &Cluster, part: &Part, system: &str, task: &str, max_
     let checks = checks_from_log(&log);
     let _ = fs::remove_file(&log);
     if let Some(stop) = limits.over(ctx) { return Err(stop); }
+    if let Some(cause) = watch.lock().unwrap_or_else(|e| e.into_inner()).note_checks(ctx, c, part, &checks) {
+        return Err(format!("STUCK: {}", cause));
+    }
     Ok(Done { text: v["result"].as_str().unwrap_or("").trim().to_string(), checks })
 }
 
@@ -756,12 +953,16 @@ fn validator_prompt(c: &Cluster, memory: &str) -> String {
 Otherwise FAIL with the smallest exact correction.", c.task, memory.chars().take(12_000).collect::<String>())
 }
 
-fn run_workers(ctx: &Ctx, c: &mut Cluster, profile: &Profile, feedback: &str, limits: Limits, cancel: &AtomicBool) -> Result<bool, String> {
+fn run_workers(ctx: &Ctx, c: &mut Cluster, profile: &Profile, feedback: &str, limits: Limits, cancel: &AtomicBool,
+               watch: &Arc<Mutex<Watch>>, focus: &Arc<Mutex<String>>) -> Result<bool, String> {
     let mut all_ok = true;
     c.error.clear();
     c.evidence.clear();
     for (i, part) in profile.workers.iter().enumerate() {
         if kill_requested(ctx, &c.id) || cancel.load(Ordering::SeqCst) { return Err("killed".to_string()); }
+        if let Some(cause) = watch.lock().unwrap_or_else(|e| e.into_inner()).cause() {
+            return Err(format!("STUCK: {}", cause));
+        }
         if let Some(stop) = limits.over(ctx) {
             c.error = stop;
             return Err(c.error.clone());
@@ -777,6 +978,7 @@ fn run_workers(ctx: &Ctx, c: &mut Cluster, profile: &Profile, feedback: &str, li
         };
         c.parts[i].model = part_model_name(part, &model);
         c.parts[i].state = "working".to_string();
+        *focus.lock().unwrap_or_else(|e| e.into_inner()) = part.name.clone();
         c.done = c.done.min(c.total);
         c.updated = now();
         c.state = "working".to_string();
@@ -786,7 +988,7 @@ fn run_workers(ctx: &Ctx, c: &mut Cluster, profile: &Profile, feedback: &str, li
         let memory = fs::read_to_string(memory_path(ctx, &c.id)).unwrap_or_default();
         let task = format!("Cluster task: {}\n\nYour part: {}\n\nCluster memory so far:\n{}\n\nDo your part and report the evidence.",
                            c.task, if part.task.is_empty() { &c.task } else { &part.task }, memory.chars().take(10_000).collect::<String>());
-        match run_model(ctx, c, part, &system, &task, profile.max_steps, cancel, limits) {
+        match run_model(ctx, c, part, &system, &task, profile.max_steps, cancel, limits, watch) {
             Ok(done) => {
                 c.parts[i].state = "done".to_string();
                 c.parts[i].output = done.text.clone();
@@ -815,6 +1017,16 @@ fn run_workers(ctx: &Ctx, c: &mut Cluster, profile: &Profile, feedback: &str, li
                 report(ctx, c, &part.name, &c.error);
                 return Err(c.error.clone());
             }
+            Err(e) if e.starts_with("STUCK: ") => {
+                c.parts[i].state = "failed".to_string();
+                c.parts[i].error = e.clone();
+                memory_line(ctx, c, part, &model, &format!("NOT done: {}", e), "failed");
+                c.error = e;
+                c.updated = now();
+                save(ctx, c)?;
+                report(ctx, c, &part.name, &c.error);
+                return Err(c.error.clone());
+            }
             Err(e) if e == "stopped" && (cancel.load(Ordering::SeqCst) || kill_requested(ctx, &c.id)) => {
                 return Err("killed".to_string());
             }
@@ -833,9 +1045,11 @@ fn run_workers(ctx: &Ctx, c: &mut Cluster, profile: &Profile, feedback: &str, li
     Ok(all_ok)
 }
 
-fn validate(ctx: &Ctx, c: &mut Cluster, profile: &Profile, limits: Limits, cancel: &AtomicBool) -> Result<bool, String> {
+fn validate(ctx: &Ctx, c: &mut Cluster, profile: &Profile, limits: Limits, cancel: &AtomicBool,
+            watch: &Arc<Mutex<Watch>>, focus: &Arc<Mutex<String>>) -> Result<bool, String> {
     let Some(part) = &profile.validator else { return Ok(true); };
     if kill_requested(ctx, &c.id) || cancel.load(Ordering::SeqCst) { return Err("killed".to_string()); }
+    if let Some(cause) = watch.lock().unwrap_or_else(|e| e.into_inner()).cause() { return Err(format!("STUCK: {}", cause)); }
     if let Some(stop) = limits.over(ctx) { return Err(stop); }
     let model = match model_for_part(ctx, part) {
         Ok(m) => m,
@@ -843,16 +1057,17 @@ fn validate(ctx: &Ctx, c: &mut Cluster, profile: &Profile, limits: Limits, cance
     };
     c.state = "validating".to_string();
     c.updated = now();
+    *focus.lock().unwrap_or_else(|e| e.into_inner()) = "validator".to_string();
     let idx = profile.workers.len();
     if let Some(p) = c.parts.get_mut(idx) { p.state = "working".to_string(); p.model = part_model_name(part, &model); }
     save(ctx, c)?;
     report(ctx, c, "validator", "");
     let memory = fs::read_to_string(memory_path(ctx, &c.id)).unwrap_or_default();
-    let out = run_model(ctx, c, part, &validator_system(c, part, &model), &validator_prompt(c, &memory), 4, cancel, limits);
+    let out = run_model(ctx, c, part, &validator_system(c, part, &model), &validator_prompt(c, &memory), 4, cancel, limits, watch);
     let done = match out {
         Ok(d) => d,
         Err(e) => {
-            if e.starts_with("BUDGET: ") { return Err(e); }
+            if e.starts_with("BUDGET: ") || e.starts_with("STUCK: ") { return Err(e); }
             if e == "stopped" && (cancel.load(Ordering::SeqCst) || kill_requested(ctx, &c.id)) { return Err("killed".to_string()); }
             c.error = format!("validator: {}", e);
             c.evidence.clear();
@@ -961,6 +1176,9 @@ fn run_cluster_inner(ctx: &Ctx, id: &str, session_before: Option<f64>) -> Result
     let before = crate::cost::total_eur(ctx);
     let limits = Limits { cluster: profile.budget_eur, cluster_before: before,
                           session: crate::cost::session_budget(ctx), session_before: session_before.unwrap_or(before) };
+    let watch = Arc::new(Mutex::new(Watch::new(profile.stuck_after)));
+    let focus = Arc::new(Mutex::new(String::new()));
+    let _zombie = ZombieThread::start(ctx, &c.id, profile.report_every, watch.clone(), focus.clone(), cancel.clone());
     let mut feedback = String::new();
     let mut ok = false;
     let mut workers_ok = true;
@@ -974,8 +1192,12 @@ fn run_cluster_inner(ctx: &Ctx, id: &str, session_before: Option<f64>) -> Result
             report(ctx, &c, "kill", "killed");
             return Ok(format!("cluster {} killed{}", id, if note.is_empty() { String::new() } else { format!(" · {}", note) }));
         }
-        workers_ok = match run_workers(ctx, &mut c, &profile, &feedback, limits, &cancel) {
+        workers_ok = match run_workers(ctx, &mut c, &profile, &feedback, limits, &cancel, &watch, &focus) {
             Ok(v) => v,
+            Err(e) if e.starts_with("STUCK: ") => {
+                let cause = e.trim_start_matches("STUCK: ").to_string();
+                return stop_stuck(ctx, &mut c, &cause);
+            }
             Err(e) if e == "killed" => {
                 let note = cleanup_worktree(&mut c);
                 c.state = "killed".to_string(); c.error = "killed by the orchestrator".to_string(); c.updated = now(); save(ctx, &c)?;
@@ -985,7 +1207,7 @@ fn run_cluster_inner(ctx: &Ctx, id: &str, session_before: Option<f64>) -> Result
         };
         if !workers_ok { break; }
         if profile.validator.is_none() { ok = true; break; }
-        match validate(ctx, &mut c, &profile, limits, &cancel) {
+        match validate(ctx, &mut c, &profile, limits, &cancel, &watch, &focus) {
             Ok(true) => { ok = true; break; }
             Ok(false) => {
                 feedback = c.error.clone();
@@ -994,6 +1216,10 @@ fn run_cluster_inner(ctx: &Ctx, id: &str, session_before: Option<f64>) -> Result
                     let note = format!("\n## validator · retry {}\n\n{}\n", attempt + 1, feedback);
                     let _ = fs::OpenOptions::new().create(true).append(true).open(memory_path(ctx, &c.id)).and_then(|mut f| std::io::Write::write_all(&mut f, note.as_bytes()));
                 }
+            }
+            Err(e) if e.starts_with("STUCK: ") => {
+                let cause = e.trim_start_matches("STUCK: ").to_string();
+                return stop_stuck(ctx, &mut c, &cause);
             }
             Err(e) if e == "killed" => {
                 let note = cleanup_worktree(&mut c);
@@ -1047,11 +1273,18 @@ fn run_cluster_inner(ctx: &Ctx, id: &str, session_before: Option<f64>) -> Result
 }
 
 fn append_memory(ctx: &Ctx, c: &Cluster, text: &str) {
-    let _ = fs::OpenOptions::new().create(true).append(true).open(memory_path(ctx, &c.id)).and_then(|mut f| std::io::Write::write_all(&mut f, text.as_bytes()));
+    let _guard = MEMORY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _ = fs::OpenOptions::new().create(true).append(true).open(memory_path(ctx, &c.id)).and_then(|mut f| f.write_all(text.as_bytes()));
 }
 
 fn new_cluster(ctx: &Ctx, profile: &Profile, name: &str, task: &str, parent: Option<&str>, after: Vec<String>, depth: usize) -> Result<Cluster, String> {
-    let id = format!("{}-{}", safe(name), stamp());
+    // Two clusters or a respawn may start in the same millisecond; the file name must stay unique.
+    let mut id = format!("{}-{}", safe(name), stamp());
+    let mut suffix = 1;
+    while cluster_file(ctx, &id).is_file() {
+        id = format!("{}-{}-{}", safe(name), stamp(), suffix);
+        suffix += 1;
+    }
     let parts: Vec<PartRun> = profile.workers.iter().map(|p| PartRun { name: p.name.clone(), slot: p.slot.clone(), role: p.role.clone(), model: String::new(), state: "queued".into(), output: String::new(), error: String::new() })
         .chain(profile.validator.iter().map(|p| PartRun { name: p.name.clone(), slot: p.slot.clone(), role: p.role.clone(), model: String::new(), state: "queued".into(), output: String::new(), error: String::new() }))
         .collect();
@@ -1074,7 +1307,7 @@ fn new_cluster(ctx: &Ctx, profile: &Profile, name: &str, task: &str, parent: Opt
                       parent: parent.map(str::to_string), after, depth, state: "queued".to_string(), done: 0,
                       total: parts.len(), started: now(), updated: now(), output: String::new(), error: String::new(),
                       memory: memory_path(ctx, &id).to_string_lossy().to_string(), evidence: String::new(),
-                      project, worktree, branch, cwd, parts };
+                      project, worktree, branch, cwd, respawns: 0, respawned_from: String::new(), parts };
     save(ctx, &c)?;
     let _ = fs::write(memory_path(ctx, &id), format!("# Cluster {} · {}\n\nTask: {}\n\n", name, profile.name, task));
     Ok(c)
@@ -1216,6 +1449,19 @@ pub fn orchestrate(ctx: &Ctx, goal: &str, hint: Option<&str>, parallel: bool) ->
         } else {
             for (id, _) in &ready { let _ = run_cluster_inner(ctx, id, Some(session_before)); }
         }
+        // A zombie is dumped and started again with the cause of its dump, at most twice. Other clusters wait for the
+        // name, so the respawn finishes inside this step.
+        for (id, _) in &ready {
+            let mut victim = id.clone();
+            for _ in 0..2 {
+                let Ok(current) = load(ctx, &victim) else { break };
+                if current.state != "stuck" || current.respawns >= 2 { break; }
+                match respawn_inner(ctx, &victim, "", Some(session_before)) {
+                    Ok((next, _)) => victim = next,
+                    Err(_) => break,
+                }
+            }
+        }
         for (_, p) in &ready { done.push(p.name.clone()); }
         pending.retain(|(_, p)| !ready.iter().any(|(_, r)| r.name == p.name));
     }
@@ -1252,11 +1498,108 @@ pub fn status_text(ctx: &Ctx, id: Option<&str>) -> String {
     out
 }
 
+fn dump_text(c: &Cluster, cause: &str) -> String {
+    let parts: String = c.parts.iter().map(|p| format!("{} · {} · {} · {}\n", p.name, p.role, p.state,
+                                                       if p.error.is_empty() { &p.model } else { &p.error })).collect();
+    let memory = fs::read_to_string(&c.memory).unwrap_or_default();
+    format!("Cluster: {} · {}\nState: {}\nTask: {}\nProgress: {}/{}\nCause: {}\nError: {}\n\nParts:\n{}\nMemory (tail):\n{}\n",
+            c.id, c.name, c.state, c.task, c.done, c.total, cause, c.error, parts,
+            memory.chars().rev().take(6000).collect::<String>().chars().rev().collect::<String>())
+}
+
+/// Writes the state dump of a zombie. The cause is the one line the respawned prompt must name.
+fn write_dump(ctx: &Ctx, c: &Cluster, cause: &str) {
+    let dir = cluster_dir(ctx, &c.id);
+    let _ = fs::create_dir_all(&dir);
+    let _ = fs::write(dir.join("dump.txt"), dump_text(c, cause));
+    let _ = fs::write(dir.join("dump.json"), serde_json::to_string_pretty(&json!({"cause": cause, "state": c.state, "at": now()})).unwrap());
+}
+
+fn cause_from_dump(ctx: &Ctx, id: &str) -> Option<String> {
+    let text = fs::read_to_string(cluster_dir(ctx, id).join("dump.json")).ok()?;
+    let value: Value = serde_json::from_str(&text).ok()?;
+    value["cause"].as_str().filter(|cause| !cause.trim().is_empty()).map(str::to_string)
+}
+
+/// The end of a zombie: the worktree is removed, no patch is merged, and the dump carries the cause.
+fn stop_stuck(ctx: &Ctx, c: &mut Cluster, cause: &str) -> Result<String, String> {
+    let note = cleanup_worktree(c);
+    c.state = "stuck".to_string();
+    c.error = cause.to_string();
+    c.updated = now();
+    write_dump(ctx, c, cause);
+    save(ctx, c)?;
+    report(ctx, c, "zombie", cause);
+    Ok(format!("cluster {} stuck: {}{}", c.id, cause, if note.is_empty() { String::new() } else { format!(" · {}", note) }))
+}
+
 pub fn dump(ctx: &Ctx, id: &str) -> String {
     let c = match load(ctx, id) { Ok(c) => c, Err(e) => return e };
     let mut out = status_text(ctx, Some(id));
     out.push_str(&format!("\n\nOutput\n{}\n", if c.output.is_empty() { "(none)" } else { &c.output }));
+    if let Ok(stored) = fs::read_to_string(cluster_dir(ctx, id).join("dump.txt")) {
+        out.push_str(&format!("\n\nDump\n{}", stored));
+    }
     out
+}
+
+/// Starts a killed cluster again with the task and the cause of its dump. The dump must exist first; a respawn
+/// without a cause is refused. A cluster has at most two respawns.
+pub fn respawn(ctx: &Ctx, id: &str, extra: &str) -> String {
+    match respawn_inner(ctx, id, extra, None) {
+        Ok((_, said)) => said,
+        Err(e) => format!("NOT respawned. {}", e),
+    }
+}
+
+fn respawn_inner(ctx: &Ctx, id: &str, extra: &str, session_before: Option<f64>) -> Result<(String, String), String> {
+    let mut old = load(ctx, id)?;
+    let cause = cause_from_dump(ctx, id).ok_or_else(|| {
+        format!("cluster {} has no dump cause. Run cluster_dump {} first; a respawn without the cause from the dump is not allowed.", id, id)
+    })?;
+    if old.respawns >= 2 {
+        return Err(format!("cluster {} was already respawned {} times; the limit is 2", id, old.respawns));
+    }
+    // Kill first, then start again. The old worktree goes before the new one is made.
+    let _ = kill(ctx, id);
+    old = load(ctx, id).unwrap_or(old);
+    old.state = "killed".to_string();
+    old.error = format!("respawned: {}", cause);
+    old.updated = now();
+    save(ctx, &old)?;
+    let profile = profile(ctx, &old.profile)?;
+    let task = format!("{}\n\nCause from the dump: {}\n{}", old.task, cause, extra.trim());
+    let mut new = new_cluster(ctx, &profile, &old.name, &task, old.parent.as_deref(), old.after.clone(), old.depth)?;
+    new.respawns = old.respawns + 1;
+    new.respawned_from = old.id.clone();
+    save(ctx, &new)?;
+    let said = run_cluster_inner(ctx, &new.id, session_before)?;
+    Ok((new.id.clone(), format!("cluster {} respawned ({} of 2) as {}\n{}", old.id, new.respawns, new.id, said)))
+}
+
+/// Creates or changes a profile file. The result is parsed by the same `parse_profile` as a profile loaded from disk,
+/// so a broken profile is refused before it is written.
+pub fn profile_upsert(ctx: &Ctx, name: &str, fields: &Value) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() { return Err("the profile needs a name".to_string()); }
+    let Some(given) = fields.as_object() else {
+        return Err("fields must be a JSON object with profile keys such as workers, max_parallel or budget_eur".to_string());
+    };
+    let path = profile_dir(ctx).join(format!("{}.json", safe(name)));
+    let mut value = match fs::read_to_string(&path) {
+        Ok(text) => serde_json::from_str::<Value>(&text).map_err(|e| format!("profile {} is not JSON: {}", name, e))?,
+        Err(_) => json!({"name": name}),
+    };
+    for (key, item) in given {
+        value[key] = item.clone();
+    }
+    value["name"] = json!(name);
+    let profile = parse_profile(&value, name)?;
+    fs::create_dir_all(profile_dir(ctx)).map_err(|e| format!("cannot make {}: {}", profile_dir(ctx).display(), e))?;
+    fs::write(&path, serde_json::to_string_pretty(&value).unwrap()).map_err(|e| format!("cannot write {}: {}", path.display(), e))?;
+    Ok(format!("profile {} saved: {} parts, max {} parts, report every {}s, stuck after {}{}", name,
+               profile.workers.len() + profile.validator.iter().count(), profile.max_models, profile.report_every, profile.stuck_after,
+               if profile.budget_eur > 0.0 { format!(", {:.2} EUR budget", profile.budget_eur) } else { String::new() }))
 }
 
 pub fn kill(ctx: &Ctx, id: &str) -> String {
@@ -1660,6 +2003,107 @@ mod tests {
         let c = load(&ctx, &c.id).unwrap();
         assert!(c.error.starts_with("BUDGET: the session"), "{}", c.error);
         assert_eq!(seen.lock().unwrap().len(), 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_cluster_that_repeats_its_report_is_dumped_and_respawned_with_the_cause() {
+        let (mut ctx, dir) = ctx();
+        // The read calls name an absolute path, so the fake tool never depends on the test's working directory.
+        let probe = dir.join("hello.txt").to_string_lossy().to_string();
+        let (address, seen) = crate::llm::fake::serve_parallel(vec![
+            // The first call sleeps long enough for three one-second reports with one P: and F:.
+            (200, tool_reply("read", json!({"path": probe.clone()})), 5_000),
+            (200, text_reply("recovered"), 0),
+            (200, tool_reply("read", json!({"path": probe.clone()})), 0),
+            (200, text_reply("PASS: recovered"), 0),
+        ]);
+        fake_models(&mut ctx, &address);
+        write_profile(&ctx, "zombie", json!({
+            "name": "zombie",
+            "workers": [{"name": "worker", "role": "scout", "model": "main"}],
+            "validator": {"name": "check", "role": "judge", "model": "judge"},
+            "report_every": 1, "stuck_after": 3, "retries": 0, "worktree": false
+        }));
+        let said = orchestrate(&ctx, "do a thing", Some("zombie"), true).unwrap();
+        assert!(said.contains("1 clusters started"), "{}", said);
+        let clusters = list(&ctx);
+        assert_eq!(clusters.len(), 2, "a zombie is kept and respawned: {}", said);
+        let old = clusters.iter().find(|c| c.respawned_from.is_empty()).expect("the first cluster is kept");
+        let new = clusters.iter().find(|c| !c.respawned_from.is_empty()).expect("the respawned cluster is kept");
+        assert_eq!((old.state.as_str(), new.state.as_str()), ("killed", "done"), "{}", said);
+        assert_eq!((new.respawns, new.respawned_from.as_str()), (1, old.id.as_str()));
+        let stored = fs::read_to_string(cluster_dir(&ctx, &old.id).join("dump.txt")).unwrap();
+        let cause = stored.lines().find_map(|line| line.strip_prefix("Cause: ")).expect("the dump names a cause").to_string();
+        assert!(new.task.contains("Cause from the dump:") && new.task.contains(&cause), "{}", new.task);
+        let bodies: Vec<String> = seen.lock().unwrap().iter().map(|s| s.body.to_string()).collect();
+        assert!(bodies.iter().any(|body| body.contains(&cause)), "the second prompt names the dump cause: {:?}", bodies);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn repeated_identical_tool_calls_are_a_zombie_cause() {
+        let probe = json!({"path": "hello.txt"});
+        let (address, _seen) = crate::llm::fake::serve(vec![
+            (200, tool_reply("read", probe.clone())),
+            (200, tool_reply("read", probe.clone())),
+            (200, tool_reply("read", probe.clone())),
+        ]);
+        let (mut ctx, dir) = ctx();
+        fake_models(&mut ctx, &address);
+        write_profile(&ctx, "toolzombie", json!({
+            "name": "toolzombie",
+            "workers": [{"name": "worker", "role": "scout", "model": "main"}],
+            "report_every": 3600, "stuck_after": 3, "retries": 0, "worktree": false
+        }));
+        let p = profile(&ctx, "toolzombie").unwrap();
+        let c = new_cluster(&ctx, &p, "toolzombie", "read the same file", None, Vec::new(), 0).unwrap();
+        let out = run_cluster(&ctx, &c.id).unwrap();
+        assert!(out.contains("stuck"), "{}", out);
+        let c = load(&ctx, &c.id).unwrap();
+        assert_eq!(c.state.as_str(), "stuck");
+        assert!(c.error.contains("repeated tool call"), "{}", c.error);
+        assert!(dump(&ctx, &c.id).contains("repeated tool call"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_respawn_needs_a_dump_cause_and_stops_at_two() {
+        let (mut ctx, dir) = ctx();
+        fake_models(&mut ctx, "http://127.0.0.1:9");
+        write_profile(&ctx, "spawn", json!({
+            "name": "spawn",
+            "workers": [{"name": "one", "role": "scout", "model": "main"}],
+            "report_every": 0, "stuck_after": 3, "worktree": false
+        }));
+        let p = profile(&ctx, "spawn").unwrap();
+        let c = new_cluster(&ctx, &p, "spawn", "do it", None, Vec::new(), 0).unwrap();
+        let refused = respawn(&ctx, &c.id, "");
+        assert!(refused.contains("no dump cause") && refused.contains("cluster_dump"), "{}", refused);
+        let mut c = load(&ctx, &c.id).unwrap();
+        fs::create_dir_all(cluster_dir(&ctx, &c.id)).unwrap();
+        fs::write(cluster_dir(&ctx, &c.id).join("dump.json"), json!({"cause": "hung at the TLS handshake"}).to_string()).unwrap();
+        c.respawns = 2;
+        save(&ctx, &c).unwrap();
+        let refused = respawn(&ctx, &c.id, "");
+        assert!(refused.contains("limit is 2"), "{}", refused);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_profile_can_be_written_by_the_tool_and_a_broken_one_is_refused() {
+        let (ctx, dir) = ctx();
+        let said = profile_upsert(&ctx, "tiny", &json!({
+            "workers": [{"name": "one", "role": "scout", "model": "main"}],
+            "report_every": "2m", "stuck_after": "4 reports", "worktree": false
+        })).unwrap();
+        assert!(said.contains("report every 120s, stuck after 4"), "{}", said);
+        let p = profile(&ctx, "tiny").unwrap();
+        assert_eq!((p.report_every, p.stuck_after, p.workers.len()), (120, 4, 1));
+        assert!(profiles_text(&ctx).contains("report every 120s, stuck after 4"));
+        let err = profile_upsert(&ctx, "broken", &json!({"workers": []})).unwrap_err();
+        assert!(err.contains("no worker part"), "{}", err);
+        assert!(!profile_dir(&ctx).join("broken.json").is_file());
         let _ = fs::remove_dir_all(&dir);
     }
 

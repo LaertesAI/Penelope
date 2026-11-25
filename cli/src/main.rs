@@ -73,7 +73,12 @@ penelope cluster run GOAL [--profile NAME] [--sequential]
 penelope cluster list        the cluster tree
 penelope cluster status ID   one cluster with its parts, report and memory
 penelope cluster profiles    the parts of every profile
-penelope cluster kill ID     stop a cluster before its next part
+penelope cluster kill ID     stop a running cluster at once
+penelope cluster dump ID     the state dump with the cause of a stuck cluster
+penelope cluster respawn ID [EXTRA]
+                              kill ID and start it again with the cause from its dump (at most 2)
+penelope cluster profile NAME [JSON]
+                              create or change a profile under .penelope/clusters/profiles
 penelope models [PROVIDER]   the chat models the provider reports, with its effort levels
 penelope provider use NAME [--role main|weak|scout] [--model MODEL] [--workspace ID] [--base-url URL]
                               write one model setting from the table to config.json
@@ -271,6 +276,26 @@ fn main() {
                     if id.is_empty() { loom::warn("usage: penelope cluster kill ID"); std::process::exit(2); }
                     println!("{}", clusters::kill(&ctx, &id));
                 }
+                "respawn" => {
+                    let id = args.get(2).cloned().unwrap_or_default();
+                    if id.is_empty() { loom::warn("usage: penelope cluster respawn ID [EXTRA]"); std::process::exit(2); }
+                    println!("{}", clusters::respawn(&ctx, &id, &args.iter().skip(3).cloned().collect::<Vec<_>>().join(" ")));
+                }
+                "profile" => {
+                    let name = args.get(2).cloned().unwrap_or_default();
+                    if name.is_empty() { loom::warn("usage: penelope cluster profile NAME [JSON]"); std::process::exit(2); }
+                    let fields = match args.get(3) {
+                        Some(text) => match serde_json::from_str::<serde_json::Value>(text) {
+                            Ok(value) => value,
+                            Err(e) => { loom::warn(&format!("the profile fields are not JSON: {}", e)); std::process::exit(2); }
+                        },
+                        None => serde_json::json!({}),
+                    };
+                    match clusters::profile_upsert(&ctx, &name, &fields) {
+                        Ok(text) => println!("{}", text),
+                        Err(e) => { loom::warn(&e); std::process::exit(2); }
+                    }
+                }
                 "run" => {
                     let mut profile = None;
                     let mut parallel = true;
@@ -294,7 +319,7 @@ fn main() {
                     // A bare word after cluster is the goal, not a verb.
                     let goal = args[1..].join(" ");
                     if other.starts_with('-') || goal.trim().is_empty() {
-                        loom::warn("usage: penelope cluster run GOAL [--profile NAME] | list | status [ID] | dump ID | profiles | kill ID");
+                        loom::warn("usage: penelope cluster run GOAL [--profile NAME] | list | status [ID] | dump ID | respawn ID [EXTRA] | profile NAME [JSON] | profiles | kill ID");
                         std::process::exit(2);
                     }
                     match clusters::orchestrate(&ctx, &goal, None, true) {

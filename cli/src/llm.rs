@@ -467,7 +467,11 @@ pub mod fake {
                 let job = queue.clone();
                 let log = log.clone();
                 handlers.push(std::thread::spawn(move || {
-                    let (status, reply, delay) = match job.lock().unwrap().pop() { Some(r) => r, None => return };
+                    let (status, reply, delay) = {
+                        let mut queue = job.lock().unwrap();
+                        if queue.is_empty() { return; }
+                        queue.remove(0)
+                    };
                     let mut reader = BufReader::new(stream);
                     let (mut first, mut headers, mut length) = (String::new(), Vec::new(), 0usize);
                     let _ = reader.read_line(&mut first);

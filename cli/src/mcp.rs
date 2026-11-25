@@ -132,6 +132,9 @@ fn call_raw_inner(ctx: &Ctx, name: &str, a: &Value) -> Result<String, String> {
         }
         "cluster_status" => Ok(crate::clusters::status_text(ctx, a["id"].as_str())),
         "cluster_kill" => Ok(crate::clusters::kill(ctx, &s("id"))),
+        "cluster_dump" => Ok(crate::clusters::dump(ctx, &s("id"))),
+        "cluster_respawn" => Ok(crate::clusters::respawn(ctx, &s("id"), &s("extra"))),
+        "cluster_profile" => crate::clusters::profile_upsert(ctx, &s("name"), &a["fields"]),
         "computer" => Ok(tools::computer(ctx, &s("task"), n("max_steps"))),
         "screen" => crate::screen::tool(ctx, a).map(|text| tools::guard(ctx, &text)),
         "cursor" => crate::cursor::tool(ctx, a),
