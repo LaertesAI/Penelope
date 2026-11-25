@@ -305,6 +305,71 @@ pub fn use_provider(ctx: &mut Ctx, args: &[String]) -> String {
             if p.key_env.is_empty() { String::new() } else { format!(" in {}", p.key_env) })
 }
 
+/// One exact model name, its display name and the effort levels the provider accepts.
+pub struct Model {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub efforts: &'static [&'static str],
+}
+
+const CLAUDE_MODELS: &[Model] = &[
+    Model { id: "claude-opus-5-5", label: "Claude Opus 5.5", efforts: &["low", "medium", "high", "max"] },
+    Model { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5", efforts: &["low", "medium", "high", "max"] },
+    Model { id: "claude-haiku-5-5", label: "Claude Haiku 5.5", efforts: &["low", "medium", "high", "max"] },
+];
+
+const OPENCODE_MODELS: &[Model] = &[
+    Model { id: "deepseek-v4.1-flash", label: "DeepSeek V4.1 Flash 1017", efforts: &["low", "high", "max"] },
+    Model { id: "deepseek-v4-pro", label: "DeepSeek V4 Pro", efforts: &["high", "max"] },
+    Model { id: "glm-5.3", label: "GLM-5.3", efforts: &["low", "high", "max"] },
+    Model { id: "glm-5.3-flash", label: "GLM-5.3 Flash", efforts: &["low", "high", "max"] },
+    Model { id: "grok-4.7", label: "Grok 4.7", efforts: &["low", "medium", "high", "xhigh"] },
+    Model { id: "muse-spark-1.3-contributor", label: "Muse Spark 1.3", efforts: &["minimal", "low", "medium", "high", "xhigh"] },
+    Model { id: "gpt-6-luna", label: "GPT-6 Luna", efforts: &["none", "low", "medium", "high", "xhigh", "max"] },
+    Model { id: "gpt-5.6-luna", label: "GPT-5.6 Luna", efforts: &["none", "low", "medium", "high", "xhigh", "max"] },
+    Model { id: "claude-haiku-5-5", label: "Claude Haiku 5.5", efforts: &["low", "medium", "high", "xhigh", "max"] },
+    Model { id: "kimi-k3", label: "Kimi K3", efforts: &["max"] },
+    Model { id: "kimi-k3.1-pro", label: "Kimi K3.1 Pro", efforts: &["low", "high", "max"] },
+    Model { id: "kimi-k2.7-code", label: "Kimi K2.7 Code", efforts: &[] },
+    Model { id: "minimax-m3.1-flash", label: "MiniMax M3.1 Flash", efforts: &["low", "medium", "high", "xhigh", "max"] },
+    Model { id: "minimax-m3", label: "MiniMax M3", efforts: &[] },
+    Model { id: "mimo-v2.6-flash", label: "MiMo V2.6 Flash", efforts: &[] },
+    Model { id: "mimo-v2.6-pro", label: "MiMo V2.6 Pro", efforts: &[] },
+    Model { id: "qwen4-max", label: "Qwen4 Max", efforts: &["low", "high", "xhigh"] },
+    Model { id: "qwen3.8-max", label: "Qwen3.8 Max", efforts: &["low", "medium", "xhigh"] },
+    Model { id: "qwen3.8-flash", label: "Qwen3.8 Flash", efforts: &["low", "medium", "xhigh"] },
+    Model { id: "qwen3.7-plus", label: "Qwen3.7 Plus", efforts: &[] },
+    Model { id: "gemini-4-argon", label: "Gemini 4 Argon", efforts: &["low", "medium", "high"] },
+    Model { id: "gemini-decision-1", label: "Gemini Decision 1", efforts: &[] },
+    Model { id: "gpt-6-luna-decision", label: "GPT-6 Luna Decision", efforts: &[] },
+    Model { id: "step-5-preview", label: "Step 5 Preview", efforts: &["low", "medium", "high"] },
+    Model { id: "hy4", label: "Hy4", efforts: &["none", "high"] },
+    Model { id: "hy4-preview", label: "Hy4 Preview", efforts: &["none", "high"] },
+    Model { id: "hy3", label: "Hy3", efforts: &["none", "low", "high"] },
+    Model { id: "longcat-2.5", label: "LongCat 2.5", efforts: &[] },
+    Model { id: "jev-1.14", label: "Jev 1.14", efforts: &[] },
+];
+
+/// The exact model list of a provider, when Penelope knows more than the one example in the table.
+pub fn models(provider: &str) -> &'static [Model] {
+    match provider {
+        "claude-cli" => CLAUDE_MODELS,
+        "opencode" => OPENCODE_MODELS,
+        _ => &[],
+    }
+}
+
+/// The efforts one model accepts. Empty means the provider has no effort control for it.
+pub fn efforts(provider: &str, model: &str) -> &'static [&'static str] {
+    models(provider).iter().find(|m| m.id == model).map(|m| m.efforts).unwrap_or(&[])
+}
+
+/// The first effort to use when a model is chosen. `high` is a deliberate default for coding and tool calls.
+pub fn default_effort(provider: &str, model: &str) -> &'static str {
+    let list = efforts(provider, model);
+    if list.contains(&"high") { "high" } else { list.first().copied().unwrap_or("") }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

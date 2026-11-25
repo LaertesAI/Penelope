@@ -360,6 +360,9 @@ Report facts, paths and command output. What earlier steps found:\n{}", step.rol
     let mut cmd = Command::new("claude");
     cmd.args(["-p", &step.text, "--output-format", "json", "--model", model["model"].as_str().unwrap_or("sonnet"),
               "--append-system-prompt", &system, "--strict-mcp-config", "--mcp-config", &cfg, "--tools", "", "--allowedTools", &allowed.join(",")]);
+    if let Some(level) = crate::llm::effort(model) {
+        cmd.args(["--effort", level]);
+    }
     let out = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).output()
         .map_err(|e| format!("cannot start the claude command: {}", e))?;
     let v: Value = serde_json::from_slice(&out.stdout).map_err(|_| format!("the claude command ended with {} and no result", out.status))?;

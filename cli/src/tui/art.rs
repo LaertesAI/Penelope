@@ -77,16 +77,6 @@ impl Bitmap {
     }
 }
 
-/// The woven mark for the start screen: 24 columns, 12 rows.
-pub fn peek() -> Bitmap {
-    Bitmap::from_rgb(24, 24, include_bytes!("../../art/mark_24x24.rgb"))
-}
-
-/// The name in tall letters: 80 columns, 8 rows.
-pub fn wordmark() -> Bitmap {
-    Bitmap::from_rgb(80, 16, include_bytes!("../../art/word_80x16.rgb"))
-}
-
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Mood {
     Awake,

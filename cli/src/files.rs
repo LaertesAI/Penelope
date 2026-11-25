@@ -142,10 +142,30 @@ fn keep_for_undo(ctx: &Ctx, p: &Path, what: &str) {
         return;
     }
     let existed = p.is_file() && fs::copy(p, dir.join("file")).is_ok();
-    let _ = fs::write(dir.join("meta.json"), serde_json::json!({"path": p.to_string_lossy(), "existed": existed, "what": what}).to_string());
+    let turn = ctx.cfg["_turn"].as_u64().unwrap_or(0);
+    let _ = fs::write(dir.join("meta.json"), serde_json::json!({"path": p.to_string_lossy(), "existed": existed, "what": what, "turn": turn}).to_string());
     for old in ids.iter().take((ids.len() + 1).saturating_sub(UNDO_KEEP)) {
         let _ = fs::remove_dir_all(ctx.root.join("undo").join(old.to_string()));
     }
+}
+
+/// Restores every change recorded after `target_turn` and removes those undo records. Returns their count.
+pub fn rewind_to(ctx: &Ctx, target_turn: u64) -> usize {
+    let ids = undo_entries(ctx);
+    let mut restored = 0;
+    for id in ids.iter().rev() {
+        let dir = ctx.root.join("undo").join(id.to_string());
+        let meta: serde_json::Value = fs::read_to_string(dir.join("meta.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+        let turn = meta["turn"].as_u64().unwrap_or(0);
+        if turn <= target_turn { break; }
+        if let Some(path) = meta["path"].as_str().map(PathBuf::from) {
+            if meta["existed"].as_bool().unwrap_or(false) {
+                if fs::copy(dir.join("file"), &path).is_ok() { restored += 1; }
+            } else if fs::remove_file(&path).is_ok() { restored += 1; }
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+    restored
 }
 
 /// Takes back the last change of `write` or `edit`: the file gets its old content, a file that was new is removed.
@@ -774,6 +794,22 @@ mod tests {
         assert!(said.contains("outside the target"), "{}", said);
         assert!(!dir.parent().unwrap().join("escape.txt").exists());
         assert!(!dir.join("evil").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rewind_to_a_turn_restores_every_later_change() {
+        let (mut ctx, dir) = ctx("rewind", "all");
+        let cwd = dir.to_string_lossy().to_string();
+        ctx.cfg["_turn"] = serde_json::json!(1);
+        assert!(write(&ctx, "a.txt", "one", &cwd).starts_with("done"));
+        ctx.cfg["_turn"] = serde_json::json!(2);
+        assert!(write(&ctx, "a.txt", "two", &cwd).starts_with("done"));
+        ctx.cfg["_turn"] = serde_json::json!(3);
+        assert!(write(&ctx, "b.txt", "new", &cwd).starts_with("done"));
+        assert_eq!(rewind_to(&ctx, 1), 2);
+        assert_eq!(fs::read_to_string(dir.join("a.txt")).unwrap(), "one");
+        assert!(!dir.join("b.txt").exists());
         let _ = fs::remove_dir_all(&dir);
     }
 

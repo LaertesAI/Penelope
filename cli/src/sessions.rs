@@ -108,6 +108,20 @@ pub fn load_history(ctx: &Ctx, id: &str) -> Option<(String, Vec<Value>)> {
     Some((v["kind"].as_str()?.to_string(), v["messages"].as_array()?.clone()))
 }
 
+/// Deletes one conversation from the list, its transcript and its HTTP history. Returns false when the id is unknown.
+pub fn delete(ctx: &Ctx, id: &str) -> bool {
+    let mut all = load(ctx);
+    let before = all.len();
+    all.retain(|s| s["id"].as_str() != Some(id));
+    let found = all.len() != before;
+    if found {
+        let _ = fs::write(ctx.root.join("sessions.json"), serde_json::to_string_pretty(&all).unwrap());
+        let _ = fs::remove_file(transcript_path(ctx, id));
+        let _ = fs::remove_file(history_path(ctx, id));
+    }
+    found
+}
+
 /// A conversation by its number in the list (1 is the newest) or by the start of its id.
 pub fn pick(ctx: &Ctx, key: &str) -> Option<Value> {
     let all = load(ctx);

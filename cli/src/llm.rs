@@ -112,6 +112,11 @@ fn post(url: &str, headers: &[(&str, String)], body: &Value, key: &str, seconds:
 
 /// One request to the model of a setting. `history` holds messages in the format of the setting's kind. `tools` are
 /// tool descriptions in the MCP form with `name`, `description` and `inputSchema`.
+/// The effort level of a setting, when the provider accepts one.
+pub fn effort(model: &Value) -> Option<&str> {
+    model["effort"].as_str().filter(|e| !e.trim().is_empty())
+}
+
 pub fn chat(model: &Value, system: &str, history: &[Value], tools: &[Value]) -> Result<Reply, String> {
     let key = crate::providers::key(model);
     let name = model["model"].as_str().unwrap_or("");
@@ -168,6 +173,9 @@ pub fn chat(model: &Value, system: &str, history: &[Value], tools: &[Value]) -> 
         if !model[field].is_null() {
             body[field] = model[field].clone();
         }
+    }
+    if let Some(level) = effort(model) {
+        body["reasoning_effort"] = json!(level);
     }
     let mut headers = Vec::new();
     if let Some(extra) = model["headers"].as_object() {

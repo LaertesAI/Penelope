@@ -76,6 +76,7 @@ penelope scout TASK           let the weaker model look something up with its ow
 penelope run [--ask QUESTION] COMMAND
                               run a command, long output condensed by the weaker model
 penelope undo                 take back the last change that the tools write or edit made to a file
+penelope allow [list|clear]   confirmed shell commands for this project (values are masked)
 penelope jobs                 list the background jobs of this folder
 penelope jobs stop N          end background job N
 penelope plugin add DIR       register a plugin folder in the format of Claude Code (skills and MCP servers)
@@ -342,6 +343,10 @@ fn main() {
             _ => print!("{}", providers::list(&ctx)),
         },
         "undo" => println!("{}", files::undo(&ctx)),
+        "allow" => match args.get(1).map(String::as_str) {
+            Some("clear") => println!("{}", tools::clear_allowed(&ctx)),
+            _ => print!("{}", tools::allowed_commands(&ctx)),
+        },
         "jobs" => match (args.get(1).map(String::as_str), args.get(2).and_then(|n| n.parse::<u64>().ok())) {
             (Some("stop"), Some(id)) => println!("{}", jobs::stop(&ctx, id)),
             (Some("read"), Some(id)) => println!("{}", jobs::read(&ctx, id)),
@@ -383,9 +388,18 @@ fn main() {
             println!("{}", tools::run(&ctx, &rest.join(" "), &question, ""));
         }
         "ask" => {
-            let text = args[1..].join(" ");
+            let mut json = false;
+            let mut words = Vec::new();
+            for arg in &args[1..] {
+                if arg == "--json" { json = true; } else { words.push(arg.clone()); }
+            }
+            let text = words.join(" ");
             let mut chat = backend::Chat::new();
-            answer(&ctx, &mut chat, &text);
+            if json {
+                if !answer_json(&ctx, &mut chat, &text) { std::process::exit(1); }
+            } else {
+                answer(&ctx, &mut chat, &text);
+            }
         }
         "search" if args.get(1).map(String::as_str) == Some("health") => {
             print!("{}", search::health(&ctx, args.iter().any(|a| a == "--probe")));
@@ -535,6 +549,36 @@ fn memory_cmd(ctx: &config::Ctx, args: &[String]) {
         }
         Some("unravel") => println!("{}", tools::unravel(ctx, args.get(1).and_then(|n| n.parse().ok()).unwrap_or(1))),
         Some(other) => loom::warn(&format!("unknown memory command: {}", other)),
+    }
+}
+
+/// One turn as newline-delimited JSON events, for CI and editors. Only JSON goes to stdout.
+fn answer_json(ctx: &config::Ctx, chat: &mut backend::Chat, text: &str) -> bool {
+    let expanded = context::expand(ctx, text);
+    let (notes, trail, _) = tools::recall_all(ctx, &expanded.text, 1600);
+    let emit = |value: serde_json::Value| {
+        println!("{}", serde_json::to_string(&value).unwrap());
+    };
+    emit(serde_json::json!({"event": "start", "model": ctx.cfg["main"]["model"], "kind": ctx.cfg["main"]["kind"], "memory": trail}));
+    let mut masked = 0usize;
+    let result = chat.turn_with(ctx, &expanded.text, &notes, &mut |e| match e {
+        backend::Event::Delta(s) => emit(serde_json::json!({"event": "delta", "text": s})),
+        backend::Event::Text(s) => emit(serde_json::json!({"event": "text", "text": s})),
+        backend::Event::ToolStart { id, name, detail } => emit(serde_json::json!({"event": "tool_start", "id": id, "name": name, "detail": detail})),
+        backend::Event::ToolEnd { id, ok, summary } => emit(serde_json::json!({"event": "tool_end", "id": id, "ok": ok, "summary": summary})),
+        backend::Event::Masked(n) => emit(serde_json::json!({"event": "masked_request", "items": n})),
+        backend::Event::MaskedAnswer(n) => { masked += n; emit(serde_json::json!({"event": "masked_answer", "items": n})); }
+    });
+    match result {
+        Ok(answer) => {
+            emit(serde_json::json!({"event": "result", "text": answer, "tokens_in": chat.input_tokens, "tokens_out": chat.output_tokens,
+                                    "tool_calls": chat.trace.len(), "masked": masked}));
+            true
+        }
+        Err(e) => {
+            emit(serde_json::json!({"event": "error", "error": e}));
+            false
+        }
     }
 }
 

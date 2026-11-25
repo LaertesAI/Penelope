@@ -22,14 +22,14 @@ pub fn ask_count(model: &Value, system: &str, user: &str) -> Result<(String, u64
 }
 
 fn ask_claude_cli(model: &Value, system: &str, user: &str) -> Result<String, String> {
-    let mut child = Command::new("claude")
-        .args(["-p", system, "--model", model["model"].as_str().unwrap_or("haiku"), "--output-format", "text", "--tools", "",
-               "--strict-mcp-config", "--mcp-config", "{\"mcpServers\":{}}"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("cannot start the claude command: {}", e))?;
+    let mut cmd = Command::new("claude");
+    cmd.args(["-p", system, "--model", model["model"].as_str().unwrap_or("haiku"), "--output-format", "text", "--tools", "",
+              "--strict-mcp-config", "--mcp-config", "{\"mcpServers\":{}}"]);
+    if let Some(level) = crate::llm::effort(model) {
+        cmd.args(["--effort", level]);
+    }
+    let mut child = cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
+        .spawn().map_err(|e| format!("cannot start the claude command: {}", e))?;
     child.stdin.take().unwrap().write_all(user.as_bytes()).map_err(|e| e.to_string())?;
     let out = child.wait_with_output().map_err(|e| e.to_string())?;
     if !out.status.success() {

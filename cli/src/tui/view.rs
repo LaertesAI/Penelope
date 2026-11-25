@@ -205,7 +205,7 @@ fn hints(f: &mut Frame, app: &App, area: Rect) {
         put(f, area, area.x + 2, area.y, &text, fg(DIM));
         used = width(&text) + 4;
     }
-    let parts = [("enter", "send"), ("alt+enter", "new line"), ("/", "commands"), ("ctrl+p", "palette"), ("f1", "help")];
+    let parts = [("enter", "send"), ("alt+enter", "new line"), ("/", "commands"), ("ctrl+p", "palette"), ("f5", "new"), ("f6", "delete"), ("f1", "help")];
     let total: usize = parts.iter().map(|(k, v)| k.len() + v.len() + 4).sum::<usize>() - 2;
     if used + total + 2 > area.width as usize {
         return;
@@ -245,45 +245,40 @@ fn slash_popup(f: &mut Frame, app: &App, x: u16, bottom: u16, w: u16, top_limit:
 fn home(f: &mut Frame, app: &App, area: Rect) {
     let w = area.width.saturating_sub(8).min(84).max(26);
     let x = area.x + (area.width - w) / 2;
-    let (word, loom) = (art::wordmark(), art::peek());
-    let show_word = area.height >= 32 && w >= 82;
-    let show_loom = area.height >= 22 && w >= 44;
-    let stack = if show_word { word.rows() + 3 } else { 3 } + if show_loom { loom.rows() } else { 1 } + 4 + 2;
-    let mut y = area.y + area.height.saturating_sub(stack) / 2;
-    if show_word {
-        word.draw(f.buffer_mut(), x + (w - word.w as u16) / 2, y, area);
-        y += word.rows() + 1;
-    } else {
-        put(f, area, x + (w.saturating_sub(8)) / 2, y, "penelope", bold(CLAY));
-        y += 1;
-    }
+    // A crisp text wordmark. The old 80x16 bitmap was a pixel font; at terminal size it read as blocks, not letters.
+    let title = "P E N E L O P E";
     let tagline = "A command line harness that remembers the way.";
+    let stats = [
+        format!("◆ {} waypoints in the memory map", app.side.waypoints),
+        format!("◆ {} stored walks", app.side.walks),
+        if app.side.screencodec { "◆ ScreenCodec connected".to_string() } else { "◆ ScreenCodec not installed".to_string() },
+        format!("◆ {} plugins", app.side.plugins),
+    ];
+    let stats_h = 3u16;
+    let stack = 4 + stats_h + 4 + 2;
+    let mut y = area.y + area.height.saturating_sub(stack) / 2;
+    put(f, area, x + w.saturating_sub(width(title) as u16) / 2, y, title, bold(PAPER));
+    y += 1;
+    let rule = "─".repeat(19);
+    put(f, area, x + w.saturating_sub(width(&rule) as u16) / 2, y, &rule, fg(CLAY));
+    y += 1;
     put(f, area, x + w.saturating_sub(width(tagline) as u16) / 2, y, tagline, fg(ASH));
     y += 1;
     // The startup animation: the first thread is woven while the screen settles. It never blocks a key.
     let intro = app.intro.elapsed().as_millis() as u64;
     if intro < 1500 && std::env::var("PENELOPE_NO_ANIM").is_err() {
         let done = (intro / 125).min(10) as usize;
-        let line = format!("weaving {} {}{}", "▓".repeat(done), "░".repeat(10 - done), "");
+        let line = format!("weaving the first thread  {} {}", "▓".repeat(done), "░".repeat(10 - done));
         put(f, area, x + w.saturating_sub(width(&line) as u16) / 2, y, &line, fg(if done == 10 { SEA } else { CLAY }));
     }
-    y += 1;
-    if show_loom {
-        loom.draw(f.buffer_mut(), x + w - loom.w as u16 - 4, y, area);
-        let side = [format!("{} waypoints in the memory map", app.side.waypoints), format!("{} stored walks", app.side.walks),
-                    if app.side.screencodec { "ScreenCodec connected".to_string() } else { "ScreenCodec not installed".to_string() },
-                    format!("{} plugins", app.side.plugins)];
-        for (i, line) in side.iter().enumerate() {
-            let ly = y + loom.rows() - 5 + i as u16;
-            put(f, Rect::new(x, ly, w.saturating_sub(loom.w as u16 + 6), 1), x + 2, ly, "◆", fg(SEA));
-            put(f, Rect::new(x, ly, w.saturating_sub(loom.w as u16 + 6), 1), x + 4, ly, line, fg(DIM));
-        }
-        y += loom.rows();
-    } else {
-        y += 1;
+    y += 2;
+    for (i, line) in stats.iter().enumerate() {
+        let ly = y + i as u16;
+        put(f, Rect::new(x, ly, w, 1), x + 2, ly, line, fg(DIM));
     }
+    y += stats_h + 1;
     let bottom = (y + 4 + (input_rows(&app.input, app.cursor, (w as usize).saturating_sub(4)).0.len().min(8) as u16 - 1)).min(area.bottom() - 1);
-    let top = input_box(f, app, x, bottom, w, area.y, !show_loom);
+    let top = input_box(f, app, x, bottom, w, area.y, true);
     hints(f, app, Rect::new(x, bottom, w, 1));
     slash_popup(f, app, x, top, w, area.y);
 }
@@ -520,8 +515,127 @@ fn dialog(f: &mut Frame, area: Rect, title: &str, want_w: u16, want_h: u16) -> R
     Rect::new(rect.x + 2, rect.y + 3, rect.width.saturating_sub(4), rect.height.saturating_sub(4))
 }
 
+fn provider_state(p: &crate::providers::Provider, claude: &str) -> (&'static str, art::Rgb) {
+    if p.kind == "laertes" {
+        return ("in training", GOLD);
+    }
+    if p.name == "claude-cli" {
+        let signed = claude.contains("signed in");
+        return (if signed { "signed in" } else { "no login" }, if signed { SEA } else { CLAY });
+    }
+    if p.key_optional {
+        return ("no key needed", SEA);
+    }
+    if !p.key_env.is_empty() && std::env::var(p.key_env).ok().filter(|v| !v.trim().is_empty()).is_some() {
+        return ("env set", SEA);
+    }
+    if crate::auth::has(p.name) {
+        return ("stored", SEA);
+    }
+    ("no key", CLAY)
+}
+
+fn target_label(target: &str) -> String {
+    match target {
+        "main" => "Main model".to_string(),
+        "weak" => "Weaker model".to_string(),
+        "scout" => "Research + web search".to_string(),
+        other => super::ROLE_MODELS.iter().find(|(r, _)| *r == other).map(|(_, label)| label.to_string()).unwrap_or_else(|| other.to_string()),
+    }
+}
+
+fn target_value<'a>(app: &'a App, target: &str) -> &'a serde_json::Value {
+    match target {
+        "main" | "weak" | "scout" => &app.ctx.cfg[target],
+        other => &app.ctx.cfg["roles"][other],
+    }
+}
+
+fn providers_dialog(f: &mut Frame, app: &App, area: Rect, sel: usize, target: &str, scroll: usize) {
+    let list = &crate::providers::TABLE;
+    let rows = (area.height.saturating_sub(9) as usize).clamp(4, 24).min(list.len().max(1));
+    let inner = dialog(f, area, "Models and providers", 92, rows as u16 + 8);
+    let tab = |active: bool| if active { on(INK, CLAY).add_modifier(Modifier::BOLD) } else { on(ASH, RAISED) };
+    if target == "main" || target == "weak" {
+        put(f, inner, inner.x, inner.y, " main model ", tab(target == "main"));
+        put(f, inner, inner.x + 13, inner.y, " weaker model ", tab(target == "weak"));
+    } else {
+        put(f, inner, inner.x, inner.y, &format!(" {} ", target_label(target)), tab(true));
+    }
+    let current = crate::providers::of(target_value(app, target)).map(|p| p.name);
+    let first = scroll.min(list.len().saturating_sub(rows));
+    for (i, p) in list.iter().skip(first).take(rows).enumerate() {
+        let y = inner.y + 2 + i as u16;
+        let chosen = first + i == sel;
+        let bg = if chosen { NIGHT } else { RAISED };
+        fill(f, Rect::new(inner.x.saturating_sub(1), y, inner.width + 2, 1), bg);
+        put(f, inner, inner.x, y, if current == Some(p.name) { "●" } else { "○" }, fg(if current == Some(p.name) { SEA } else { DIM }));
+        put(f, inner, inner.x + 2, y, &clip(p.label, 26), on(if p.kind == "laertes" { GOLD } else { PAPER }, bg).add_modifier(if chosen { Modifier::BOLD } else { Modifier::empty() }));
+        put(f, inner, inner.x + 30, y, &clip(p.kind, 10), on(DIM, bg));
+        let (state, colour) = provider_state(p, &app.side.claude);
+        put(f, inner, inner.x + 42, y, state, on(colour, bg));
+        put(f, inner, inner.x + 58, y, &clip(p.model, 24), on(DIM, bg));
+    }
+    let p = &list[sel.min(list.len().saturating_sub(1))];
+    let base = if p.base.is_empty() { "-" } else { p.base };
+    let detail = format!("{} · example {} · {}", base, p.model, p.note);
+    put(f, inner, inner.x, inner.bottom().saturating_sub(2), &clip(&detail, inner.width as usize), on(DIM, RAISED));
+    let hint = if p.kind == "claude-cli" { "enter signs in through the official claude page" }
+        else if p.kind == "laertes" { "this family is in training" }
+        else { "enter opens the masked API-key window" };
+    put(f, inner, inner.x, inner.bottom().saturating_sub(1), hint, on(CLAY, RAISED));
+    put(f, inner, inner.right().saturating_sub(48), inner.bottom().saturating_sub(1), "tab main/weak · r roles · m models · esc", on(DIM, RAISED));
+}
+
+fn roles_dialog(f: &mut Frame, app: &App, area: Rect, sel: usize) {
+    let inner = dialog(f, area, "Crew models", 78, super::ROLE_MODELS.len() as u16 + 8);
+    put(f, inner, inner.x, inner.y, "Choose one model per role. Web search and research share the scout role.", on(DIM, RAISED));
+    for (i, (role, label)) in super::ROLE_MODELS.iter().enumerate() {
+        let y = inner.y + 2 + i as u16;
+        let chosen = i == sel;
+        let bg = if chosen { NIGHT } else { RAISED };
+        fill(f, Rect::new(inner.x.saturating_sub(1), y, inner.width + 2, 1), bg);
+        let m = &app.ctx.cfg["roles"][role];
+        let model = m["model"].as_str().filter(|s| !s.is_empty()).unwrap_or("follows the weak model");
+        let effort = m["effort"].as_str().unwrap_or("");
+        put(f, inner, inner.x, y, if chosen { "●" } else { "○" }, on(if chosen { SEA } else { DIM }, bg));
+        put(f, inner, inner.x + 2, y, &format!("{:<24}", clip(label, 24)), on(PAPER, bg).add_modifier(if chosen { Modifier::BOLD } else { Modifier::empty() }));
+        put(f, inner, inner.x + 28, y, &clip(model, 34), on(DIM, bg));
+        put(f, inner, inner.x + 64, y, effort, on(if effort.is_empty() { DIM } else { SEA }, bg));
+    }
+    put(f, inner, inner.x, inner.bottom().saturating_sub(1), "enter chooses the provider for this role · esc back", on(CLAY, RAISED));
+}
+
+fn api_key_dialog(f: &mut Frame, app: &App, area: Rect, label: &str, input: &[char], cursor: usize, error: &str) {
+    let _ = app;
+    let inner = dialog(f, area, "API key", 66, 11);
+    put(f, inner, inner.x, inner.y, &format!("Paste the key for {}.", clip(label, 44)), on(PAPER, RAISED));
+    let masked = if input.is_empty() {
+        "the first 4 characters are shown, the rest stays masked".to_string()
+    } else {
+        let first: String = input.iter().take(4).collect();
+        let rest = input.len().saturating_sub(4).min(32);
+        format!("{}{}", first, "•".repeat(rest.max(1)))
+    };
+    put(f, inner, inner.x, inner.y + 2, &masked, on(if input.is_empty() { DIM } else { PAPER }, RAISED));
+    let at = (cursor.min(input.len()).min(4)) as u16;
+    f.set_cursor_position(Position::new(inner.x + at, inner.y + 2));
+    if !error.is_empty() {
+        put(f, inner, inner.x, inner.y + 4, &clip(error, inner.width as usize), on(RED, RAISED));
+    }
+    put(f, inner, inner.x, inner.bottom().saturating_sub(1), "enter store · ctrl+u clear · esc cancel", on(DIM, RAISED));
+}
+
 fn overlay(f: &mut Frame, app: &App, area: Rect) {
+    if !matches!(app.overlay, Overlay::None) {
+        // A modal owns the screen. Clear removes the glyphs; fill paints the ground.
+        f.render_widget(Clear, area);
+        fill(f, area, INK);
+    }
     match &app.overlay {
+        Overlay::Providers { sel, target, scroll } => providers_dialog(f, app, area, *sel, target, *scroll),
+        Overlay::Roles { sel } => roles_dialog(f, app, area, *sel),
+        Overlay::ApiKey { label, input, cursor, error, .. } => api_key_dialog(f, app, area, label, input, *cursor, error),
         Overlay::None => {}
         Overlay::Palette { query, sel } => {
             let matches = App::palette_matches(query);
@@ -542,25 +656,27 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
                 put(f, row, inner.right().saturating_sub(cmd.key.len() as u16), y, cmd.key, on(if chosen { INK } else { DIM }, bg));
             }
         }
-        Overlay::Models { sel, weak } => {
-            let choices = app.model_choices(*weak);
-            let inner = dialog(f, area, "Models", 64, choices.len() as u16 + 9);
-            let tab = |active: bool| if active { on(INK, CLAY).add_modifier(Modifier::BOLD) } else { on(ASH, RAISED) };
-            put(f, inner, inner.x, inner.y, " main model ", tab(!*weak));
-            put(f, inner, inner.x + 13, inner.y, " weaker model ", tab(*weak));
-            let (current, kind) = model_line(app, *weak);
-            for (i, name) in choices.iter().enumerate() {
-                let y = inner.y + 2 + i as u16;
+        Overlay::Models { sel, target } => {
+            let choices = app.model_choices(target);
+            let inner = dialog(f, area, &format!("{} · exact models", target_label(target)), 72, choices.len().min(20) as u16 + 10);
+            let current = target_value(app, target)["model"].as_str().unwrap_or("?").to_string();
+            let current_effort = target_value(app, target)["effort"].as_str().unwrap_or("no effort").to_string();
+            let provider = crate::providers::of(target_value(app, target)).map(|p| p.name).unwrap_or("claude-cli");
+            let first = if choices.len() > 20 { sel.saturating_sub(19) } else { 0 };
+            for (i, name) in choices.iter().enumerate().skip(first).take(20) {
+                let y = inner.y + 2 + (i - first) as u16;
                 let chosen = i == (*sel).min(choices.len().saturating_sub(1));
                 let bg = if chosen { NIGHT } else { RAISED };
                 fill(f, Rect::new(inner.x.saturating_sub(1), y, inner.width + 2, 1), bg);
                 put(f, inner, inner.x, y, if *name == current { "●" } else { "○" }, on(if *name == current { SEA } else { DIM }, bg));
-                put(f, inner, inner.x + 2, y, name, on(PAPER, bg));
-                put(f, inner, inner.x + 2 + width(name) as u16 + 2, y, &kind, on(DIM, bg));
+                put(f, inner, inner.x + 2, y, &clip(name, 42), on(PAPER, bg));
+                let effort = crate::providers::efforts(provider, name).join(" ");
+                put(f, inner, inner.x + 40, y, &clip(if effort.is_empty() { "no effort" } else { &effort }, 28), on(DIM, bg));
             }
-            let note = if kind == "openai" { "Other endpoints and models: .penelope/config.json" } else { "Models of the claude command, with the login of the user" };
-            put(f, inner, inner.x, inner.y + 3 + choices.len() as u16, note, on(DIM, RAISED));
-            put(f, inner, inner.x, inner.y + 4 + choices.len() as u16, "tab switches · enter chooses", on(DIM, RAISED));
+            let selected = choices.get(*sel).cloned().unwrap_or_default();
+            let selected_label = crate::providers::models(provider).iter().find(|m| m.id == selected).map(|m| m.label).unwrap_or_else(|| selected.as_str());
+            let note = format!("{} · current {} / effort {} · e changes effort", selected_label, current, current_effort);
+            put(f, inner, inner.x, inner.bottom().saturating_sub(1), &clip(&note, inner.width as usize), on(CLAY, RAISED));
         }
         Overlay::Pager { title, lines, scroll } => {
             let widest = lines.iter().map(|l| width(l)).max().unwrap_or(20) as u16;

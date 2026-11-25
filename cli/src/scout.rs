@@ -45,6 +45,9 @@ fn claude(ctx: &Ctx, task: &str, cwd: &str) -> Result<Report, String> {
     let mut cmd = Command::new("claude");
     cmd.args(["-p", task, "--output-format", "json", "--model", model(ctx)["model"].as_str().unwrap_or("haiku"), "--append-system-prompt", &system,
               "--strict-mcp-config", "--mcp-config", &cfg, "--tools", "", "--allowedTools", &allowed.join(",")]);
+    if let Some(level) = crate::llm::effort(model(ctx)) {
+        cmd.args(["--effort", level]);
+    }
     if !cwd.is_empty() {
         cmd.current_dir(cwd);
     }

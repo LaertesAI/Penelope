@@ -63,7 +63,7 @@ pub fn allowed_for(role: &str) -> Vec<&'static str> {
         // A scout changes nothing outside its own reading: no screen action that clicks or types, no HTTP method
         // beyond GET, no MCP call.
         "scout" => &["web_search", "research", "fetch", "read", "find", "grep", "tree", "outline", "run", "run_detail", "memory_go", "session_search", "json_query"],
-        "worker" => &["read", "write", "edit", "unzip", "undo", "run", "run_detail", "job_start", "job_read", "job_stop", "find", "grep", "tree", "outline", "memory_go",
+        "worker" => &["read", "write", "edit", "unzip", "undo", "pr_create", "run", "run_detail", "job_start", "job_read", "job_stop", "find", "grep", "tree", "outline", "memory_go",
                       "json_query", "git_diff", "mcp_servers", "mcp_call"],
         "judge" => &["read", "grep", "tree", "outline", "run", "run_detail", "json_query", "git_diff"],
         "tool" => &["screen", "cursor", "mcp_servers", "mcp_call", "read", "outline", "tree"],

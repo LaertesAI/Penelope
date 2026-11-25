@@ -39,10 +39,28 @@ pub enum Item {
     Error(String),
 }
 
+/// The role models the extended tab offers. Web search and research share the scout role.
+pub const ROLE_MODELS: &[(&str, &str)] = &[
+    ("tool", "Tool calls"),
+    ("condenser", "Processing"),
+    ("scout", "Research + web search"),
+    ("worker", "Coding"),
+    ("judge", "Judge"),
+    ("router", "Router"),
+    ("filter", "Privacy filter"),
+];
+
 pub enum Overlay {
     None,
     Palette { query: String, sel: usize },
-    Models { sel: usize, weak: bool },
+    /// Exact model names of one target: main, weak, scout or a role such as tool, condenser or worker.
+    Models { sel: usize, target: String },
+    /// Providers and their login state. Enter signs in or opens the key dialog.
+    Providers { sel: usize, target: String, scroll: usize },
+    /// The list of role models: tool calls, processing, research, coding, judge, router, filter.
+    Roles { sel: usize },
+    /// The masked API key dialog. The key is never shown in full, not even in the transcript.
+    ApiKey { name: String, label: String, input: Vec<char>, cursor: usize, error: String, target: String },
     Pager { title: String, lines: Vec<String>, scroll: usize },
     /// A command outside the safe list or a change to a file. `diff` holds the changed lines of the file.
     Approve { id: String, command: String, cwd: String, file: bool, diff: Vec<String> },
@@ -92,6 +110,7 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd { name: "/brain", help: "the memory map as a graph; /brain write makes an Obsidian vault", key: "", takes_text: false },
     Cmd { name: "/cost", help: "tokens and euro per role and model", key: "", takes_text: false },
     Cmd { name: "/context", help: "show what @ and the memory map would send", key: "", takes_text: true },
+    Cmd { name: "/rewind", help: "restore files and transcript N turns back: /rewind 3", key: "", takes_text: true },
     Cmd { name: "/search", help: "search several engines and show the ranked results", key: "", takes_text: true },
     Cmd { name: "/research", help: "search, read the best pages and show a cited report", key: "", takes_text: true },
     Cmd { name: "/route", help: "the roles, their tools and their models", key: "", takes_text: false },
@@ -105,6 +124,8 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd { name: "/export", help: "write this session as Markdown under .penelope/exports", key: "", takes_text: false },
     Cmd { name: "/forget", help: "take back one note by its text", key: "", takes_text: true },
     Cmd { name: "/price", help: "set a price: /price MODEL INPUT OUTPUT in dollars per million", key: "", takes_text: true },
+    Cmd { name: "/budget", help: "monthly euro budget: /budget 20, or /budget to show it", key: "", takes_text: true },
+    Cmd { name: "/sandbox", help: "run shell commands in bubblewrap without network: /sandbox on|off", key: "", takes_text: true },
     Cmd { name: "/auto", help: "switch auto-learning on or off", key: "", takes_text: false },
     Cmd { name: "/learn", help: "the lessons and the feedback of this folder", key: "", takes_text: false },
     Cmd { name: "/skills", help: "the skills Penelope wrote for this project", key: "", takes_text: false },
@@ -149,6 +170,8 @@ pub struct Side {
     pub cost: String,
     /// True when Penelope can move her own cursor on this PC.
     pub cursor: bool,
+    /// The last Claude login status, one process call per refresh, not per frame.
+    pub claude: String,
 }
 
 pub struct App {
@@ -200,6 +223,10 @@ pub struct App {
     setup: bool,
     /// A provider whose login runs on the plain terminal before the interface comes back.
     login: Option<String>,
+    /// First F6 arms the delete; a second F6 within 4 seconds removes the session.
+    delete_armed: Option<Instant>,
+    /// Rotates the one-line tips that appear after every few turns.
+    tip: usize,
 }
 
 /// Labels and icons of status lines, so that a stored transcript finds its fixed texts again.
@@ -252,7 +279,7 @@ impl App {
             chat: Some(Chat::new()), cancel: Arc::new(AtomicBool::new(false)), pid: Arc::new(AtomicU32::new(0)), tx, rx,
             tokens: (0, 0), turns: 0, tool_calls: 0, trail: Vec::new(), learned: Vec::new(), side: Side::default(),
             approve_dir, allow_all: false, seen: HashSet::new(), shot: false, quit: false, session_id: None, tabs: Vec::new(), setup: false,
-            intro: Instant::now(), context_refs: Vec::new(), login: None,
+            intro: Instant::now(), context_refs: Vec::new(), login: None, delete_armed: None, tip: 0,
         };
         app.refresh_tabs();
         app.refresh_side();
@@ -333,8 +360,9 @@ impl App {
         self.side.screencodec = self.ctx.cfg["screencodec"]["command"].as_str().map(|c| !c.is_empty()).unwrap_or(false)
             || crate::config::which("screencodec-mcp").is_some();
         self.side.plugins = plugins::load(&self.ctx)["plugins"].as_array().map(|a| a.len()).unwrap_or(0);
-        self.side.cost = crate::cost::summary(&self.ctx);
+        self.side.cost = crate::cost::budget_summary(&self.ctx);
         self.side.cursor = crate::cursor::backend(&self.ctx).1;
+        self.side.claude = crate::auth::claude_status();
     }
 
     pub fn mood(&self) -> Mood {
@@ -376,16 +404,124 @@ impl App {
     }
 
     /// The model names the picker offers for the main or the weaker model.
-    pub fn model_choices(&self, weak: bool) -> Vec<String> {
-        let m = &self.ctx.cfg[if weak { "weak" } else { "main" }];
+    pub fn model_choices(&self, target: &str) -> Vec<String> {
+        let m = self.model_value(target);
         let current = m["model"].as_str().unwrap_or("").to_string();
-        let mut out: Vec<String> = if crate::llm::is_api(crate::llm::kind_of(m)) { Vec::new() } else {
-            ["sonnet", "opus", "haiku"].iter().map(|s| s.to_string()).collect()
-        };
-        if !current.is_empty() && !out.contains(&current) {
-            out.insert(0, current);
+        let provider = crate::providers::of(m).map(|p| p.name);
+        if let Some(name) = provider {
+            let list = crate::providers::models(name);
+            if !list.is_empty() {
+                return list.iter().map(|x| x.id.to_string()).collect();
+            }
         }
-        out
+        if !current.is_empty() { vec![current] } else { Vec::new() }
+    }
+
+    fn model_value(&self, target: &str) -> &serde_json::Value {
+        match target {
+            "main" | "weak" | "scout" => &self.ctx.cfg[target],
+            _ => &self.ctx.cfg["roles"][target],
+        }
+    }
+
+    fn set_model(&mut self, target: &str, model: &str) {
+        let provider = crate::providers::of(self.model_value(target)).map(|p| p.name).unwrap_or("claude-cli");
+        let effort = crate::providers::default_effort(provider, model);
+        let value = if matches!(target, "main" | "weak" | "scout") { &mut self.ctx.cfg[target] } else { &mut self.ctx.cfg["roles"][target] };
+        value["model"] = serde_json::json!(model);
+        if !effort.is_empty() { value["effort"] = serde_json::json!(effort); }
+        save_config(&self.ctx);
+        self.refresh_side();
+        self.toast(format!("{} model set to {}{}", target, model, if effort.is_empty() { String::new() } else { format!(" · effort {}", effort) }));
+    }
+
+    fn cycle_effort(&mut self, target: &str) {
+        let (_sel, model) = match &self.overlay {
+            Overlay::Models { sel, .. } => (*sel, self.model_choices(target).get(*sel).cloned()),
+            _ => return,
+        };
+        let Some(model) = model else { return };
+        let provider = crate::providers::of(self.model_value(target)).map(|p| p.name).unwrap_or("claude-cli");
+        let list = crate::providers::efforts(provider, &model);
+        if list.is_empty() {
+            self.toast(format!("{} has no effort control in this provider.", model));
+            return;
+        }
+        let value = if matches!(target, "main" | "weak" | "scout") { &mut self.ctx.cfg[target] } else { &mut self.ctx.cfg["roles"][target] };
+        let current = value["effort"].as_str().unwrap_or("");
+        let at = list.iter().position(|e| *e == current).unwrap_or(0);
+        let next = list[(at + 1) % list.len()];
+        value["effort"] = serde_json::json!(next);
+        save_config(&self.ctx);
+        self.toast(format!("{} · effort {}", model, next));
+    }
+
+    fn show_tip(&mut self) {
+        const TIPS: &[&str] = &[
+            "F5 starts a new session; F6 twice deletes the current one.",
+            "/models → r sets one model per role: tool calls, processing, research, coding.",
+            "/models → m shows exact model names; e changes the effort level.",
+            "/models → tab switches the main and the weaker model.",
+            "/rules session TEXT keeps a rule in this project; /rules global TEXT keeps it for every project.",
+            "Ctrl+O opens the provider list from anywhere; Esc closes a dialog.",
+        ];
+        let tip = TIPS[self.tip % TIPS.len()];
+        self.tip += 1;
+        self.note("◆", "tip", tip.to_string(), art::SEA);
+    }
+
+    /// F6: the first press asks again, the second removes the current session.
+    fn arm_delete_session(&mut self) {
+        if self.session_id.is_none() {
+            self.toast("this session has no stored transcript yet".to_string());
+            return;
+        }
+        match self.delete_armed {
+            Some(at) if at.elapsed() < Duration::from_secs(4) => {
+                let id = self.session_id.clone().unwrap_or_default();
+                if crate::sessions::delete(&self.ctx, &id) {
+                    self.items.clear();
+                    self.chat = Some(Chat::new());
+                    self.session_id = None;
+                    self.tokens = (0, 0);
+                    self.turns = 0;
+                    self.tool_calls = 0;
+                    self.refresh_tabs();
+                    self.refresh_side();
+                    self.intro = Instant::now();
+                    self.delete_armed = None;
+                    self.toast("session deleted".to_string());
+                } else {
+                    self.toast("the session was already gone".to_string());
+                }
+            }
+            _ => {
+                self.delete_armed = Some(Instant::now());
+                self.toast("press F6 again within 4 seconds to delete this session".to_string());
+            }
+        }
+    }
+
+    /// Writes one provider into main, weak, scout or a role and saves it.
+    fn select_provider(&mut self, name: &str, target: &str) {
+        let Some(p) = crate::providers::get(name) else { return; };
+        if p.kind == "laertes" { return; }
+        let (model, effort) = if p.kind == "claude-cli" {
+            ("claude-sonnet-5-5", crate::providers::default_effort("claude-cli", "claude-sonnet-5-5"))
+        } else {
+            (p.model, crate::providers::default_effort(p.name, p.model))
+        };
+        let mut value = serde_json::json!({"kind": p.kind, "model": model, "base_url": p.base, "api_key_env": p.key_env});
+        if !effort.is_empty() { value["effort"] = serde_json::json!(effort); }
+        if p.kind == "claude-cli" { value["base_url"] = serde_json::json!(""); value["api_key_env"] = serde_json::json!(""); }
+        if matches!(target, "main" | "weak" | "scout") {
+            self.ctx.cfg[target] = value;
+        } else {
+            if !self.ctx.cfg["roles"].is_object() { self.ctx.cfg["roles"] = serde_json::json!({}); }
+            self.ctx.cfg["roles"][target] = value;
+        }
+        save_config(&self.ctx);
+        self.refresh_side();
     }
 
     fn note(&mut self, icon: &'static str, label: &'static str, text: String, colour: art::Rgb) {
@@ -415,14 +551,43 @@ impl App {
         self.slash_sel = 0;
     }
 
+    fn save_checkpoint(&self) {
+        let dir = self.ctx.root.join("checkpoints");
+        let _ = fs::create_dir_all(&dir);
+        let items: Vec<serde_json::Value> = self.items.iter().map(item_json).collect();
+        let _ = fs::write(dir.join(format!("{}.json", self.turns)),
+                          serde_json::json!({"turns": self.turns, "tokens": self.tokens, "session": self.session_id, "items": items}).to_string());
+    }
+
+    fn rewind(&mut self, turns: usize) -> String {
+        let target = self.turns.saturating_sub(turns as u64);
+        let path = self.ctx.root.join("checkpoints").join(format!("{}.json", target));
+        let Ok(text) = fs::read_to_string(&path) else {
+            return format!("no checkpoint for turn {}. F5 starts a new session; checkpoints are kept from then on.", target);
+        };
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+        let files = crate::files::rewind_to(&self.ctx, target as u64);
+        self.items = v["items"].as_array().map(|a| a.iter().filter_map(item_from).collect()).unwrap_or_default();
+        self.turns = v["turns"].as_u64().unwrap_or(target as u64) as u64;
+        self.tokens = (v["tokens"][0].as_u64().unwrap_or(0), v["tokens"][1].as_u64().unwrap_or(0));
+        self.session_id = v["session"].as_str().map(str::to_string);
+        self.chat = Some(Chat::new());
+        self.refresh_tabs();
+        self.refresh_side();
+        format!("rewound to turn {} · {} file change(s) restored", target, files)
+    }
+
     fn start_turn(&mut self, text: String) {
+        self.save_checkpoint();
         let mut chat = self.chat.take().unwrap_or_else(Chat::new);
         self.cancel = chat.cancel.clone();
         self.pid = chat.pid.clone();
         self.busy = Some(Instant::now());
         self.items.push(Item::User(text.clone()));
         self.scroll = 0;
-        let (ctx, tx) = (self.ctx.clone(), self.tx.clone());
+        let mut ctx = self.ctx.clone();
+        ctx.cfg["_turn"] = serde_json::json!(self.turns + 1);
+        let tx = self.tx.clone();
         std::thread::spawn(move || {
             let expanded = crate::context::expand(&ctx, &text);
             if !expanded.refs.is_empty() {
@@ -583,6 +748,7 @@ impl App {
                     self.chat = Some(*chat);
                     self.busy = None;
                     self.streaming = false;
+                    if self.turns > 0 && self.turns % 4 == 0 { self.show_tip(); }
                     let failed = result.is_err();
                     for item in self.items.iter_mut() {
                         if let Item::Tool { state, .. } = item {
@@ -722,8 +888,10 @@ impl App {
                 self.trail.clear();
                 self.learned.clear();
                 self.scroll = 0;
+                self.intro = Instant::now();
+                self.delete_armed = None;
             }
-            "/models" | "/model" => self.overlay = Overlay::Models { sel: 0, weak: false },
+            "/models" | "/model" => self.overlay = Overlay::Providers { sel: 0, target: "main".into(), scroll: 0 },
             "/mode" if !rest.is_empty() => {
                 match crate::mode::apply(&mut self.ctx, rest) {
                     Ok(text) => {
@@ -823,7 +991,14 @@ impl App {
             }
             "/btw" => self.toast("/btw TEXT keeps a quick note".to_string()),
             "/rules" if !rest.is_empty() => {
-                let report = tools::memory_note_scope(&self.ctx, "rules", rest, "global");
+                let (scope, text) = if let Some(rest) = rest.strip_prefix("session ") {
+                    ("project", rest.trim())
+                } else if let Some(rest) = rest.strip_prefix("global ") {
+                    ("global", rest.trim())
+                } else {
+                    ("global", rest)
+                };
+                let report = tools::memory_note_scope(&self.ctx, "rules", text, scope);
                 self.note("✦", "learned", report, art::CLAY);
                 self.flash = Some((Mood::Learned, Instant::now()));
                 self.refresh_side();
@@ -1005,6 +1180,37 @@ impl App {
                 self.refresh_side();
             }
             "/forget" => self.toast("/forget TEXT takes back one note".to_string()),
+            "/sandbox" => match rest.trim() {
+                "on" => {
+                    self.ctx.cfg["sandbox"] = serde_json::json!("bwrap");
+                    save_config(&self.ctx);
+                    self.toast("sandbox on: run uses bubblewrap, read-only root, no network".to_string());
+                }
+                "off" => {
+                    self.ctx.cfg["sandbox"] = serde_json::json!("off");
+                    save_config(&self.ctx);
+                    self.toast("sandbox off: run uses the normal shell".to_string());
+                }
+                _ => self.toast("/sandbox on or /sandbox off".to_string()),
+            },
+            "/rewind" if !rest.is_empty() => match rest.trim().parse::<usize>() {
+                Ok(n) if n > 0 => {
+                    let report = self.rewind(n);
+                    self.note("↺", "rewind", report, art::SEA);
+                }
+                _ => self.toast("/rewind N, for example /rewind 3".to_string()),
+            },
+            "/rewind" => self.toast("/rewind N restores files and transcript N turns back".to_string()),
+            "/budget" if !rest.is_empty() => match rest.trim().parse::<f64>() {
+                Ok(value) if value >= 0.0 => {
+                    self.ctx.cfg["monthly_budget_eur"] = serde_json::json!(value);
+                    save_config(&self.ctx);
+                    self.refresh_side();
+                    self.toast(format!("monthly budget is {:.2} EUR", value));
+                }
+                _ => self.toast("/budget EUR, for example /budget 20".to_string()),
+            },
+            "/budget" => self.pager("Monthly budget", crate::cost::report(&self.ctx)),
             "/price" if !rest.is_empty() => {
                 let parts: Vec<&str> = rest.split_whitespace().collect();
                 if parts.len() != 3 || parts[1].parse::<f64>().is_err() || parts[2].parse::<f64>().is_err() {
@@ -1109,7 +1315,13 @@ impl App {
         let mut close = false;
         let mut run: Option<&'static Cmd> = None;
         let mut reply: Option<(String, bool, bool)> = None;
-        let mut pick: Option<(usize, bool)> = None;
+        let mut provider: Option<(usize, String)> = None;
+        let mut models_open: Option<String> = None;
+        let mut roles_open = false;
+        let mut providers_open: Option<String> = None;
+        let mut key_save: Option<(String, String, String, String)> = None;
+        let mut pick: Option<(usize, String)> = None;
+        let mut effort: Option<String> = None;
         let mut open: Option<usize> = None;
         let mut said: Option<(String, String)> = None;
         match &mut self.overlay {
@@ -1133,15 +1345,54 @@ impl App {
                 }
                 _ => {}
             },
-            Overlay::Models { sel, weak } => match key.code {
+            Overlay::Providers { sel, target, scroll } => match key.code {
                 KeyCode::Esc => close = true,
                 KeyCode::Up => *sel = sel.saturating_sub(1),
                 KeyCode::Down => *sel += 1,
+                KeyCode::PageUp => *sel = sel.saturating_sub(8),
+                KeyCode::PageDown => *sel += 8,
                 KeyCode::Tab | KeyCode::Left | KeyCode::Right => {
-                    *weak = !*weak;
+                    *target = if target == "main" { "weak".to_string() } else if target == "weak" { "main".to_string() } else { target.clone() };
                     *sel = 0;
+                    *scroll = 0;
                 }
-                KeyCode::Enter => pick = Some((*sel, *weak)),
+                KeyCode::Enter => provider = Some((*sel, target.clone())),
+                KeyCode::Char('m') => models_open = Some(target.clone()),
+                KeyCode::Char('r') => roles_open = true,
+                _ => {}
+            },
+            Overlay::Roles { sel } => match key.code {
+                KeyCode::Esc => close = true,
+                KeyCode::Up => *sel = sel.saturating_sub(1),
+                KeyCode::Down => *sel = (*sel + 1).min(ROLE_MODELS.len().saturating_sub(1)),
+                KeyCode::Enter => providers_open = Some(ROLE_MODELS[(*sel).min(ROLE_MODELS.len().saturating_sub(1))].0.to_string()),
+                _ => {}
+            },
+            Overlay::ApiKey { name, label, input, cursor, error, target } => match key.code {
+                KeyCode::Esc => close = true,
+                KeyCode::Enter => key_save = Some((name.clone(), label.clone(), input.iter().collect::<String>(), target.clone())),
+                KeyCode::Backspace => {
+                    if *cursor > 0 { *cursor -= 1; input.remove(*cursor); }
+                    error.clear();
+                }
+                KeyCode::Delete => {
+                    if *cursor < input.len() { input.remove(*cursor); }
+                    error.clear();
+                }
+                KeyCode::Left => *cursor = cursor.saturating_sub(1),
+                KeyCode::Right => *cursor = (*cursor + 1).min(input.len()),
+                KeyCode::Home => *cursor = 0,
+                KeyCode::End => *cursor = input.len(),
+                KeyCode::Char('u') if ctrl => { input.clear(); *cursor = 0; error.clear(); }
+                KeyCode::Char(c) if !ctrl => { input.insert(*cursor, c); *cursor += 1; error.clear(); }
+                _ => {}
+            },
+            Overlay::Models { sel, target } => match key.code {
+                KeyCode::Esc => close = true,
+                KeyCode::Up => *sel = sel.saturating_sub(1),
+                KeyCode::Down => *sel += 1,
+                KeyCode::Enter => pick = Some((*sel, target.clone())),
+                KeyCode::Char('e') => effort = Some(target.clone()),
                 _ => {}
             },
             Overlay::Pager { scroll, lines, .. } => match key.code {
@@ -1194,17 +1445,70 @@ impl App {
                 _ => {}
             },
         }
-        if let Overlay::Models { weak, .. } = &self.overlay {
-            let last = self.model_choices(*weak).len().saturating_sub(1);
+        if let Overlay::Models { sel: _, target } = &self.overlay {
+            let last = self.model_choices(target).len().saturating_sub(1);
             if let Overlay::Models { sel, .. } = &mut self.overlay {
                 *sel = (*sel).min(last);
             }
         }
-        if let Some((sel, weak)) = pick {
-            if let Some(model) = self.model_choices(weak).get(sel).cloned() {
-                self.ctx.cfg[if weak { "weak" } else { "main" }]["model"] = serde_json::json!(model);
-                save_config(&self.ctx);
-                self.toast(format!("{} model is now {}", if weak { "weaker" } else { "main" }, model));
+        if let Overlay::Providers { sel, scroll, .. } = &mut self.overlay {
+            let last = crate::providers::TABLE.len().saturating_sub(1);
+            *sel = (*sel).min(last);
+            let rows = 20usize;
+            if *sel < *scroll { *scroll = *sel; }
+            if *sel >= *scroll + rows { *scroll = *sel + 1 - rows; }
+        }
+        if let Overlay::Roles { sel } = &mut self.overlay {
+            *sel = (*sel).min(ROLE_MODELS.len().saturating_sub(1));
+        }
+        if let Some(target) = models_open {
+            self.overlay = Overlay::Models { sel: 0, target };
+            close = false;
+        }
+        if roles_open {
+            self.overlay = Overlay::Roles { sel: 0 };
+            close = false;
+        }
+        if let Some(target) = providers_open {
+            self.overlay = Overlay::Providers { sel: 0, target, scroll: 0 };
+            close = false;
+        }
+        if let Some((sel, target)) = provider {
+            let p = &crate::providers::TABLE[sel.min(crate::providers::TABLE.len().saturating_sub(1))];
+            if p.kind == "laertes" {
+                self.toast(format!("{} is a Laertes family in training; it cannot log in yet.", p.label));
+                close = true;
+            } else if p.name == "claude-cli" {
+                self.select_provider(p.name, &target);
+                self.overlay = Overlay::None;
+                self.login = Some("claude".to_string());
+                close = true;
+            } else {
+                self.overlay = Overlay::ApiKey { name: p.name.to_string(), label: p.label.to_string(), input: Vec::new(), cursor: 0, error: String::new(), target };
+                close = false;
+            }
+        }
+        if let Some((name, label, key, target)) = key_save {
+            match crate::auth::store(&name, &key) {
+                Ok(store) => {
+                    self.select_provider(&name, &target);
+                    self.overlay = Overlay::None;
+                    self.toast(format!("{} key stored in {}. {} model set.", label, store, target));
+                    close = false;
+                }
+                Err(e) => {
+                    if let Overlay::ApiKey { error, .. } = &mut self.overlay { *error = e; }
+                    close = false;
+                }
+            }
+        }
+        if let Some(target) = effort {
+            self.cycle_effort(&target);
+            close = false;
+        }
+        if let Some((sel, target)) = pick {
+            if let Some(model) = self.model_choices(&target).get(sel).cloned() {
+                self.set_model(&target, &model);
             }
             close = true;
         }
@@ -1256,9 +1560,11 @@ impl App {
             }
             KeyCode::Char('d') if ctrl && self.input.is_empty() => self.quit = true,
             KeyCode::Char('p') if ctrl => self.overlay = Overlay::Palette { query: String::new(), sel: 0 },
-            KeyCode::Char('o') if ctrl => self.overlay = Overlay::Models { sel: 0, weak: false },
+            KeyCode::Char('o') if ctrl => self.overlay = Overlay::Providers { sel: 0, target: "main".into(), scroll: 0 },
             KeyCode::Char('n') if ctrl => self.command("/new"),
             KeyCode::Char('b') if ctrl => self.sidebar = !self.sidebar,
+            KeyCode::F(5) => self.command("/new"),
+            KeyCode::F(6) => self.arm_delete_session(),
             KeyCode::F(1) => self.command("/help"),
             KeyCode::F(2) => self.command("/sessions"),
             KeyCode::F(3) => self.step_tab(-1),
@@ -1486,7 +1792,7 @@ mod tests {
             a.overlay = match overlay {
                 0 => Overlay::None,
                 1 => Overlay::Palette { query: "m".into(), sel: 1 },
-                2 => Overlay::Models { sel: 0, weak: true },
+                2 => Overlay::Providers { sel: 0, target: "weak".into(), scroll: 0 },
                 3 => Overlay::Pager { title: "Help".into(), lines: help_text().lines().map(String::from).collect(), scroll: 2 },
                 _ => Overlay::Approve { id: "x".into(), command: "rm -rf target && cargo build".into(), cwd: "/tmp".into(), file: overlay % 2 == 0,
                                         diff: crate::files::diff_text("a\nb\n", "a\nc\nd\n").lines().map(String::from).collect() },
@@ -1625,6 +1931,63 @@ mod tests {
         a.command(&format!("/context @{}", file.display()));
         assert!(matches!(&a.overlay, Overlay::Pager { title, .. } if title == "Context preview"));
         let _ = fs::remove_file(file);
+    }
+
+    #[test]
+    fn the_provider_list_opens_a_masked_key_window_and_a_claude_login() {
+        let mut a = app();
+        a.command("/models");
+        assert!(matches!(a.overlay, Overlay::Providers { .. }));
+        let at = crate::providers::TABLE.iter().position(|p| p.name == "anthropic").unwrap();
+        a.overlay = Overlay::Providers { sel: at, target: "main".into(), scroll: 0 };
+        press(&mut a, KeyCode::Enter);
+        match &a.overlay {
+            Overlay::ApiKey { name, input, .. } => {
+                assert_eq!((name.as_str(), input.len()), ("anthropic", 0));
+            }
+            _ => panic!("the API provider must open the key window"),
+        }
+        type_text(&mut a, "sk-abcdefghijklmnop");
+        let shown = screen(&mut a, 120, 40);
+        assert!(shown.contains("sk-a") && !shown.contains("sk-abcdefghijklmnop"), "{}", shown);
+        press(&mut a, KeyCode::Esc);
+        a.overlay = Overlay::Providers { sel: 0, target: "main".into(), scroll: 0 };
+        press(&mut a, KeyCode::Enter);
+        assert_eq!(a.login.as_deref(), Some("claude"));
+        assert!(matches!(a.overlay, Overlay::None));
+    }
+
+    #[test]
+    fn a_turn_checkpoint_rewinds_the_transcript_and_turn_counter() {
+        let mut a = app();
+        a.turns = 0;
+        a.items.push(Item::User("first".into()));
+        a.save_checkpoint();
+        a.turns = 2;
+        a.items.push(Item::Reply("second".into()));
+        a.items.push(Item::User("third".into()));
+        let said = a.rewind(2);
+        assert!(said.contains("turn 0"), "{}", said);
+        assert!(a.turns == 0 && a.items.len() == 1 && matches!(&a.items[0], Item::User(t) if t == "first"));
+    }
+
+    #[test]
+    fn roles_have_models_and_opencode_and_claude_names_are_exact() {
+        let mut a = app();
+        a.command("/models");
+        press(&mut a, KeyCode::Char('r'));
+        assert!(matches!(a.overlay, Overlay::Roles { .. }));
+        press(&mut a, KeyCode::Enter);
+        match &a.overlay {
+            Overlay::Providers { target, .. } => assert_eq!(target, "tool"),
+            _ => panic!("the role must open the provider list"),
+        }
+        a.ctx.cfg["main"] = serde_json::json!({"kind": "openai", "base_url": "https://opencode.ai/zen/go/v1", "model": "mimo-v2.6-flash", "api_key_env": ""});
+        let opencode = a.model_choices("main");
+        assert!(opencode.contains(&"deepseek-v4.1-flash".to_string()) && opencode.len() > 10, "{:?}", opencode);
+        a.ctx.cfg["main"] = serde_json::json!({"kind": "claude-cli", "model": "sonnet"});
+        let claude = a.model_choices("main");
+        assert!(claude.contains(&"claude-sonnet-5-5".to_string()) && claude.contains(&"claude-opus-5-5".to_string()), "{:?}", claude);
     }
 
     #[test]

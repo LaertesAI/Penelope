@@ -93,6 +93,7 @@ pub(crate) fn call_raw(ctx: &Ctx, name: &str, a: &Value) -> Result<String, Strin
         "skill" => Ok(tools::guard(ctx, &crate::plugins::skill_body(ctx, &s("name")))),
         "skill_new" => crate::skills::write(ctx, &s("name"), &s("description"), &s("body")),
         "git_commit" => Ok(tools::git_commit(ctx, &a["files"], &s("message"), &s("cwd"))),
+        "pr_create" => Ok(tools::pr_create(ctx, &s("title"), &s("body"), &s("base"), &s("cwd"))),
         "check" => Ok(tools::check(ctx, &s("claim"), &s("evidence"))),
         "scouts" => Ok(tools::scouts(ctx, &a["tasks"], &s("cwd"))),
         "tool_new" => crate::forge::create(ctx, &s("name"), &s("description"), &s("command"), &a["schema"]),

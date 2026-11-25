@@ -271,15 +271,54 @@ imperative that names the concrete thing. At most 3 lessons. Lessons that any ag
 
 /// None if a command may start, else the text of the refusal. Under the policy "safe" a command outside the safe list
 /// needs the person's yes. `run` and `job_start` share this check.
+fn command_hash(command: &str) -> String {
+    let mut hash = 0xcbf29ce484222325u64;
+    for b in command.as_bytes() { hash ^= *b as u64; hash = hash.wrapping_mul(0x100000001b3); }
+    format!("{:016x}", hash)
+}
+
+fn allowed_path(ctx: &Ctx) -> std::path::PathBuf { ctx.root.join("allowed.json") }
+
+pub fn is_allowed(ctx: &Ctx, command: &str) -> bool {
+    let hash = command_hash(command);
+    fs::read_to_string(allowed_path(ctx)).ok().and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.as_array().cloned()).map(|a| a.iter().any(|e| e["hash"].as_str() == Some(&hash))).unwrap_or(false)
+}
+
+/// Keeps one confirmed command for this project. The file holds a hash and a masked preview, not the raw command.
+pub fn allow_command(ctx: &Ctx, command: &str) {
+    let mut list: Vec<serde_json::Value> = fs::read_to_string(allowed_path(ctx)).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    let hash = command_hash(command);
+    if list.iter().any(|e| e["hash"].as_str() == Some(&hash)) { return; }
+    let (preview, _) = crate::privacy::mask(command);
+    list.push(serde_json::json!({"hash": hash, "preview": preview.chars().take(120).collect::<String>()}));
+    let from = list.len().saturating_sub(200);
+    let _ = fs::write(allowed_path(ctx), serde_json::to_string_pretty(&list[from..]).unwrap());
+}
+
+pub fn allowed_commands(ctx: &Ctx) -> String {
+    let list: Vec<serde_json::Value> = fs::read_to_string(allowed_path(ctx)).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    if list.is_empty() { return "no confirmed command for this project yet. A yes in the approval dialog adds one.".to_string(); }
+    list.iter().enumerate().map(|(i, e)| format!("{:>3}  {}", i + 1, e["preview"].as_str().unwrap_or(""))).collect::<Vec<_>>().join("\n")
+}
+
+pub fn clear_allowed(ctx: &Ctx) -> String {
+    let _ = fs::remove_file(allowed_path(ctx));
+    "the project allow list is empty".to_string()
+}
+
 pub fn permit_command(ctx: &Ctx, command: &str, cwd: &str) -> Option<String> {
     if ctx.cfg["run_policy"].as_str().unwrap_or("safe") == "all" || is_safe(command) {
+        return None;
+    }
+    if is_allowed(ctx, command) {
         return None;
     }
     if crate::scout::inside() {
         return Some("NOT run. A scout runs commands of the safe list only: read-only and build commands without shell operators.".to_string());
     }
     match ask_person(command, cwd, "command", "") {
-        Some(true) => None,
+        Some(true) => { allow_command(ctx, command); None }
         Some(false) => Some("NOT run. The user declined this command.".to_string()),
         None => Some("NOT run. The command is not on the safe list (read-only and build commands without shell operators). \
                       The user can allow every command with \"run_policy\": \"all\" in .penelope/config.json.".to_string()),
@@ -336,12 +375,31 @@ pub fn dispatch_retry(ctx: &Ctx, role: &str, name: &str, args: &serde_json::Valu
 }
 
 /// Runs a shell command. Short output comes back as it is. Long output is stored and condensed by the weaker model.
+/// The argv of the bubblewrap sandbox: read-only root, one writable working folder, a private /tmp and no network.
+pub fn sandbox_args(command: &str, cwd: &std::path::Path) -> Vec<String> {
+    let dir = cwd.to_string_lossy().to_string();
+    ["--die-with-parent", "--unshare-net", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc",
+     "--tmpfs", "/tmp", "--bind", &dir, &dir, "--chdir", &dir, "--", "/bin/sh", "-c", command]
+        .iter().map(|s| s.to_string()).collect()
+}
+
 pub fn run(ctx: &Ctx, command: &str, question: &str, cwd: &str) -> String {
     if let Some(refusal) = permit_command(ctx, command, cwd) {
         return refusal;
     }
-    let mut cmd = crate::platform::shell(command);
-    if !cwd.is_empty() {
+    let sandbox = ctx.cfg["sandbox"].as_str().unwrap_or("off") == "bwrap";
+    let mut cmd = if sandbox {
+        if crate::config::which("bwrap").is_none() {
+            return "NOT run. The sandbox needs bubblewrap (bwrap) on the PATH.".to_string();
+        }
+        let dir = if cwd.is_empty() { std::env::current_dir().unwrap_or_default() } else { std::path::PathBuf::from(cwd) };
+        let mut c = std::process::Command::new("bwrap");
+        c.args(sandbox_args(command, &dir));
+        c
+    } else {
+        crate::platform::shell(command)
+    };
+    if !cwd.is_empty() && !sandbox {
         cmd.current_dir(cwd);
     }
     let out = match cmd.output() {
@@ -831,6 +889,36 @@ pub fn agent(ctx: &Ctx, args: &serde_json::Value) -> String {
     }
 }
 
+/// Opens a pull request with gh after a question. It never pushes; the branch must already be on the remote.
+pub fn pr_create(ctx: &Ctx, title: &str, body: &str, base: &str, cwd: &str) -> String {
+    if title.trim().is_empty() || body.trim().is_empty() {
+        return "NOT opened. A pull request needs a title and a body.".to_string();
+    }
+    if crate::config::which("gh").is_none() {
+        return "NOT opened. The gh command is not on the PATH.".to_string();
+    }
+    let what = format!("Open a pull request: {} (base {})", title, if base.is_empty() { "default" } else { base });
+    if ctx.cfg["edit_policy"].as_str() != Some("all") {
+        match ask_person(&what, cwd, "file", "") {
+            Some(true) => {}
+            Some(false) => return "NOT opened. The user declined this pull request.".to_string(),
+            None => return "NOT opened. Outside the full screen interface nobody can answer the question. Set \"edit_policy\": \"all\" to allow it.".to_string(),
+        }
+    }
+    let mut cmd = std::process::Command::new("gh");
+    cmd.args(["pr", "create", "--title", title, "--body", body]);
+    if !base.trim().is_empty() { cmd.args(["--base", base]); }
+    if !cwd.is_empty() { cmd.current_dir(cwd); }
+    let out = match cmd.output() {
+        Ok(o) => o,
+        Err(e) => return format!("NOT opened. gh could not start: {}", e),
+    };
+    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let text = guard(ctx, &text);
+    if out.status.success() { format!("pull request opened\n{}", text.trim()) }
+    else { format!("NOT opened. gh exited with {}:\n{}", out.status.code().unwrap_or(-1), text.trim()) }
+}
+
 /// Stages the named files and commits them. It never pushes. Under "edit_policy": "ask" the person sees the file list
 /// and the message first, because a commit is a change that outlives the session.
 pub fn git_commit(ctx: &Ctx, files: &serde_json::Value, message: &str, cwd: &str) -> String {
@@ -1108,5 +1196,32 @@ mod tests {
         let bad: Call = ("edit".into(), "a.rs".into(), true, "the old text does not occur in a.rs".into());
         assert!(!worth_a_lesson(&[ok.clone()]) && worth_a_lesson(&[ok.clone(), bad]) && worth_a_lesson(&vec![ok; 8]));
         assert!(ask_user("Which?", &serde_json::json!(["a"])).starts_with("give a question"));
+    }
+
+
+    #[test]
+    fn the_sandbox_has_no_network_and_only_the_project_is_writable() {
+        let args = sandbox_args("cargo test", std::path::Path::new("/tmp/project"));
+        assert!(args.contains(&"--unshare-net".to_string()));
+        assert!(args.windows(3).any(|w| w[0] == "--ro-bind" && w[1] == "/" && w[2] == "/"));
+        assert!(args.windows(3).any(|w| w[0] == "--bind" && w[1] == "/tmp/project" && w[2] == "/tmp/project"));
+        assert!(args.ends_with(&["/bin/sh".to_string(), "-c".to_string(), "cargo test".to_string()]));
+    }
+
+
+    #[test]
+    fn a_confirmed_command_is_kept_hashed_for_the_project() {
+        let dir = std::env::temp_dir().join(format!("penelope-allowed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let ctx = crate::config::load(&dir.join(".penelope"));
+        let command = "cargo test && echo done";
+        assert!(!is_allowed(&ctx, command));
+        allow_command(&ctx, command);
+        assert!(is_allowed(&ctx, command));
+        assert!(permit_command(&ctx, command, "").is_none());
+        let text = allowed_commands(&ctx);
+        assert!(text.contains("cargo test") && !text.contains("done\n"), "{}", text);
+        assert!(clear_allowed(&ctx).contains("empty") && !is_allowed(&ctx, command));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

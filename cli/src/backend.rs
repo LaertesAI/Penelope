@@ -250,6 +250,9 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
         let mut cmd = Command::new("claude");
         cmd.args(["-p", user, "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--model", ctx.cfg["main"]["model"].as_str().unwrap_or("sonnet"),
                   "--append-system-prompt", system, "--strict-mcp-config", "--mcp-config", &cfg, "--tools", "", "--allowedTools", &allowed.join(",")]);
+        if let Some(level) = crate::llm::effort(&ctx.cfg["main"]) {
+            cmd.args(["--effort", level]);
+        }
         if let Some(s) = &self.session {
             cmd.args(["--resume", s]);
         }

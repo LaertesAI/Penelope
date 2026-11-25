@@ -28,6 +28,15 @@ pub fn record(ctx: &Ctx, role: &str, model: &str, tokens_in: u64, tokens_out: u6
         "in": e["in"].as_u64().unwrap_or(0) + tokens_in,
         "out": e["out"].as_u64().unwrap_or(0) + tokens_out
     });
+    let month = crate::sessions::stamp(now()).chars().take(7).collect::<String>();
+    if !v["months"].is_object() { v["months"] = json!({}); }
+    let me = &mut v["months"][&month]["models"][key(role, model)];
+    *me = json!({
+        "role": role, "model": model,
+        "calls": me["calls"].as_u64().unwrap_or(0) + 1,
+        "in": me["in"].as_u64().unwrap_or(0) + tokens_in,
+        "out": me["out"].as_u64().unwrap_or(0) + tokens_out
+    });
     let _ = fs::write(path, serde_json::to_string_pretty(&v).unwrap());
 }
 
@@ -75,8 +84,11 @@ pub fn report(ctx: &Ctx) -> String {
     if rows.is_empty() {
         out.push_str("no model call is counted yet. The first turn writes the first row.\n");
     }
+    let budget = ctx.cfg["monthly_budget_eur"].as_f64().unwrap_or(0.0);
     out.push_str(&format!("\ntotal {:.4} EUR at {:.2} EUR per dollar{}.\n", total, rate,
                           if unpriced > 0 { format!(" · {} calls have no price in config.json (prices)", unpriced) } else { String::new() }));
+    out.push_str(&format!("this month: {}{}.\n", crate::cost::budget_summary(ctx),
+                          if budget > 0.0 { "" } else { " · set a limit with /budget EUR" }));
     out.push_str("Prices are proposals in config.json, not a bill. Set prices per million tokens in dollars: \"prices\": {\"model-name\": [input, output]}.\n");
     out
 }
@@ -98,6 +110,37 @@ pub fn total_eur(ctx: &Ctx) -> f64 {
 }
 
 /// One line for the side panel.
+fn now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+/// Euro spent in the running month, from the monthly rows. Older usage files fall back to the total.
+pub fn month_eur(ctx: &Ctx) -> f64 {
+    let v: Value = fs::read_to_string(ctx.root.join("usage.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_else(|| json!({"models": {}}));
+    let month = crate::sessions::stamp(now()).chars().take(7).collect::<String>();
+    let rate = ctx.cfg["eur_per_usd"].as_f64().unwrap_or(0.92);
+    let Some(models) = v["months"][&month]["models"].as_object() else { return 0.0; };
+    let mut total = 0.0;
+    for e in models.values() {
+        let (ci, co) = (e["in"].as_u64().unwrap_or(0), e["out"].as_u64().unwrap_or(0));
+        if let Some((i, o)) = price(ctx, e["model"].as_str().unwrap_or("")) {
+            total += (ci as f64 * i + co as f64 * o) / 1_000_000.0 * rate;
+        }
+    }
+    total
+}
+
+/// Consumption and the remaining monthly budget, for the side panel.
+pub fn budget_summary(ctx: &Ctx) -> String {
+    let budget = ctx.cfg["monthly_budget_eur"].as_f64().unwrap_or(0.0);
+    let spent = month_eur(ctx);
+    let month = crate::sessions::stamp(now()).chars().take(7).collect::<String>();
+    if budget <= 0.0 {
+        return format!("{:.3} EUR in {}", spent, month);
+    }
+    format!("{:.3} EUR in {} · {:.2} left of {:.2}", spent, month, (budget - spent).max(0.0), budget)
+}
+
 pub fn summary(ctx: &Ctx) -> String {
     let v: Value = fs::read_to_string(ctx.root.join("usage.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_else(|| json!({"models": {}}));
     let rate = ctx.cfg["eur_per_usd"].as_f64().unwrap_or(0.92);
@@ -115,6 +158,11 @@ pub fn summary(ctx: &Ctx) -> String {
     }
     if calls == 0 {
         return "no call yet".to_string();
+    }
+    let budget = ctx.cfg["monthly_budget_eur"].as_f64().unwrap_or(0.0);
+    if budget > 0.0 {
+        let spent = month_eur(ctx);
+        return format!("{:.3} EUR in {} · {:.2} left of {:.2}", spent, crate::sessions::stamp(now()).chars().take(7).collect::<String>(), (budget - spent).max(0.0), budget);
     }
     format!("{:.3} EUR · {} calls{}", total, calls, if unpriced > 0 { format!(" · {} unpriced", unpriced) } else { String::new() })
 }
@@ -138,6 +186,8 @@ mod tests {
         assert!(text.ends_with("Prices are proposals in config.json, not a bill. Set prices per million tokens in dollars: \"prices\": {\"model-name\": [input, output]}.\n"));
         assert!(text.contains("total 2.2500 EUR at 0.50 EUR per dollar · 1 calls have no price"), "{}", text);
         assert!(summary(&ctx).starts_with("2.250 EUR · 2 calls · 1 unpriced"), "{}", summary(&ctx));
+        ctx.cfg["monthly_budget_eur"] = json!(10.0);
+        assert!(budget_summary(&ctx).contains("left of 10.00"), "{}", budget_summary(&ctx));
         let _ = fs::remove_dir_all(&dir);
     }
 }
