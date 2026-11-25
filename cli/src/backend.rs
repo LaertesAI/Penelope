@@ -398,7 +398,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let mut ctx = crate::config::load(&dir.join(".penelope"));
         std::fs::write(dir.join("note.txt"), "hello from the note\n").unwrap();
-        ctx.cfg["main"] = json!({"kind": kind, "base_url": address, "model": "test-model", "api_key_env": key_env});
+        let model = match kind { "anthropic" => "claude-opus-5-5", "openai" => "gpt-6.2-astra", _ => "test-model" };
+        ctx.cfg["main"] = json!({"kind": kind, "base_url": address, "model": model, "api_key_env": key_env});
         ctx.cfg["auto_learn"] = json!(false);
         (ctx, dir)
     }
@@ -440,8 +441,9 @@ mod tests {
             assert!(seen[0].headers.contains(&"authorization: bearer test-key-openai-0123456789".to_string()));
             let first = &seen[0].body;
             assert_eq!((first["model"].as_str(), first["messages"][0]["role"].as_str(), first["messages"][1]["content"].as_str()),
-                       (Some("test-model"), Some("system"), Some("What does note.txt say?")));
+                       (Some("gpt-6.2-astra"), Some("system"), Some("What does note.txt say?")));
             assert!(first["temperature"].is_null() && first["tools"][0]["type"] == "function" && first["tools"][0]["function"]["parameters"]["type"] == "object");
+            assert_eq!(first["reasoning_effort"], json!("high"));          // an old setting without the field gets the default too
             let second = seen[1].body["messages"].as_array().unwrap();
             assert_eq!(second.len(), 4);
             assert_eq!(second[2]["tool_calls"][0]["id"], "call_1");
@@ -494,6 +496,7 @@ mod tests {
             assert!(!h.iter().any(|l| l.starts_with("authorization:") || l.starts_with("anthropic-beta:")));
             let first = &seen[0].body;
             assert!(first["system"].as_str().unwrap().starts_with("You work inside Penelope") && first["max_tokens"] == 16000 && first["temperature"].is_null());
+            assert_eq!((&first["thinking"], &first["output_config"]), (&json!({"type": "adaptive"}), &json!({"effort": "high"})));
             assert_eq!(first["messages"], json!([{"role": "user", "content": "What does note.txt say?"}]));
             let tool = first["tools"].as_array().unwrap().iter().find(|t| t["name"] == "read").unwrap();
             assert!(tool["input_schema"]["properties"]["path"].is_object() && tool["type"].is_null());
@@ -525,7 +528,7 @@ mod tests {
         let (mut ctx, dir) = endpoint("scout", "anthropic", &address, "");
         ctx.cfg["scout"] = ctx.cfg["main"].clone();
         let report = crate::scout::run(&ctx, "Remove the build folder.", &dir.to_string_lossy());
-        assert!(report.starts_with("report of the scout on test-model: 2 steps, 120 tokens in, 18 out") && report.ends_with("Nothing was removed."), "{}", report);
+        assert!(report.starts_with("report of the scout on claude-opus-5-5: 2 steps, 120 tokens in, 18 out") && report.ends_with("Nothing was removed."), "{}", report);
         assert!(!crate::scout::inside());
         {
             let seen = seen.lock().unwrap();

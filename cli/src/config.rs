@@ -12,8 +12,8 @@ pub struct Ctx {
 
 pub fn default_config() -> Value {
     json!({
-        "main": {"kind": "claude-cli", "model": "sonnet"},
-        "weak": {"kind": "claude-cli", "model": "haiku"},
+        "main": {"kind": "claude-cli", "model": "sonnet", "effort": "high"},
+        "weak": {"kind": "claude-cli", "model": "haiku", "effort": "high"},
         "run_policy": "safe",
         "sandbox": "off",
         "edit_policy": "ask",

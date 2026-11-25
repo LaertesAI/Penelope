@@ -414,8 +414,26 @@ pub fn health(ctx: &Ctx, probe: bool) -> String {
         }
     }
     if out.lines().count() == 1 { out.push_str("no search call counted yet. penelope search health --probe asks every engine once.\n"); }
-    out.push_str("\nThe health file is .penelope/search/health.json; probe sends one small query per engine.\n");
+    let names = sources(ctx);
+    out.push_str(&format!("\nfanout {}: every search asks {} and merges, deduplicates and ranks the answers.\n",
+                          if ctx.cfg["search"]["fanout"].as_bool().unwrap_or(true) { "on" } else { "off" },
+                          if names.is_empty() { "no engine".to_string() } else { names.join(" + ") }));
+    out.push_str("The health file is .penelope/search/health.json; probe sends one small query per engine.\n");
     out
+}
+
+/// Turns the parallel search over several engines on or off.
+pub fn set_fanout(ctx: &Ctx, on: bool) -> String {
+    let mut cfg = ctx.cfg.clone();
+    cfg["search"]["fanout"] = serde_json::json!(on);
+    if let Err(e) = std::fs::write(ctx.root.join("config.json"), serde_json::to_string_pretty(&cfg).unwrap()) {
+        return format!("NOT set. cannot write config.json: {}", e);
+    }
+    let mut c = ctx.clone();
+    c.cfg = cfg;
+    let names = sources(&c);
+    format!("search fanout {}: {} {}", if on { "on" } else { "off" }, if names.is_empty() { "no engine".to_string() } else { names.join(" + ") },
+            if on { "are asked in parallel and their results are merged and ranked" } else { "the first working engine answers alone" })
 }
 
 /// One probe a day. The marker is a small file, so a cron job can call `penelope search probe --daily` safely.
@@ -821,6 +839,22 @@ mod tests {
         c2.cfg["search"]["rerank"]["url"] = serde_json::json!(format!("{}/rerank", bad.0));
         let fallback = rerank(&c2, "rust", vec![Hit { title: "a".into(), url: "https://a.example".into(), ..Default::default() }], 1);
         assert_eq!(fallback[0].url, "https://a.example");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_fanout_switch_is_written_and_the_health_line_names_every_engine() {
+        let dir = std::env::temp_dir().join(format!("penelope-search-fanout-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let ctx = crate::config::load(&dir.join(".penelope"));
+        assert!(set_fanout(&ctx, false).starts_with("search fanout off"));
+        let text = std::fs::read_to_string(dir.join(".penelope/config.json")).unwrap();
+        assert!(text.contains("\"fanout\": false"));
+        let off = crate::config::load(&dir.join(".penelope"));
+        assert!(!off.cfg["search"]["fanout"].as_bool().unwrap_or(true));
+        let health = health(&off, false);
+        assert!(health.contains("fanout off: every search asks startpage + duckduckgo + bing"), "{}", health);
+        assert!(set_fanout(&off, true).contains("merged and ranked"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

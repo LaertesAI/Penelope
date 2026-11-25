@@ -70,6 +70,10 @@ pub enum Overlay {
     Question { id: String, question: String, options: Vec<String>, sel: usize },
     /// The memory map as a graph, with the vault command.
     Brain { scroll: usize },
+    /// Registered plugins with commands, skills and MCP servers.
+    Plugins { sel: usize, scroll: usize, filter: String, mode: u8 },
+    /// The commands of one plugin.
+    PluginCommands { plugin: String, sel: usize, scroll: usize },
 }
 
 pub struct Cmd {
@@ -111,13 +115,13 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd { name: "/cost", help: "tokens and euro per role and model", key: "", takes_text: false },
     Cmd { name: "/context", help: "show what @ and the memory map would send", key: "", takes_text: true },
     Cmd { name: "/rewind", help: "restore files and transcript N turns back: /rewind 3", key: "", takes_text: true },
-    Cmd { name: "/search", help: "search several engines and show the ranked results", key: "", takes_text: true },
+    Cmd { name: "/search", help: "search several engines and show the ranked results; /search fanout on|off", key: "", takes_text: true },
     Cmd { name: "/research", help: "search, read the best pages and show a cited report", key: "", takes_text: true },
     Cmd { name: "/route", help: "the roles, their tools and their models", key: "", takes_text: false },
     Cmd { name: "/tools", help: "every tool, its arguments and its roles", key: "", takes_text: false },
     Cmd { name: "/consolidate", help: "keep the lasting rules of this session for every project", key: "", takes_text: false },
     Cmd { name: "/forge", help: "write a tool from the notes at a memory waypoint", key: "", takes_text: true },
-    Cmd { name: "/plugins", help: "list, install, import, allow, deny, update or remove a plugin", key: "", takes_text: false },
+    Cmd { name: "/plugins", help: "the filterable plugin screen; install, import, allow, deny, update, remove", key: "", takes_text: false },
     Cmd { name: "/mcp", help: "MCP servers: list, probe, add, remove, allow, deny, call", key: "", takes_text: false },
     Cmd { name: "/screen", help: "ScreenCodec: tools, open URL, see, click ID, desktop", key: "", takes_text: false },
     Cmd { name: "/cursor", help: "move Penelope's cursor: /cursor X Y [click]", key: "", takes_text: false },
@@ -227,6 +231,10 @@ pub struct App {
     delete_armed: Option<Instant>,
     /// Rotates the one-line tips that appear after every few turns.
     tip: usize,
+    /// The plugins as rows for the plugins screen, refreshed with the side panel.
+    pub plugin_rows: Vec<plugins::Entry>,
+    /// First x arms the removal of a plugin; a second x removes it.
+    plugin_armed: Option<String>,
 }
 
 /// Labels and icons of status lines, so that a stored transcript finds its fixed texts again.
@@ -280,6 +288,7 @@ impl App {
             tokens: (0, 0), turns: 0, tool_calls: 0, trail: Vec::new(), learned: Vec::new(), side: Side::default(),
             approve_dir, allow_all: false, seen: HashSet::new(), shot: false, quit: false, session_id: None, tabs: Vec::new(), setup: false,
             intro: Instant::now(), context_refs: Vec::new(), login: None, delete_armed: None, tip: 0,
+            plugin_rows: Vec::new(), plugin_armed: None,
         };
         app.refresh_tabs();
         app.refresh_side();
@@ -359,7 +368,8 @@ impl App {
         self.side.plan = plan.as_array().map(|a| a.iter().map(|i| (i["text"].as_str().unwrap_or("").to_string(), i["state"].as_str().unwrap_or("").to_string())).collect()).unwrap_or_default();
         self.side.screencodec = self.ctx.cfg["screencodec"]["command"].as_str().map(|c| !c.is_empty()).unwrap_or(false)
             || crate::config::which("screencodec-mcp").is_some();
-        self.side.plugins = plugins::load(&self.ctx)["plugins"].as_array().map(|a| a.len()).unwrap_or(0);
+        self.plugin_rows = plugins::entries(&self.ctx);
+        self.side.plugins = self.plugin_rows.len();
         self.side.cost = crate::cost::budget_summary(&self.ctx);
         self.side.cursor = crate::cursor::backend(&self.ctx).1;
         self.side.claude = crate::auth::claude_status();
@@ -444,7 +454,7 @@ impl App {
         let provider = crate::providers::of(self.model_value(target)).map(|p| p.name).unwrap_or("claude-cli");
         let list = crate::providers::efforts(provider, &model);
         if list.is_empty() {
-            self.toast(format!("{} has no effort control in this provider.", model));
+            self.toast(format!("{} has no effort field; nothing is sent.", model));
             return;
         }
         let value = if matches!(target, "main" | "weak" | "scout") { &mut self.ctx.cfg[target] } else { &mut self.ctx.cfg["roles"][target] };
@@ -454,6 +464,22 @@ impl App {
         value["effort"] = serde_json::json!(next);
         save_config(&self.ctx);
         self.toast(format!("{} · effort {}", model, next));
+    }
+
+    /// The indices of the plugins that match the filter. A command name matches too, so typing `fix` finds the plugin
+    /// that owns it.
+    pub fn plugin_matches(&self, filter: &str, mode: u8) -> Vec<usize> {
+        let f = filter.to_lowercase();
+        let mut out: Vec<usize> = self.plugin_rows.iter().enumerate().filter(|(_, e)| {
+            let mode_ok = match mode { 1 => !e.commands.is_empty(), 2 => !e.servers.is_empty(), _ => true };
+            mode_ok && (f.is_empty() || e.name.to_lowercase().contains(&f) || e.commands.iter().any(|c| c.name.to_lowercase().contains(&f)))
+        }).map(|(i, _)| i).collect();
+        // Plugins with commands first, then MCP servers, then the rest; alphabetical inside each group.
+        out.sort_by_key(|i| {
+            let e = &self.plugin_rows[*i];
+            (e.commands.is_empty(), e.servers.is_empty(), e.name.to_lowercase())
+        });
+        out
     }
 
     fn show_tip(&mut self) {
@@ -735,6 +761,7 @@ impl App {
                         Err(e) if e == "stopped" => self.note("■", "stopped", "the agent run was stopped".to_string(), art::ASH),
                         Err(e) => self.items.push(Item::Error(e)),
                     }
+                    self.refresh_side();
                     self.scroll = 0;
                     self.refresh_side();
                 }
@@ -967,21 +994,45 @@ impl App {
             "/stats" => self.pager("Routed tool output", tools::stats(&self.ctx)),
             "/plugins" => {
                 let (verb, arg) = rest.split_once(char::is_whitespace).map(|(a, b)| (a, b.trim())).unwrap_or((rest, ""));
-                let report = match verb {
-                    "install" if !arg.is_empty() => plugins::install(&self.ctx, arg),
+                match verb {
+                    "" => {
+                        self.refresh_side();
+                        self.plugin_armed = None;
+                        self.overlay = Overlay::Plugins { sel: 0, scroll: 0, filter: String::new(), mode: 0 };
+                    }
+                    "install" if !arg.is_empty() => {
+                        let report = plugins::install(&self.ctx, arg);
+                        self.refresh_side();
+                        self.pager("Plugins", report);
+                    }
                     "import" => {
                         let lines = plugins::import_known(&self.ctx);
-                        if lines.is_empty() { "no new plugin found in the folders of other harnesses".to_string() } else { lines.join("\n") }
+                        let report = if lines.is_empty() { "no new plugin found in the folders of other harnesses".to_string() } else { lines.join("\n") };
+                        self.refresh_side();
+                        self.pager("Plugins", report);
                     }
-                    "allow" if !arg.is_empty() => plugins::set_allow(&self.ctx, arg, true),
-                    "deny" if !arg.is_empty() => plugins::set_allow(&self.ctx, arg, false),
-                    "update" if !arg.is_empty() => plugins::update(&self.ctx, arg),
-                    "remove" if !arg.is_empty() => plugins::remove(&self.ctx, arg),
-                    "" => plugins::list(&self.ctx),
-                    other => format!("unknown plugin command {} (install LINK, import, allow NAME, deny NAME, update NAME, remove NAME)", other),
-                };
-                self.refresh_side();
-                self.pager("Plugins", report);
+                    "allow" if !arg.is_empty() => {
+                        let report = plugins::set_allow(&self.ctx, arg, true);
+                        self.refresh_side();
+                        self.pager("Plugins", report);
+                    }
+                    "deny" if !arg.is_empty() => {
+                        let report = plugins::set_allow(&self.ctx, arg, false);
+                        self.refresh_side();
+                        self.pager("Plugins", report);
+                    }
+                    "update" if !arg.is_empty() => {
+                        let report = plugins::update(&self.ctx, arg);
+                        self.refresh_side();
+                        self.pager("Plugins", report);
+                    }
+                    "remove" if !arg.is_empty() => {
+                        let report = plugins::remove(&self.ctx, arg);
+                        self.refresh_side();
+                        self.pager("Plugins", report);
+                    }
+                    other => self.toast(format!("/plugins {} is none of install LINK, import, allow NAME, deny NAME, update NAME, remove NAME; /plugins opens the screen", other)),
+                }
             }
             "/btw" if !rest.is_empty() => {
                 let report = tools::memory_note_scope(&self.ctx, "", rest, "project");
@@ -1044,6 +1095,12 @@ impl App {
             }
             "/context" => self.toast("/context TEXT shows what @ and the memory map would send".to_string()),
             "/search" if rest == "health" => self.pager("Search engine health", crate::search::health(&self.ctx, false)),
+            "/search" if rest == "fanout" => self.pager("Search fanout", crate::search::health(&self.ctx, false)),
+            "/search" if rest == "fanout on" || rest == "fanout off" => {
+                let report = crate::search::set_fanout(&self.ctx, rest.ends_with("on"));
+                self.ctx.cfg["search"]["fanout"] = serde_json::json!(rest.ends_with("on"));
+                self.note("◆", "search", report, art::SEA);
+            }
             "/search" if !rest.is_empty() => {
                 let q = rest.to_string();
                 self.start_bg(move |ctx| {
@@ -1243,8 +1300,29 @@ impl App {
             "/copy" => self.copy_last(),
             "/shot" => self.shot = true,
             "/sidebar" => self.sidebar = !self.sidebar,
-            "/help" => self.pager("Keys and commands", help_text()),
-            other => self.toast(format!("no command {} (ctrl+p lists the commands)", other)),
+            "/help" => {
+                let mut text = help_text();
+                let plugin_commands = plugins::command_index(&self.ctx, None);
+                if !plugin_commands.is_empty() {
+                    text.push_str("\nPlugin commands\n");
+                    text.push_str(&plugin_commands);
+                } else {
+                    text.push_str("\nNo plugin command yet. /plugins opens the plugin screen.\n");
+                }
+                self.pager("Keys and commands", text);
+            }
+            other => {
+                let command = other.trim_start_matches('/');
+                if let Some(text) = plugins::expand_command(&self.ctx, command, rest) {
+                    if self.busy.is_some() {
+                        self.toast("Penelope still works on the last request. esc stops it.".to_string());
+                    } else {
+                        self.start_turn(text);
+                    }
+                } else {
+                    self.toast(format!("no command {} (ctrl+p lists the commands; /plugins shows plugin commands)", other));
+                }
+            }
         }
     }
 
@@ -1324,6 +1402,14 @@ impl App {
         let mut effort: Option<String> = None;
         let mut open: Option<usize> = None;
         let mut said: Option<(String, String)> = None;
+        let mut plugin_open: Option<String> = None;
+        let mut plugin_back: Option<String> = None;
+        let mut plugin_toggle: Option<(String, bool)> = None;
+        let mut plugin_update: Option<String> = None;
+        let mut plugin_remove: Option<String> = None;
+        let mut plugin_use: Option<(String, String)> = None;
+        if !matches!(key.code, KeyCode::Char('X')) { self.plugin_armed = None; }
+        let plugin_filtered = if let Overlay::Plugins { filter, mode, .. } = &self.overlay { self.plugin_matches(filter, *mode) } else { Vec::new() };
         match &mut self.overlay {
             Overlay::None => {}
             Overlay::Palette { query, sel } => match key.code {
@@ -1438,6 +1524,55 @@ impl App {
                 }
                 _ => {}
             },
+            Overlay::Plugins { sel, scroll, filter, mode } => {
+                let matches = &plugin_filtered;
+                match key.code {
+                    KeyCode::Tab => { *mode = (*mode + 1) % 3; *sel = 0; *scroll = 0; }
+                    KeyCode::Esc if !filter.is_empty() => { filter.clear(); *sel = 0; *scroll = 0; }
+                    KeyCode::Esc if filter.is_empty() => close = true,
+                    KeyCode::Up => *sel = sel.saturating_sub(1),
+                    KeyCode::Down => *sel = (*sel + 1).min(matches.len().saturating_sub(1)),
+                    KeyCode::PageUp => *sel = sel.saturating_sub(8),
+                    KeyCode::PageDown => *sel = (*sel + 8).min(matches.len().saturating_sub(1)),
+                    KeyCode::Backspace => { filter.pop(); *sel = 0; *scroll = 0; }
+                    KeyCode::Enter => {
+                        if let Some(entry) = matches.get(*sel).and_then(|i| self.plugin_rows.get(*i)) { plugin_open = Some(entry.name.clone()); }
+                    }
+                    KeyCode::Char('A') if filter.is_empty() => {
+                        if let Some(entry) = matches.get(*sel).and_then(|i| self.plugin_rows.get(*i)) { plugin_toggle = Some((entry.name.clone(), !entry.allow)); }
+                    }
+                    KeyCode::Char('U') if filter.is_empty() => {
+                        if let Some(entry) = matches.get(*sel).and_then(|i| self.plugin_rows.get(*i)) { plugin_update = Some(entry.name.clone()); }
+                    }
+                    KeyCode::Char('X') if filter.is_empty() => {
+                        if let Some(entry) = matches.get(*sel).and_then(|i| self.plugin_rows.get(*i)) { plugin_remove = Some(entry.name.clone()); }
+                    }
+                    KeyCode::Char(c) if !ctrl && (c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | ':' | ' ')) => {
+                        filter.push(c); *sel = 0; *scroll = 0;
+                    }
+                    _ => {}
+                }
+                let rows = 9usize;
+                if *sel < *scroll { *scroll = *sel; }
+                if *sel >= *scroll + rows { *scroll = *sel + 1 - rows; }
+            }
+            Overlay::PluginCommands { plugin, sel, scroll } => {
+                let list = self.plugin_rows.iter().find(|e| e.name == *plugin).map(|e| e.commands.clone()).unwrap_or_default();
+                match key.code {
+                    KeyCode::Esc | KeyCode::Char('q') => plugin_back = Some(plugin.clone()),
+                    KeyCode::Up => *sel = sel.saturating_sub(1),
+                    KeyCode::Down => *sel = (*sel + 1).min(list.len().saturating_sub(1)),
+                    KeyCode::PageUp => *sel = sel.saturating_sub(8),
+                    KeyCode::PageDown => *sel = (*sel + 8).min(list.len().saturating_sub(1)),
+                    KeyCode::Enter => {
+                        if let Some(command) = list.get(*sel) { plugin_use = Some((plugin.clone(), command.name.clone())); }
+                    }
+                    _ => {}
+                }
+                let rows = 14usize;
+                if *sel < *scroll { *scroll = *sel; }
+                if *sel >= *scroll + rows { *scroll = *sel + 1 - rows; }
+            }
             Overlay::Approve { id, .. } => match key.code {
                 KeyCode::Char('y') | KeyCode::Enter => reply = Some((id.clone(), true, false)),
                 KeyCode::Char('a') => reply = Some((id.clone(), true, true)),
@@ -1502,6 +1637,42 @@ impl App {
                 }
             }
         }
+        if let Some(name) = plugin_open {
+            self.overlay = Overlay::PluginCommands { plugin: name, sel: 0, scroll: 0 };
+            close = false;
+        }
+        if let Some(name) = plugin_back {
+            let at = self.plugin_rows.iter().position(|e| e.name == name).unwrap_or(0);
+            self.overlay = Overlay::Plugins { sel: at, scroll: 0, filter: String::new(), mode: 0 };
+            close = false;
+        }
+        if let Some((name, allow)) = plugin_toggle {
+            let report = plugins::set_allow(&self.ctx, &name, allow);
+            self.refresh_side();
+            self.toast(report);
+            close = false;
+        }
+        if let Some(name) = plugin_update {
+            self.overlay = Overlay::None;
+            self.start_bg(move |ctx| Ok(plugins::update(&ctx, &name)));
+            close = false;
+        }
+        if let Some(name) = plugin_remove {
+            if self.plugin_armed.as_deref() == Some(name.as_str()) {
+                let report = plugins::remove(&self.ctx, &name);
+                self.refresh_side();
+                self.toast(report);
+                self.plugin_armed = None;
+            } else {
+                self.plugin_armed = Some(name.clone());
+                self.toast(format!("press x again to remove {}; the folder stays", name));
+            }
+            close = false;
+        }
+        if let Some((plugin, command)) = plugin_use {
+            self.set_input(&format!("/{}:{} ", plugin, command));
+            close = true;
+        }
         if let Some(target) = effort {
             self.cycle_effort(&target);
             close = false;
@@ -1527,6 +1698,7 @@ impl App {
         }
         if close {
             self.overlay = Overlay::None;
+            self.plugin_armed = None;
         }
         if let Some(cmd) = run {
             self.run_cmd(cmd);
@@ -1969,6 +2141,56 @@ mod tests {
         let said = a.rewind(2);
         assert!(said.contains("turn 0"), "{}", said);
         assert!(a.turns == 0 && a.items.len() == 1 && matches!(&a.items[0], Item::User(t) if t == "first"));
+    }
+
+    #[test]
+    fn the_plugins_screen_lists_a_plugin_and_inserts_its_command() {
+        let mut a = app();
+        let dir = a.ctx.root.join("plug");
+        fs::create_dir_all(dir.join("commands")).unwrap();
+        fs::write(dir.join("commands/fix.md"), "---\nname: fix\ndescription: Fix one file\nargument-hint: FILE\n---\nFix $1.\n").unwrap();
+        assert!(plugins::add(&a.ctx, &dir.to_string_lossy()).contains("1 commands"));
+        a.refresh_side();
+        a.command("/plugins");
+        assert!(matches!(a.overlay, Overlay::Plugins { .. }));
+        let text = screen(&mut a, 120, 40);
+        assert!(text.contains("Plugins") && text.contains("plug") && text.contains("1 cmd"), "{}", text);
+        assert_eq!((a.plugin_matches("", 0).len(), a.plugin_matches("", 1).len(), a.plugin_matches("fix", 0).len()), (1, 1, 1));
+        press(&mut a, KeyCode::Char('f'));
+        assert!(matches!(&a.overlay, Overlay::Plugins { filter, .. } if filter == "f"));
+        press(&mut a, KeyCode::Tab);
+        assert!(matches!(&a.overlay, Overlay::Plugins { mode, .. } if *mode == 1));
+        press(&mut a, KeyCode::Enter);
+        assert!(matches!(a.overlay, Overlay::PluginCommands { .. }));
+        press(&mut a, KeyCode::Enter);
+        assert_eq!(a.input_text(), "/plug:fix ");
+        assert!(matches!(a.overlay, Overlay::None));
+        a.command("/help");
+        match &a.overlay {
+            Overlay::Pager { lines, .. } => {
+                let text = lines.join("\n");
+                assert!(text.contains("Plugin commands") && text.contains("/plug:fix"), "{}", text);
+            }
+            _ => panic!("help must open the pager"),
+        }
+    }
+
+    #[test]
+    fn a_provider_choice_sets_effort_and_the_effort_key_cycles_it() {
+        let mut a = app();
+        a.select_provider("opencode", "main");
+        assert!(a.ctx.cfg["main"]["effort"].is_null());          // mimo-v2.6-flash has no effort field
+        a.ctx.cfg["main"] = serde_json::json!({"kind": "openai", "base_url": "https://opencode.ai/zen/go/v1",
+                                               "model": "deepseek-v4.1-flash", "effort": "low"});
+        a.overlay = Overlay::Models { sel: 0, target: "main".into() };
+        press(&mut a, KeyCode::Char('e'));
+        assert_eq!(a.ctx.cfg["main"]["effort"], serde_json::json!("high"));      // low -> high for deepseek-v4.1-flash
+        press(&mut a, KeyCode::Char('e'));
+        assert_eq!(a.ctx.cfg["main"]["effort"], serde_json::json!("max"));
+        press(&mut a, KeyCode::Char('e'));
+        assert_eq!(a.ctx.cfg["main"]["effort"], serde_json::json!("low"));       // wraps to the first level
+        a.select_provider("claude-cli", "main");
+        assert_eq!((a.ctx.cfg["main"]["model"].as_str(), a.ctx.cfg["main"]["effort"].as_str()), (Some("claude-sonnet-5-5"), Some("high")));
     }
 
     #[test]

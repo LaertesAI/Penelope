@@ -16,6 +16,111 @@ pub fn load(ctx: &Ctx) -> Value {
     fs::read_to_string(registry(ctx)).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(json!({"plugins": []}))
 }
 
+/// One skill or one command of a plugin, as the plugins screen shows it.
+#[derive(Clone, Default)]
+pub struct Item {
+    pub name: String,
+    pub description: String,
+    pub file: String,
+    pub argument_hint: String,
+}
+
+/// One registered plugin with everything the screen and the slash commands need.
+#[derive(Clone, Default)]
+pub struct Entry {
+    pub name: String,
+    pub dir: String,
+    pub allow: bool,
+    pub skills: Vec<Item>,
+    pub commands: Vec<Item>,
+    pub servers: Vec<String>,
+}
+
+fn items(value: &Value) -> Vec<Item> {
+    value.as_array().map(|list| list.iter().map(|i| Item {
+        name: i["name"].as_str().unwrap_or("").to_string(),
+        description: i["description"].as_str().unwrap_or("").to_string(),
+        file: i["file"].as_str().unwrap_or("").to_string(),
+        argument_hint: i["argumentHint"].as_str().or_else(|| i["argument_hint"].as_str()).unwrap_or("").to_string(),
+    }).collect()).unwrap_or_default()
+}
+
+/// The plugins as typed rows. A registry from an older version gets its command folder read here, without a write.
+pub fn entries(ctx: &Ctx) -> Vec<Entry> {
+    let reg = load(ctx);
+    let mut out = Vec::new();
+    for p in reg["plugins"].as_array().cloned().unwrap_or_default() {
+        let dir = p["dir"].as_str().unwrap_or("").to_string();
+        let commands = if p["commands"].is_array() { items(&p["commands"]) } else { items(&json!(scan_commands(Path::new(&dir)))) };
+        out.push(Entry {
+            name: p["name"].as_str().unwrap_or("?").to_string(),
+            dir,
+            allow: p["allow"].as_bool().unwrap_or(false),
+            skills: items(&p["skills"]),
+            commands,
+            servers: p["mcpServers"].as_object().map(|o| o.keys().cloned().collect()).unwrap_or_default(),
+        });
+    }
+    out
+}
+
+/// One line per plugin command, for /help and for the plugins screen.
+pub fn command_index(ctx: &Ctx, only: Option<&str>) -> String {
+    let mut out = String::new();
+    for e in entries(ctx).into_iter().filter(|e| only.map(|name| name == e.name).unwrap_or(true)) {
+        for c in e.commands {
+            let hint = if c.argument_hint.is_empty() { String::new() } else { format!(" {}", c.argument_hint) };
+            out.push_str(&format!("/{}:{}{} · {}\n", e.name, c.name, hint, c.description.chars().take(100).collect::<String>()));
+        }
+    }
+    out
+}
+
+/// The body of a command without its YAML front matter.
+fn command_body(text: &str) -> String {
+    if let Some(rest) = text.strip_prefix("---") {
+        if let Some((_, body)) = rest.split_once("\n---") {
+            return body.trim_start_matches(['\r', '\n']).to_string();
+        }
+    }
+    text.to_string()
+}
+
+fn expand_args(template: &str, args: &str) -> String {
+    let mut out = template.replace("$ARGUMENTS", args).replace("$@", args);
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    for (i, part) in parts.iter().enumerate().take(9) {
+        out = out.replace(&format!("${}", i + 1), part);
+    }
+    let has_placeholder = template.contains("$ARGUMENTS") || template.contains("$@")
+        || (1..=9).any(|i| template.contains(&format!("${}", i)));
+    if !args.is_empty() && !has_placeholder {
+        out.push_str(&format!("\n\nArguments: {}", args));
+    }
+    out
+}
+
+/// Expands `/plugin:command args` or an unambiguous `/command args` into the prompt body. None means no such command.
+pub fn expand_command(ctx: &Ctx, name: &str, args: &str) -> Option<String> {
+    let wanted = name.trim().trim_start_matches('/');
+    let mut exact: Vec<(Entry, Item)> = Vec::new();
+    let mut bare: Vec<(Entry, Item)> = Vec::new();
+    for entry in entries(ctx) {
+        for command in &entry.commands {
+            let full = format!("{}:{}", entry.name, command.name);
+            if full == wanted { exact.push((entry.clone(), command.clone())); }
+            else if command.name == wanted && !wanted.contains(':') { bare.push((entry.clone(), command.clone())); }
+        }
+    }
+    let (entry, command) = match exact.into_iter().next().or_else(|| if bare.len() == 1 { bare.pop() } else { None }) {
+        Some(found) => found,
+        None => return None,
+    };
+    let text = fs::read_to_string(&command.file).ok()?;
+    Some(format!("Plugin command /{}:{}.\n\n{}", entry.name, command.name, expand_args(&command_body(&text), args.trim())))
+}
+
+
 fn front(text: &str, key: &str) -> String {
     // value of one key of the YAML front matter, single line
     let mut inside = false;
@@ -67,14 +172,48 @@ pub fn add(ctx: &Ctx, dir: &str) -> String {
             servers[format!("{}-{}", name, k)] = s.clone();
         }
     }
+    let commands = scan_commands(&dir);
     let mut reg = load(ctx);
     let list = reg["plugins"].as_array_mut().unwrap();
     let allow = list.iter().any(|p| p["name"].as_str() == Some(&name) && p["allow"].as_bool().unwrap_or(false));      // a plugin added again keeps its state
     list.retain(|p| p["name"].as_str() != Some(&name));
-    let (ns, nm) = (skills.len(), servers.as_object().map(|o| o.len()).unwrap_or(0));
-    list.push(json!({"name": name, "dir": dir.to_string_lossy(), "allow": allow, "skills": skills, "mcpServers": servers}));
+    let (nc, ns, nm) = (commands.len(), skills.len(), servers.as_object().map(|o| o.len()).unwrap_or(0));
+    list.push(json!({"name": name, "dir": dir.to_string_lossy(), "allow": allow, "commands": commands, "skills": skills, "mcpServers": servers}));
     let _ = fs::write(registry(ctx), serde_json::to_string_pretty(&reg).unwrap());
-    format!("plugin {} registered: {} skills, {} MCP servers, tools {}", name, ns, nm, if allow { "allowed" } else { "denied (penelope plugin allow NAME)" })
+    format!("plugin {} registered: {} commands, {} skills, {} MCP servers, tools {}{}", name, nc, ns, nm,
+            if allow { "allowed" } else { "denied (penelope plugin allow NAME)" },
+            if nc > 0 { format!(" · run a command as /{}:NAME", name) } else { String::new() })
+}
+
+/// The command Markdown files below `commands/` (and a marketplace copy under `.claude-plugin/commands`).
+fn scan_commands(dir: &Path) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::new();
+    let mut stack: Vec<(PathBuf, usize)> = vec![(dir.join("commands"), 0), (dir.join(".claude-plugin").join("commands"), 0)];
+    while let Some((at, depth)) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&at) else { continue };
+        for e in entries.flatten() {
+            let path = e.path();
+            if path.is_dir() {
+                if depth < 2 { stack.push((path, depth + 1)); }
+                continue;
+            }
+            if path.extension().map(|x| x != "md").unwrap_or(true) { continue; }
+            let Ok(text) = fs::read_to_string(&path) else { continue };
+            let fallback = path.file_stem().map(|x| x.to_string_lossy().to_string()).unwrap_or_else(|| "command".to_string());
+            let mut name = front(&text, "name");
+            if name.is_empty() { name = fallback; }
+            name = name.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_' || *c == ':' || *c == '.').collect();
+            if name.is_empty() || out.iter().any(|c| c["name"].as_str() == Some(name.as_str())) { continue; }
+            let description = front(&text, "description");
+            let description: String = if description.is_empty() {
+                command_body(&text).lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("").chars().take(120).collect()
+            } else { description.chars().take(240).collect() };
+            let argument_hint = { let h = front(&text, "argument-hint"); if h.is_empty() { front(&text, "argument_hint") } else { h } };
+            out.push(json!({"name": name, "description": description, "argumentHint": argument_hint, "file": path.to_string_lossy()}));
+        }
+    }
+    out.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+    out
 }
 
 /// Every `SKILL.md` below a plugin folder, at most three levels deep. This covers `skills/NAME/SKILL.md`, a single
@@ -406,8 +545,15 @@ pub fn list(ctx: &Ctx) -> String {
     let reg = load(ctx);
     let mut out = String::new();
     for p in reg["plugins"].as_array().unwrap() {
-        out.push_str(&format!("{} ({}) · tools {}\n", p["name"].as_str().unwrap_or("?"), crate::files::show(Path::new(p["dir"].as_str().unwrap_or(""))),
-                              if p["allow"].as_bool().unwrap_or(false) { "allowed" } else { "denied" }));
+        let commands = if p["commands"].is_array() { items(&p["commands"]) } else { items(&json!(scan_commands(Path::new(p["dir"].as_str().unwrap_or(""))))) };
+        out.push_str(&format!("{} ({}) · tools {} · {} commands, {} skills\n", p["name"].as_str().unwrap_or("?"), crate::files::show(Path::new(p["dir"].as_str().unwrap_or(""))),
+                              if p["allow"].as_bool().unwrap_or(false) { "allowed" } else { "denied" }, commands.len(),
+                              p["skills"].as_array().map(|a| a.len()).unwrap_or(0)));
+        for c in &commands {
+            let hint = if c.argument_hint.is_empty() { String::new() } else { format!(" {}", c.argument_hint) };
+            out.push_str(&format!("  command /{}:{}{} · {}\n", p["name"].as_str().unwrap_or("?"), c.name, hint,
+                                  c.description.chars().take(90).collect::<String>()));
+        }
         for s in p["skills"].as_array().unwrap() {
             out.push_str(&format!("  skill {}: {}\n", s["name"].as_str().unwrap_or("?"), s["description"].as_str().unwrap_or("").chars().take(90).collect::<String>()));
         }
@@ -422,7 +568,10 @@ pub fn list(ctx: &Ctx) -> String {
             out.push_str(&format!("  {}: {}\n", name, description.chars().take(90).collect::<String>()));
         }
     }
-    if out.is_empty() { "no plugins registered\n".to_string() } else { out }
+    if out.is_empty() { "no plugins registered. /plugins install LINK, /plugins import or penelope plugin add DIR.\n".to_string() } else {
+        out.push_str("\nA plugin command runs as /PLUGIN:COMMAND ARGS. /plugins opens the screen.\n");
+        out
+    }
 }
 
 /// One line per skill for the system prompt.
@@ -559,13 +708,40 @@ mod tests {
         fs::write(plugin.join(".claude-plugin/plugin.json"), r#"{"name": "demo.notes"}"#).unwrap();
         fs::write(plugin.join(".mcp.json"), r#"{"mcpServers": {"db": {"command": "true"}, "web search": {"command": "true"}}}"#).unwrap();
         let ctx = crate::config::load(&dir.join(".penelope"));
-        assert!(add(&ctx, &plugin.to_string_lossy()).ends_with("2 MCP servers, tools denied (penelope plugin allow NAME)"));
+        let report = add(&ctx, &plugin.to_string_lossy());
+        assert!(report.contains("0 commands, 0 skills, 2 MCP servers, tools denied (penelope plugin allow NAME)"), "{}", report);
         assert!(list(&ctx).contains("· tools denied") && allowed(&ctx).is_empty() && servers(&ctx).as_object().unwrap().len() == 2);
         assert!(set_allow(&ctx, "other", true).starts_with("no plugin named other"));
         assert!(set_allow(&ctx, "demo.notes", true).contains("2 MCP servers are allowed"));
         assert_eq!(allowed(&ctx), vec!["mcp__demo_notes-db__*", "mcp__demo_notes-web_search__*"]);
         assert!(add(&ctx, &plugin.to_string_lossy()).ends_with("tools allowed") && list(&ctx).contains("· tools allowed"));
         assert!(set_allow(&ctx, "demo.notes", false).contains("denied") && allowed(&ctx).is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn commands_are_registered_shown_and_expanded_with_their_arguments() {
+        let dir = std::env::temp_dir().join(format!("penelope-plugins-commands-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let plugin = dir.join("notes");
+        fs::create_dir_all(plugin.join("commands")).unwrap();
+        fs::create_dir_all(plugin.join(".claude-plugin")).unwrap();
+        fs::write(plugin.join(".claude-plugin/plugin.json"), r#"{"name": "notes"}"#).unwrap();
+        fs::write(plugin.join("commands/summarize.md"),
+                  "---\nname: summarize\ndescription: Summarize a file\nargument-hint: FILE\n---\nRead $1 and summarize it. Extra: $ARGUMENTS\n").unwrap();
+        let ctx = crate::config::load(&dir.join(".penelope"));
+        let report = add(&ctx, &plugin.to_string_lossy());
+        assert!(report.contains("1 commands") && report.contains("/notes:NAME"), "{}", report);
+        let rows = entries(&ctx);
+        assert_eq!((rows.len(), rows[0].commands.len()), (1, 1));
+        assert_eq!((rows[0].commands[0].name.as_str(), rows[0].commands[0].argument_hint.as_str()), ("summarize", "FILE"));
+        assert!(list(&ctx).contains("command /notes:summarize FILE · Summarize a file"));
+        assert!(command_index(&ctx, None).starts_with("/notes:summarize FILE ·"));
+        assert!(command_index(&ctx, Some("notes")).contains("summarize") && command_index(&ctx, Some("other")).is_empty());
+        let text = expand_command(&ctx, "notes:summarize", "a.txt now").unwrap();
+        assert!(text.starts_with("Plugin command /notes:summarize.") && text.contains("Read a.txt") && text.contains("Extra: a.txt now"), "{}", text);
+        assert!(expand_command(&ctx, "summarize", "").is_some());
+        assert!(expand_command(&ctx, "other:summarize", "").is_none());
         let _ = fs::remove_dir_all(&dir);
     }
 

@@ -72,6 +72,9 @@ penelope memory note [--path a/b] TEXT
 penelope memory unravel [N]   take back the last note, or the last N notes
 penelope search [--engine E] [--fresh] WORDS
                               search several engines, cache, rank, print up to 8 results
+penelope search fanout on|off  ask every configured engine at once and merge the results
+penelope search health [--probe]
+                              the last call of each engine
 penelope research QUESTION    search, read the best pages and print a cited report
 penelope scout TASK           let the weaker model look something up with its own tool calls
 penelope run [--ask QUESTION] COMMAND
@@ -86,6 +89,10 @@ penelope plugin allow NAME    put the tools of a plugin's MCP servers on the all
 penelope plugin deny NAME     take them off the allow list (the state of a new plugin)
 penelope plugin update NAME   pull a git plugin, or re-read a local or ZIP plugin
 penelope plugin remove NAME   take a plugin out of the registry; the folder stays
+penelope plugin commands [NAME]
+                              the slash commands of the plugins
+penelope plugin command NAME [ARGS]
+                              print the expanded prompt of one plugin command
 penelope stats                how much tool output the weaker model kept away from the main model
 penelope cost                 tokens and euro per role and model
 penelope price MODEL IN OUT   set a price in dollars per million tokens
@@ -402,6 +409,11 @@ fn main() {
                 answer(&ctx, &mut chat, &text);
             }
         }
+        "search" if args.get(1).map(String::as_str) == Some("fanout") => match args.get(2).map(String::as_str) {
+            Some("on") => println!("{}", search::set_fanout(&ctx, true)),
+            Some("off") => println!("{}", search::set_fanout(&ctx, false)),
+            _ => println!("{}", search::health(&ctx, false)),
+        },
         "search" if args.get(1).map(String::as_str) == Some("health") => {
             print!("{}", search::health(&ctx, args.iter().any(|a| a == "--probe")));
         }
@@ -482,6 +494,14 @@ fn main() {
             Some(verb @ ("allow" | "deny")) if args.len() >= 3 => println!("{}", plugins::set_allow(&ctx, &args[2], verb == "allow")),
             Some("update") if args.len() >= 3 => println!("{}", plugins::update(&ctx, &args[2])),
             Some("remove") if args.len() >= 3 => println!("{}", plugins::remove(&ctx, &args[2])),
+            Some("commands") => print!("{}", plugins::command_index(&ctx, args.get(2).map(String::as_str))),
+            Some("command") if args.len() >= 3 => match plugins::expand_command(&ctx, &args[2], &args[3..].join(" ")) {
+                Some(text) => println!("{}", text),
+                None => {
+                    loom::warn(&format!("no plugin command {} (penelope plugin commands)", args[2]));
+                    std::process::exit(2);
+                }
+            },
             _ => print!("{}", plugins::list(&ctx)),
         },
         "chat" => {

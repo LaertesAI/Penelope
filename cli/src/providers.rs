@@ -225,6 +225,8 @@ pub fn setting(p: &Provider, model: Option<&str>, workspace: Option<&str>, base_
     let model = model.filter(|m| !m.trim().is_empty()).unwrap_or(p.model).trim();
     if p.kind == "claude-cli" {
         let mut v = json!({"kind": "claude-cli", "model": model});
+        let level = default_effort(p.name, model);
+        if !level.is_empty() { v["effort"] = json!(level); }
         if let Some(label) = known_label(model) {
             v["label"] = json!(label);
         }
@@ -245,6 +247,8 @@ The console of Model Studio shows the ID in the column API Host.", p.name, p.bas
         (None, false) => p.base.to_string(),
     };
     let mut v = json!({"kind": p.kind, "base_url": base, "model": model, "api_key_env": p.key_env});
+    let level = default_effort(p.name, model);
+    if !level.is_empty() { v["effort"] = json!(level); }
     if let Some(label) = known_label(model) {
         v["label"] = json!(label);
     }
@@ -359,12 +363,83 @@ pub fn models(provider: &str) -> &'static [Model] {
     }
 }
 
-/// The efforts one model accepts. Empty means the provider has no effort control for it.
-pub fn efforts(provider: &str, model: &str) -> &'static [&'static str] {
-    models(provider).iter().find(|m| m.id == model).map(|m| m.efforts).unwrap_or(&[])
+/// The effort levels the Claude models accept. Claude 5 and Claude 4.6+ take adaptive thinking; older models
+/// have no `output_config.effort` field and get none.
+const CLAUDE_EFFORTS: &[&str] = &["low", "medium", "high", "max"];
+/// The levels of the OpenAI reasoning models. A model that is not a reasoning model has no `reasoning_effort`.
+const OPENAI_EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
+/// The levels native DeepSeek accepts; `medium` and `minimal` are rejected.
+const DEEPSEEK_EFFORTS: &[&str] = &["low", "high", "max"];
+/// The levels of GLM-5.2 and later, of Kimi K3 and later, and of the Qwen families.
+const GLM_EFFORTS: &[&str] = &["low", "high", "max"];
+const KIMI_EFFORTS: &[&str] = &["low", "high", "max"];
+const QWEN4_EFFORTS: &[&str] = &["low", "high", "xhigh"];
+const QWEN38_EFFORTS: &[&str] = &["low", "medium", "xhigh"];
+const GROK_EFFORTS: &[&str] = &["low", "medium", "high", "xhigh"];
+const GEMINI_EFFORTS: &[&str] = &["low", "medium", "high"];
+
+fn claude_efforts(model: &str) -> &'static [&'static str] {
+    if let Some(m) = CLAUDE_MODELS.iter().find(|m| m.id == model) {
+        return m.efforts;
+    }
+    if matches!(model, "sonnet" | "opus" | "haiku") {
+        return CLAUDE_EFFORTS;
+    }
+    let version: Vec<u32> = model.split(|c: char| !c.is_ascii_digit()).filter_map(|p| p.parse().ok()).collect();
+    let major = version.first().copied().unwrap_or(0);
+    let minor = version.get(1).copied().unwrap_or(0);
+    if major >= 5 || (major == 4 && minor >= 6) { CLAUDE_EFFORTS } else { &[] }
 }
 
-/// The first effort to use when a model is chosen. `high` is a deliberate default for coding and tool calls.
+fn openai_efforts(model: &str) -> &'static [&'static str] {
+    let m = model.rsplit('/').next().unwrap_or(model).to_lowercase();
+    let reasoning = ["gpt-5", "gpt-6", "o1", "o3", "o4", "codex"].iter().any(|p| m.starts_with(p));
+    if reasoning { OPENAI_EFFORTS } else { &[] }
+}
+
+/// The effort levels of a model that a router such as OpenRouter passes through. The vendor prefix is dropped first.
+fn routed_efforts(model: &str) -> &'static [&'static str] {
+    let m = model.rsplit('/').next().unwrap_or(model).to_lowercase();
+    if m.starts_with("claude") { return claude_efforts(&m); }
+    if m.starts_with("deepseek") { return DEEPSEEK_EFFORTS; }
+    if m.starts_with("qwen4") { return QWEN4_EFFORTS; }
+    if m.starts_with("qwen3.8") { return QWEN38_EFFORTS; }
+    if m.starts_with("glm-5") { return GLM_EFFORTS; }
+    if m.starts_with("kimi-k3") { return KIMI_EFFORTS; }
+    if m.starts_with("grok-4") { return GROK_EFFORTS; }
+    if m.starts_with("gemini-4") { return GEMINI_EFFORTS; }
+    if m.starts_with("minimax-m3") { return OPENAI_EFFORTS; }
+    openai_efforts(&m)
+}
+
+fn qwen_efforts(model: &str) -> &'static [&'static str] {
+    let m = model.to_lowercase();
+    if m.starts_with("qwen4") { QWEN4_EFFORTS } else if m.starts_with("qwen3.8") { QWEN38_EFFORTS } else { &[] }
+}
+
+/// The efforts one model accepts. Empty means the model has no effort field; Penelope then sends none.
+pub fn efforts(provider: &str, model: &str) -> &'static [&'static str] {
+    match provider {
+        "claude-cli" | "anthropic" => claude_efforts(model),
+        "opencode" => models("opencode").iter().find(|m| m.id == model).map(|m| m.efforts).unwrap_or(&[]),
+        "openai" => openai_efforts(model),
+        "openrouter" => routed_efforts(model),
+        "deepseek" => DEEPSEEK_EFFORTS,
+        "alibaba-intl" | "alibaba-cn" => qwen_efforts(model),
+        "zhipu" | "zhipu-cn" => if model.to_lowercase().starts_with("glm-5") { GLM_EFFORTS } else { &[] },
+        "moonshot" | "moonshot-cn" => if model.to_lowercase().starts_with("kimi-k3") { KIMI_EFFORTS } else { &[] },
+        "xai" => if model.to_lowercase().starts_with("grok-4") { GROK_EFFORTS } else { &[] },
+        "gemini" => if model.to_lowercase().starts_with("gemini-4") { GEMINI_EFFORTS } else { &[] },
+        _ => &[],
+    }
+}
+
+/// True when the model's provider has an effort field. Every caller checks this before it sends one.
+pub fn supports_effort(provider: &str, model: &str) -> bool {
+    !efforts(provider, model).is_empty()
+}
+
+/// The first effort to use when a model is chosen. Empty when the model has no effort field.
 pub fn default_effort(provider: &str, model: &str) -> &'static str {
     let list = efforts(provider, model);
     if list.contains(&"high") { "high" } else { list.first().copied().unwrap_or("") }
@@ -396,6 +471,24 @@ mod tests {
         assert_eq!(known_label("mimo-v2.6-flash"), Some("MiMo V2.6 Flash"));
         assert_eq!(known_price("claude-haiku-5-5"), Some((0.1, 0.5)));
         assert_eq!(known_price("a-model-without-a-price"), None);
+        assert!(supports_effort("claude-cli", "sonnet") && supports_effort("claude-cli", "claude-opus-5-5"));
+        assert!(supports_effort("anthropic", "claude-sonnet-5-5") && default_effort("anthropic", "claude-sonnet-5-5") == "high");
+        assert!(!supports_effort("anthropic", "claude-3-5-sonnet"));
+        assert!(supports_effort("opencode", "deepseek-v4.1-flash"));
+        assert!(!supports_effort("opencode", "mimo-v2.6-flash"));
+        assert!(supports_effort("openai", "gpt-6.2-astra") && !supports_effort("openai", "gpt-4o"));
+        assert!(supports_effort("openrouter", "openai/gpt-5.2") && supports_effort("openrouter", "anthropic/claude-sonnet-5-5"));
+        assert!(supports_effort("deepseek", "deepseek-flash") && supports_effort("xai", "grok-4.7"));
+        assert!(supports_effort("alibaba-intl", "qwen4-max") && supports_effort("zhipu", "glm-5.3"));
+        assert!(supports_effort("moonshot", "kimi-k3.1-pro") && supports_effort("gemini", "gemini-4-hydrogen"));
+        assert!(!supports_effort("cohere", "command-r-plus") && !supports_effort("groq", "llama-3.3-70b-versatile"));
+        let opencode = setting(get("opencode").unwrap(), Some("deepseek-v4.1-flash"), None, None).unwrap();
+        assert_eq!(opencode["effort"], "high");
+        let mimo = setting(get("opencode").unwrap(), None, None, None).unwrap();
+        assert!(mimo["effort"].is_null());
+        assert_eq!(setting(get("deepseek").unwrap(), None, None, None).unwrap()["effort"], "high");
+        assert_eq!(setting(get("xai").unwrap(), None, None, None).unwrap()["effort"], "high");
+        assert!(setting(get("cohere").unwrap(), None, None, None).unwrap()["effort"].is_null());
         let mut ctx = crate::config::load(&std::env::temp_dir().join(format!("penelope-price-{}", std::process::id())));
         ctx.cfg["prices"] = json!({});
         let said = use_provider(&mut ctx, &["opencode".to_string(), "--model".to_string(), "mimo-v2.6-flash".to_string()]);

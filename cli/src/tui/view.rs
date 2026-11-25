@@ -606,6 +606,110 @@ fn roles_dialog(f: &mut Frame, app: &App, area: Rect, sel: usize) {
     put(f, inner, inner.x, inner.bottom().saturating_sub(1), "enter chooses the provider for this role · esc back", on(CLAY, RAISED));
 }
 
+fn plugins_dialog(f: &mut Frame, app: &App, area: Rect, sel: usize, scroll: usize, filter: &str, mode: u8) {
+    let entries = &app.plugin_rows;
+    let matches = app.plugin_matches(filter, mode);
+    let inner = dialog(f, area, "Plugins", 104, 31);
+    let commands: usize = entries.iter().map(|e| e.commands.len()).sum();
+    let skills: usize = entries.iter().map(|e| e.skills.len()).sum();
+    let servers: usize = entries.iter().map(|e| e.servers.len()).sum();
+    let allowed = entries.iter().filter(|e| e.allow).count();
+    let summary = format!("{} plugins · {} commands · {} skills · {} MCP servers · {} tool permissions allowed",
+                          entries.len(), commands, skills, servers, allowed);
+    put(f, inner, inner.x, inner.y, &clip(&summary, inner.width as usize), on(DIM, RAISED));
+    let mode_name = match mode { 1 => "with commands", 2 => "with MCP servers", _ => "all" };
+    let filter_line = if filter.is_empty() { format!("{} · {} shown · type to filter · tab changes the view", mode_name, matches.len()) } else { format!("{} · filter: {} · {} shown · backspace clears", mode_name, filter, matches.len()) };
+    put(f, inner, inner.x, inner.y + 1, &clip(&filter_line, inner.width as usize), on(if filter.is_empty() { DIM } else { SEA }, RAISED));
+    if entries.is_empty() {
+        put(f, inner, inner.x, inner.y + 2, "No plugin registered yet.", on(PAPER, RAISED).add_modifier(Modifier::BOLD));
+        put(f, inner, inner.x, inner.y + 4, "/plugins install LINK     clone a plugin from git or unpack a ZIP", on(ASH, RAISED));
+        put(f, inner, inner.x, inner.y + 5, "/plugins import           take over the plugins of other harnesses", on(ASH, RAISED));
+        put(f, inner, inner.x, inner.y + 6, "/plugins allow NAME       allow the tools of its MCP servers", on(ASH, RAISED));
+        put(f, inner, inner.x, inner.bottom().saturating_sub(1), "esc closes", on(DIM, RAISED));
+        return;
+    }
+    let list_w = 46u16.min(inner.width.saturating_sub(20));
+    let rows = (inner.height as usize).saturating_sub(7).min(matches.len().max(1)).max(1);
+    let first = scroll.min(matches.len().saturating_sub(rows));
+    if matches.is_empty() {
+        put(f, inner, inner.x, inner.y + 3, &format!("No plugin or command matches \"{}\"", filter), on(CLAY, RAISED));
+    }
+    for (i, index) in matches.iter().skip(first).take(rows).enumerate() {
+        let Some(entry) = entries.get(*index) else { continue };
+        let y = inner.y + 3 + i as u16;
+        let chosen = first + i == sel.min(matches.len().saturating_sub(1));
+        let bg = if chosen { NIGHT } else { RAISED };
+        fill(f, Rect::new(inner.x.saturating_sub(1), y, inner.width + 2, 1), bg);
+        put(f, inner, inner.x, y, if entry.allow { "●" } else { "○" }, on(if entry.allow { SEA } else { CLAY }, bg));
+        put(f, inner, inner.x + 2, y, &clip(&entry.name, 22), on(PAPER, bg).add_modifier(if chosen { Modifier::BOLD } else { Modifier::empty() }));
+        let counts = format!("{} cmd · {} skill · {} mcp", entry.commands.len(), entry.skills.len(), entry.servers.len());
+        put(f, inner, inner.x + 26, y, &clip(&counts, list_w.saturating_sub(28) as usize), on(DIM, bg));
+    }
+    let Some(entry) = matches.get(sel.min(matches.len().saturating_sub(1))).and_then(|i| entries.get(*i)) else { return; };
+    let x = inner.x + list_w + 2;
+    let detail_w = inner.right().saturating_sub(x);
+    if detail_w < 12 { return; }
+    put(f, inner, x, inner.y + 3, &clip(&entry.name, detail_w as usize), on(PAPER, RAISED).add_modifier(Modifier::BOLD));
+    put(f, inner, x, inner.y + 4, if entry.allow { "tools allowed" } else { "tools denied · A allows" }, on(if entry.allow { SEA } else { CLAY }, RAISED));
+    put(f, inner, x, inner.y + 5, &clip(&crate::files::show(std::path::Path::new(&entry.dir)), detail_w as usize), on(DIM, RAISED));
+    let mut y = inner.y + 7;
+    let mut line = |y: &mut u16, text: &str, colour: art::Rgb| {
+        if *y < inner.bottom().saturating_sub(2) {
+            put(f, inner, x, *y, &clip(text, detail_w as usize), on(colour, RAISED));
+            *y += 1;
+        }
+    };
+    if entry.commands.is_empty() {
+        line(&mut y, "commands: none (add commands/NAME.md to the plugin)", DIM);
+    } else {
+        line(&mut y, "commands · type /plugin:name", CLAY);
+        for c in entry.commands.iter().take(5) {
+            let hint = if c.argument_hint.is_empty() { String::new() } else { format!(" {}", c.argument_hint) };
+            line(&mut y, &format!("/{}:{}{} · {}", entry.name, c.name, hint, c.description), ASH);
+        }
+        if entry.commands.len() > 5 { line(&mut y, &format!("… {} more · enter shows all", entry.commands.len() - 5), DIM); }
+    }
+    if !entry.skills.is_empty() {
+        y = y.saturating_add(1);
+        line(&mut y, "skills", CLAY);
+        for s in entry.skills.iter().take(4) { line(&mut y, &format!("{} · {}", s.name, s.description), ASH); }
+    }
+    if !entry.servers.is_empty() {
+        y = y.saturating_add(1);
+        line(&mut y, "MCP servers", CLAY);
+        for name in entry.servers.iter().take(4) { line(&mut y, name, ASH); }
+    }
+    put(f, inner, inner.x, inner.bottom().saturating_sub(1),
+        "↑↓ choose · type filters · tab all/commands/MCP · enter commands · A allow · U update · X twice removes · esc", on(CLAY, RAISED));
+}
+
+fn plugin_commands_dialog(f: &mut Frame, app: &App, area: Rect, plugin: &str, sel: usize, scroll: usize) {
+    let entry = app.plugin_rows.iter().find(|e| e.name == plugin);
+    let commands = entry.map(|e| e.commands.as_slice()).unwrap_or(&[]);
+    let inner = dialog(f, area, &format!("{} · commands", plugin), 88, commands.len().min(16) as u16 + 9);
+    if commands.is_empty() {
+        put(f, inner, inner.x, inner.y, "This plugin has no commands.", on(PAPER, RAISED).add_modifier(Modifier::BOLD));
+        put(f, inner, inner.x, inner.y + 2, "A command is a Markdown file under commands/ in the plugin folder.", on(ASH, RAISED));
+        put(f, inner, inner.x, inner.y + 3, "Skills and MCP servers still work; /plugins shows them.", on(ASH, RAISED));
+        put(f, inner, inner.x, inner.bottom().saturating_sub(1), "esc goes back to the plugin list", on(CLAY, RAISED));
+        return;
+    }
+    put(f, inner, inner.x, inner.y, &format!("{} commands · enter puts one into the input line", commands.len()), on(DIM, RAISED));
+    let rows = (inner.height as usize).saturating_sub(5).min(commands.len()).max(1);
+    let first = scroll.min(commands.len().saturating_sub(rows));
+    for (i, command) in commands.iter().skip(first).take(rows).enumerate() {
+        let y = inner.y + 2 + i as u16;
+        let chosen = first + i == sel.min(commands.len().saturating_sub(1));
+        let bg = if chosen { NIGHT } else { RAISED };
+        fill(f, Rect::new(inner.x.saturating_sub(1), y, inner.width + 2, 1), bg);
+        let hint = if command.argument_hint.is_empty() { String::new() } else { format!(" {}", command.argument_hint) };
+        let name = format!("/{}:{}{}", plugin, command.name, hint);
+        put(f, inner, inner.x, y, &clip(&name, 34), on(if chosen { SEA } else { PAPER }, bg).add_modifier(Modifier::BOLD));
+        put(f, inner, inner.x + 36, y, &clip(&command.description, inner.width.saturating_sub(38) as usize), on(if chosen { PAPER } else { ASH }, bg));
+    }
+    put(f, inner, inner.x, inner.bottom().saturating_sub(1), "↑↓ choose · enter inserts · esc back", on(CLAY, RAISED));
+}
+
 fn api_key_dialog(f: &mut Frame, app: &App, area: Rect, label: &str, input: &[char], cursor: usize, error: &str) {
     let _ = app;
     let inner = dialog(f, area, "API key", 66, 11);
@@ -635,6 +739,8 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
     match &app.overlay {
         Overlay::Providers { sel, target, scroll } => providers_dialog(f, app, area, *sel, target, *scroll),
         Overlay::Roles { sel } => roles_dialog(f, app, area, *sel),
+        Overlay::Plugins { sel, scroll, filter, mode } => plugins_dialog(f, app, area, *sel, *scroll, filter, *mode),
+        Overlay::PluginCommands { plugin, sel, scroll } => plugin_commands_dialog(f, app, area, plugin, *sel, *scroll),
         Overlay::ApiKey { label, input, cursor, error, .. } => api_key_dialog(f, app, area, label, input, *cursor, error),
         Overlay::None => {}
         Overlay::Palette { query, sel } => {

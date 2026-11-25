@@ -40,7 +40,11 @@ fn model(input: &mut dyn BufRead, out: &mut dyn Write, title: &str, cfg: &Value,
     let chosen = choose(input, out, &format!("{}: where does it run?", title), &options, now);
     if chosen == "claude-cli" {
         let current = if now == "claude-cli" { cfg["model"].as_str().unwrap_or(names[0].0) } else { names[0].0 };
-        return json!({"kind": "claude-cli", "model": choose(input, out, &format!("{}: which model?", title), names, current)});
+        let name = choose(input, out, &format!("{}: which model?", title), names, current);
+        let mut v = json!({"kind": "claude-cli", "model": name});
+        let level = providers::default_effort("claude-cli", &name);
+        if !level.is_empty() { v["effort"] = json!(level); }
+        return v;
     }
     let Some(p) = providers::get(&chosen) else {
         let was_custom = now == "custom";
@@ -51,7 +55,10 @@ fn model(input: &mut dyn BufRead, out: &mut dyn Write, title: &str, cfg: &Value,
             let _ = writeln!(out, "  That is no name of an environment variable, so nothing was stored. Put the key into a variable and give its name.");
             env.clear();
         }
-        return json!({"kind": "openai", "base_url": address, "model": name, "api_key_env": env});
+        let mut v = json!({"kind": "openai", "base_url": address, "model": name, "api_key_env": env});
+        let level = providers::default_effort("openai", &name);
+        if !level.is_empty() { v["effort"] = json!(level); }
+        return v;
     };
     let same = now == p.name;
     let name = text(input, out, "name of the model", if same { cfg["model"].as_str().unwrap_or(p.model) } else { p.model });
@@ -118,7 +125,7 @@ mod tests {
         // main: claude-cli, opus. weaker: a custom address with three texts. delegate offer, privacy pii, run kept, edit all, search searxng with an address.
         let answers = "1\n2\ncustom\nhttp://localhost:1234/v1\nqwen2.5:0.5b\n\n3\n2\n\n2\n4\nhttp://localhost:8888\n";
         let cfg = wizard(&mut answers.as_bytes(), &mut out, start.clone());
-        assert_eq!(cfg["main"], json!({"kind": "claude-cli", "model": "opus"}));
+        assert_eq!(cfg["main"], json!({"kind": "claude-cli", "model": "opus", "effort": "high"}));
         assert_eq!(cfg["weak"], json!({"kind": "openai", "base_url": "http://localhost:1234/v1", "model": "qwen2.5:0.5b", "api_key_env": ""}));
         assert_eq!((cfg["delegate"].as_str(), cfg["privacy"].as_str(), cfg["run_policy"].as_str(), cfg["edit_policy"].as_str()),
                    (Some("offer"), Some("pii"), Some("safe"), Some("all")));

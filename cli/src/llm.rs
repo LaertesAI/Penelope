@@ -114,7 +114,17 @@ fn post(url: &str, headers: &[(&str, String)], body: &Value, key: &str, seconds:
 /// tool descriptions in the MCP form with `name`, `description` and `inputSchema`.
 /// The effort level of a setting, when the provider accepts one.
 pub fn effort(model: &Value) -> Option<&str> {
-    model["effort"].as_str().filter(|e| !e.trim().is_empty())
+    let name = model["model"].as_str().unwrap_or("");
+    let provider = match kind_of(model) {
+        "claude-cli" => "claude-cli",
+        "anthropic" => "anthropic",
+        kind => crate::providers::of(model).map(|p| p.name).unwrap_or(match kind { "openai" => "openai", _ => "" }),
+    };
+    // A model without an effort field gets none, even when an old setting still names a level.
+    if !crate::providers::supports_effort(provider, name) {
+        return None;
+    }
+    model["effort"].as_str().filter(|e| !e.trim().is_empty()).or_else(|| Some(crate::providers::default_effort(provider, name)))
 }
 
 pub fn chat(model: &Value, system: &str, history: &[Value], tools: &[Value]) -> Result<Reply, String> {
@@ -127,6 +137,12 @@ pub fn chat(model: &Value, system: &str, history: &[Value], tools: &[Value]) -> 
         let mut body = json!({"model": name, "max_tokens": limit, "messages": history});
         if !system.is_empty() {
             body["system"] = json!(system);
+        }
+        if let Some(level) = effort(model) {
+            // Claude 5 turns thinking on with adaptive thinking and takes its depth from output_config.effort.
+            // The older budget_tokens form is no longer accepted by the Claude 5 models.
+            body["thinking"] = json!({"type": "adaptive"});
+            body["output_config"] = json!({"effort": level});
         }
         if !tools.is_empty() {
             body["tools"] = tools.iter().map(|t| json!({"name": t["name"], "description": t["description"], "input_schema": t["inputSchema"]})).collect();
@@ -255,6 +271,50 @@ pub fn run_loop(model: &Value, system: &str, history: &mut Vec<Value>, tools: &[
         history.extend(result_messages(&kind, &results));
     }
     Err(format!("stopped after {} rounds of tool calls", rounds))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn effort_is_sent_only_to_a_model_that_has_the_field() {
+        let claude = json!({"kind": "claude-cli", "model": "sonnet"});
+        assert_eq!(effort(&claude), Some("high"));                                  // an old setting gets the default
+        assert_eq!(effort(&json!({"kind": "anthropic", "model": "claude-opus-5-5", "effort": " "})), Some("high"));
+        assert_eq!(effort(&json!({"kind": "anthropic", "model": "claude-opus-5-5", "effort": "low"})), Some("low"));
+        assert_eq!(effort(&json!({"kind": "openai", "base_url": "https://api.openai.com/v1", "model": "gpt-6.2-astra"})), Some("high"));
+        assert_eq!(effort(&json!({"kind": "openai", "base_url": "https://api.openai.com/v1", "model": "gpt-4o", "effort": "high"})), None);
+        assert_eq!(effort(&json!({"kind": "anthropic", "model": "claude-3-5-sonnet", "effort": "high"})), None);
+        assert_eq!(effort(&json!({"kind": "openai", "base_url": "https://opencode.ai/zen/go/v1", "model": "mimo-v2.6-flash", "effort": "high"})), None);
+    }
+
+    #[test]
+    fn effort_reaches_the_anthropic_and_the_openai_body() {
+        std::env::set_var("PENELOPE_TEST_KEY_EFFORT", "test-key-effort-0123456789");
+        let (address, seen) = fake::serve(vec![
+            (200, json!({"content": [{"type": "text", "text": "a"}], "stop_reason": "end_turn"}).to_string()),
+            (200, json!({"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "b"}}]}).to_string()),
+            (200, json!({"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "c"}}]}).to_string()),
+        ]);
+        let history = vec![json!({"role": "user", "content": "hello"})];
+        let anthropic = json!({"kind": "anthropic", "base_url": address, "model": "claude-opus-5-5",
+                               "api_key_env": "PENELOPE_TEST_KEY_EFFORT", "effort": "medium"});
+        chat(&anthropic, "", &history, &[]).unwrap();
+        let openai = json!({"kind": "openai", "base_url": format!("{}/v1", address), "model": "gpt-6.2-astra",
+                            "api_key_env": "PENELOPE_TEST_KEY_EFFORT"});
+        chat(&openai, "", &history, &[]).unwrap();
+        let openai_high = json!({"kind": "openai", "base_url": format!("{}/v1", address), "model": "gpt-6.2-astra",
+                                 "api_key_env": "PENELOPE_TEST_KEY_EFFORT", "effort": "max"});
+        chat(&openai_high, "", &history, &[]).unwrap();
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen[0].body["thinking"], json!({"type": "adaptive"}));
+        assert_eq!(seen[0].body["output_config"], json!({"effort": "medium"}));
+        assert_eq!(seen[1].body["reasoning_effort"], json!("high"));
+        assert_eq!(seen[2].body["reasoning_effort"], json!("max"));
+        assert!(seen.iter().all(|s| !s.body.to_string().contains("test-key-effort")));
+    }
 }
 
 /// A small HTTP server for tests. It plays an endpoint: every request gets the next prepared body, and the server
