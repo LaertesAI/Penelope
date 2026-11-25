@@ -211,8 +211,8 @@ These packages decide whether the idea can be shown. Do them in this order.
   live on GitHub.
 - Done when: the cluster view app installs from a GitHub link and shows two running clusters.
 
-### 4.5 Design
-- State: missing. Only the TUI art exists.
+### 4.5 Design — specification draft
+- State: `docs/DESIGN.md` is a draft for owner acceptance; no code. The draft defines poster, page and motion, the file contract, the three-part Design cluster, checks, commands and what is deliberately out.
 - Name: the owner chose "Design" as the name of the part. "Weaver" is a second idea. "Da Vinci" is not used.
 - Rule: not built on Claude Design.
 - Build later: first a written spec of what a design is in Penelope (a page, a picture, an animation) and which file
