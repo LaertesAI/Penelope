@@ -1725,6 +1725,17 @@ pub fn status_text(ctx: &Ctx, id: Option<&str>) -> String {
             if !p.error.is_empty() { out.push_str(&format!("    {}\n", p.error.chars().take(200).collect::<String>())); }
         }
         if let Ok(report) = fs::read_to_string(cluster_dir(ctx, id).join("report.txt")) { out.push_str(&format!("\nReport: {}", report)); }
+        // Every question and answer is in the report stream; show the last links next to the report.
+        if let Ok(history) = fs::read_to_string(cluster_dir(ctx, id).join("reports.jsonl")) {
+            let asks: Vec<&str> = history.lines().filter(|line| line.contains(" ASK ")).collect();
+            if !asks.is_empty() {
+                out.push_str("\nLinks:\n");
+                for line in asks.iter().rev().take(4).rev() {
+                    let text = line.splitn(2, ' ').nth(1).unwrap_or(line);
+                    out.push_str(&format!("  {}\n", text));
+                }
+            }
+        }
         if let Ok(memory) = fs::read_to_string(memory_path(ctx, id)) { out.push_str(&format!("\n{}", memory.chars().rev().take(4000).collect::<String>().chars().rev().collect::<String>())); }
         return out;
     }
@@ -1872,6 +1883,100 @@ pub fn start(ctx: &Ctx, goal: &str, profile: Option<&str>, parallel: bool) -> St
         Ok(text) => text,
         Err(e) => format!("NOT started. {}", e),
     }
+}
+
+/// The tail of a text, at most `n` characters. Answers and memory sections are capped so a tool answer stays readable.
+fn tail(text: &str, n: usize) -> String {
+    text.chars().rev().take(n).collect::<String>().chars().rev().collect()
+}
+
+/// Finds a cluster by exact id first, then by name. An old name that occurs twice resolves to the newest cluster.
+fn find_target(ctx: &Ctx, target: &str) -> Result<Cluster, String> {
+    let needle = target.trim();
+    if needle.is_empty() {
+        return Err("NOT asked. The target cluster is empty; name its id or its name.".to_string());
+    }
+    if let Ok(c) = load(ctx, needle) { return Ok(c); }
+    let all = list(ctx);
+    let mut matches: Vec<Cluster> = all.iter().filter(|c| c.name == needle).cloned().collect();
+    matches.sort_by_key(|c| (c.started, c.updated));
+    if let Some(c) = matches.pop() { return Ok(c); }
+    let known: Vec<String> = all.iter().take(12).map(|c| format!("{} ({}, {})", c.id, c.name, c.state)).collect();
+    Err(format!("no cluster {}. known clusters: {}. Use cluster list to see the tree.",
+                needle, if known.is_empty() { "none yet".to_string() } else { known.join(", ") }))
+}
+
+/// The answer of a cluster without a new model call: its output first, then its memory sections, then its state.
+/// A finished cluster with neither output nor a memory section is an empty answer, not a silent success. A previous
+/// question or answer in the memory is a link, not the target's own part result.
+fn answer_of(target: &Cluster, memory: &str) -> Result<(String, &'static str), String> {
+    let output = target.output.trim();
+    if !output.is_empty() {
+        return Ok((tail(output, 6000), "output"));
+    }
+    let has_part = memory.lines().any(|line| {
+        line.starts_with("## ")
+            && !line.starts_with("## question from ")
+            && !line.starts_with("## answer from ")
+            && !line.starts_with("## ask ")
+    });
+    if has_part {
+        return Ok((tail(memory.trim(), 6000), "memory"));
+    }
+    if matches!(target.state.as_str(), "done" | "failed" | "killed" | "stuck") {
+        return Err(format!("cluster {} ({}) is {} but has no answer: its output and memory hold no part result.",
+                           target.id, target.name, target.state));
+    }
+    Ok((format!("cluster {} ({}) is {} and has no answer yet: its output and memory hold no part result.",
+                target.id, target.name, target.state), "state"))
+}
+
+/// One line in the report stream of a cluster. The orchestrator reads `reports.jsonl` and `cluster_status`.
+fn stream_ask(ctx: &Ctx, id: &str, line: &str) {
+    let dir = cluster_dir(ctx, id);
+    let _ = fs::create_dir_all(&dir);
+    let _guard = REPORT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(dir.join("reports.jsonl")) {
+        let _ = writeln!(file, "{} ASK {}", now(), line);
+    }
+}
+
+fn ask_inner(ctx: &Ctx, asker_id: &str, target_name: &str, question: &str) -> Result<String, String> {
+    let question = question.trim();
+    if question.is_empty() {
+        return Err("NOT asked. The question is empty.".to_string());
+    }
+    let asker = load(ctx, asker_id)?;
+    let target = find_target(ctx, target_name)?;
+    if target.id == asker.id {
+        return Err(format!("NOT asked. Cluster {} cannot ask itself; ask another cluster in the tree.", asker.id));
+    }
+    // The question is part of the target's memory before any answer is read, so the exchange stays auditable.
+    let before = fs::read_to_string(memory_path(ctx, &target.id)).unwrap_or_default();
+    append_memory(ctx, &target, &format!("\n## question from {} · {}\n\n{}\n", asker.name, asker.id, question));
+    let (answer, source) = answer_of(&target, &before)?;
+    append_memory(ctx, &asker, &format!("\n## answer from {} · {}\n\nquestion: {}\nanswer (from {}, {}): {}\n",
+                                       target.name, target.id, question, target.state, source, answer));
+    let one = |text: &str| text.replace(['\n', '\r'], " ").chars().take(400).collect::<String>();
+    let event = format!("{} -> {}: Q: {} · A({}): {}", asker.id, target.id, one(question), source, one(&answer));
+    stream_ask(ctx, &asker.id, &event);
+    stream_ask(ctx, &target.id, &event);
+    let block = format!("\n## ask {} -> {}\n\nquestion: {}\nanswer (from {}, {}): {}\n",
+                       asker.id, target.id, question, target.state, source, answer);
+    let dir = cluster_dir(ctx, &asker.id);
+    let _ = fs::create_dir_all(&dir);
+    let _ = fs::OpenOptions::new().create(true).append(true).open(dir.join("ask.txt"))
+        .and_then(|mut f| f.write_all(block.as_bytes()));
+    Ok(format!("Q (to {} · {}): {}\nA (from {}, {}):\n{}", target.name, target.id, question, target.state, source, answer))
+}
+
+/// The tool `cluster_ask`: a running cluster asks another cluster and keeps the answer in its own memory. No model
+/// call is made; the answer is the target's output, memory or state.
+pub fn ask(ctx: &Ctx, target: &str, question: &str) -> Result<String, String> {
+    let asker = current_cluster().ok_or_else(|| {
+        "NOT asked. cluster_ask belongs to a part inside a running cluster; the asking cluster keeps the answer in its memory.".to_string()
+    })?;
+    ask_inner(ctx, &asker, target, question)
 }
 
 #[cfg(test)]
@@ -2523,4 +2628,120 @@ mod tests {
         assert!(!checks_from_log(&path)[0].ok);
         let _ = fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn asking_a_question_lands_in_both_memories_and_the_report_stream() {
+        let (address, seen) = crate::llm::fake::serve(vec![]);
+        let (mut ctx, dir) = ctx();
+        fake_models(&mut ctx, &address);
+        let p = profile(&ctx, "research").unwrap();
+        let target = new_cluster(&ctx, &p, "research", "find design options", None, Vec::new(), 0).unwrap();
+        let mut target = load(&ctx, &target.id).unwrap();
+        target.state = "done".to_string();
+        target.output = "Option A: reuse the router. Option B: a new queue.".to_string();
+        save(&ctx, &target).unwrap();
+        let asker = new_cluster(&ctx, &p, "dev", "build the editor", None, Vec::new(), 0).unwrap();
+
+        let said = with_cluster(&asker.id, || ask(&ctx, &target.id, "Which design should we take?")).unwrap();
+        assert!(said.contains("Option A") && said.contains("output"), "{}", said);
+        let target_memory = fs::read_to_string(memory_path(&ctx, &target.id)).unwrap();
+        assert!(target_memory.contains("Which design should we take?") && target_memory.contains("question from dev"),
+                "{}", target_memory);
+        let asker_memory = fs::read_to_string(memory_path(&ctx, &asker.id)).unwrap();
+        assert!(asker_memory.contains("Option A") && asker_memory.contains("answer from research")
+                && asker_memory.contains("Which design should we take?"), "{}", asker_memory);
+        let stream = fs::read_to_string(cluster_dir(&ctx, &asker.id).join("reports.jsonl")).unwrap();
+        assert!(stream.contains(" ASK ") && stream.contains("Which design") && stream.contains("Option A"), "{}", stream);
+        let status = status_text(&ctx, Some(&asker.id));
+        assert!(status.contains("Links:") && status.contains("Which design"), "{}", status);
+        assert!(seen.lock().unwrap().is_empty(), "cluster_ask must not start a model call");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_running_target_answers_from_memory_and_names_the_source() {
+        let (ctx, dir) = ctx();
+        let p = profile(&ctx, "research").unwrap();
+        let target = new_cluster(&ctx, &p, "research", "find design options", None, Vec::new(), 0).unwrap();
+        let mut target = load(&ctx, &target.id).unwrap();
+        target.state = "working".to_string();
+        target.output.clear();
+        save(&ctx, &target).unwrap();
+        append_memory(&ctx, &target, "\n## research1 · scout\n\nThe design options are X and Y.\n");
+        let asker = new_cluster(&ctx, &p, "dev", "build the editor", None, Vec::new(), 0).unwrap();
+
+        let said = with_cluster(&asker.id, || ask(&ctx, &target.name, "Which design?")).unwrap();
+        assert!(said.contains("X and Y") && said.contains("memory") && said.contains("working"), "{}", said);
+        let asker_memory = fs::read_to_string(memory_path(&ctx, &asker.id)).unwrap();
+        assert!(asker_memory.contains("The design options are X and Y."), "{}", asker_memory);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn asking_an_unknown_or_a_done_empty_cluster_is_a_clear_error() {
+        let (ctx, dir) = ctx();
+        let p = profile(&ctx, "research").unwrap();
+        let asker = new_cluster(&ctx, &p, "dev", "build the editor", None, Vec::new(), 0).unwrap();
+        let unknown = with_cluster(&asker.id, || ask(&ctx, "ghost", "anything?")).unwrap_err();
+        assert!(unknown.contains("no cluster ghost") && unknown.contains("known clusters"), "{}", unknown);
+
+        let empty = new_cluster(&ctx, &p, "empty", "nothing to say", None, Vec::new(), 0).unwrap();
+        let mut empty = load(&ctx, &empty.id).unwrap();
+        empty.state = "done".to_string();
+        empty.output.clear();
+        save(&ctx, &empty).unwrap();
+        let refused = with_cluster(&asker.id, || ask(&ctx, &empty.id, "what is your answer?")).unwrap_err();
+        assert!(refused.contains("is done but has no answer") && refused.contains("no part result"), "{}", refused);
+        assert!(fs::read_to_string(memory_path(&ctx, &empty.id)).unwrap().contains("what is your answer?"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_cluster_ask_tool_is_open_to_the_worker_the_lead_and_the_judge() {
+        assert!(crate::route::may_call("worker", "cluster_ask"));
+        assert!(crate::route::may_call("lead", "cluster_ask"));
+        assert!(crate::route::may_call("judge", "cluster_ask"));
+        assert!(!crate::route::may_call("scout", "cluster_ask"));
+        assert!(crate::spec::get("cluster_ask").is_some());
+    }
+
+    #[test]
+    fn a_worker_part_asks_another_cluster_and_reads_the_answer_in_its_next_turn() {
+        let (mut ctx, dir) = ctx();
+        let probe = dir.join("hello.txt").to_string_lossy().to_string();
+        let p = profile(&ctx, "research").unwrap();
+        let target = new_cluster(&ctx, &p, "research", "find design options", None, Vec::new(), 0).unwrap();
+        let mut target = load(&ctx, &target.id).unwrap();
+        target.state = "done".to_string();
+        target.output = "Option A is the design".to_string();
+        save(&ctx, &target).unwrap();
+        let (address, seen) = crate::llm::fake::serve(vec![
+            (200, tool_reply("cluster_ask", json!({"target": target.id, "question": "Which design?"}))),
+            (200, text_reply("I take Option A")),
+            (200, tool_reply("read", json!({"path": probe}))),
+            (200, text_reply("PASS: the worker used the answer")),
+        ]);
+        fake_models(&mut ctx, &address);
+        write_profile(&ctx, "asker", json!({
+            "name": "asker",
+            "workers": [{"name": "dev", "role": "worker", "model": "main",
+                         "task": "Ask the research cluster which design to take, then say what you take."}],
+            "validator": {"name": "check", "role": "judge", "model": "judge"},
+            "max_models": 4, "max_depth": 1, "report_every": 0, "retries": 0, "worktree": false
+        }));
+        let asker_profile = profile(&ctx, "asker").unwrap();
+        let asker = new_cluster(&ctx, &asker_profile, "dev", "build the editor", None, Vec::new(), 0).unwrap();
+        let out = run_cluster(&ctx, &asker.id).unwrap();
+        assert!(out.contains("done"), "{}", out);
+        let memory = fs::read_to_string(memory_path(&ctx, &asker.id)).unwrap();
+        assert!(memory.contains("Option A is the design") && memory.contains("Which design?"), "{}", memory);
+        assert!(fs::read_to_string(memory_path(&ctx, &target.id)).unwrap().contains("Which design?"));
+        let bodies: Vec<String> = seen.lock().unwrap().iter().map(|s| s.body.to_string()).collect();
+        assert!(bodies.len() >= 2 && bodies[1].contains("Option A is the design"),
+                "the answer reached the worker's next request: {:?}", bodies);
+        let stream = fs::read_to_string(cluster_dir(&ctx, &asker.id).join("reports.jsonl")).unwrap();
+        assert!(stream.contains(" ASK ") && stream.contains("Which design?"), "{}", stream);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
 }
