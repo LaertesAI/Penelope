@@ -1,7 +1,7 @@
 # Plan for the coding agent: everything that is still missing in Penelope
 
 Written on 2026-11-25 from a talk with the owner and from a read of the code at commit `10bac25`
-(version 0.11.0, 189 tests, 52 files in `cli/src/`). The reader is a coding agent such as DeepSeek in OpenCode.
+(version 0.11.0, 198 tests, 52 files in `cli/src/`). The reader is a coding agent such as DeepSeek in OpenCode.
 Bug numbers such as B33 point into `docs/FEATURES-BUGS.md`. Block numbers point into `docs/CLUSTER-IDEAS.md`.
 
 ## How to work
@@ -171,7 +171,8 @@ These packages decide whether the idea can be shown. Do them in this order.
 
 ## Phase 4: the platform
 
-### 4.1 A check before every install (G12)
+### 4.1 A check before every install (G12) — done
+- Result: `a9848be`, PR #5. `plugins::check(dir)` scans executable files before add/install ZIP/git/marketplace; patterns include `curl|sh`, `wget|bash`, `base64|sh`, eval curl, `rm -rf /`, reverse shells and dangerous package.json hooks. Report names file:line. 9 new tests. Open: heuristic, no linters, no interactive yes-after-report, line-based detection, skipped large/binary files.
 - State: a plugin from git is cloned and registered without any check. It starts as denied.
 - Build: before a plugin, mod or app is installed, Penelope runs a local check and shows the result: a scan for
   known malware patterns (network calls in install scripts, obfuscated code, writes outside the own folder), the
