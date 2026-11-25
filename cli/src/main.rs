@@ -74,11 +74,11 @@ penelope replay ID --model MODEL
                               re-run the stored prompts of an eval run read-only; no file changed, no command or check run
 penelope input [install|enable|status]
                               a native Wayland pointer for ScreenCodec, without ydotool
-penelope cluster run GOAL [--profile NAME] [--sequential]
-                              ask the orchestrator for clusters and run them; profiles: coding, backend, frontend, live-test, research, solo
+penelope cluster run GOAL [--profile NAME] [--dry] [--sequential]
+                              ask the orchestrator for clusters and run them; --dry prints parts, model and an estimate, starts nothing
 penelope cluster list        the cluster tree
 penelope cluster status ID   one cluster with its parts, report and memory
-penelope cluster profiles    the parts of every profile
+penelope cluster profiles    the parts of every profile (built-in, .json or .cluster)
 penelope cluster kill ID     stop a running cluster at once
 penelope cluster dump ID     the state dump with the cause of a stuck cluster
 penelope cluster respawn ID [EXTRA]
@@ -305,27 +305,36 @@ fn main() {
                 "run" => {
                     let mut profile = None;
                     let mut parallel = true;
+                    let mut dry = false;
                     let mut words = Vec::new();
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
                             "--profile" => { profile = args.get(i + 1).cloned(); i += 2; }
                             "--sequential" => { parallel = false; i += 1; }
+                            "--dry" => { dry = true; i += 1; }
                             other => { words.push(other.to_string()); i += 1; }
                         }
                     }
                     let goal = words.join(" ");
-                    if goal.trim().is_empty() { loom::warn("usage: penelope cluster run GOAL [--profile NAME] [--sequential]"); std::process::exit(2); }
-                    match clusters::orchestrate(&ctx, &goal, profile.as_deref(), parallel) {
-                        Ok(text) => println!("{}", text),
-                        Err(e) => { loom::warn(&e); std::process::exit(2); }
+                    if dry {
+                        match clusters::dry_run(&ctx, &goal, profile.as_deref()) {
+                            Ok(text) => println!("{}", text),
+                            Err(e) => { loom::warn(&e); std::process::exit(2); }
+                        }
+                    } else {
+                        if goal.trim().is_empty() { loom::warn("usage: penelope cluster run GOAL [--profile NAME] [--dry] [--sequential]"); std::process::exit(2); }
+                        match clusters::orchestrate(&ctx, &goal, profile.as_deref(), parallel) {
+                            Ok(text) => println!("{}", text),
+                            Err(e) => { loom::warn(&e); std::process::exit(2); }
+                        }
                     }
                 }
                 other => {
                     // A bare word after cluster is the goal, not a verb.
                     let goal = args[1..].join(" ");
                     if other.starts_with('-') || goal.trim().is_empty() {
-                        loom::warn("usage: penelope cluster run GOAL [--profile NAME] | list | status [ID] | dump ID | respawn ID [EXTRA] | profile NAME [JSON] | profiles | kill ID");
+                        loom::warn("usage: penelope cluster run GOAL [--profile NAME] [--dry] | list | status [ID] | dump ID | respawn ID [EXTRA] | profile NAME [JSON] | profiles | kill ID");
                         std::process::exit(2);
                     }
                     match clusters::orchestrate(&ctx, &goal, None, true) {
@@ -1021,5 +1030,8 @@ mod tests {
     fn help_names_the_eval_and_replay_commands() {
         assert!(HELP.contains("penelope eval TASKS.jsonl --setup large|large-subagents|cluster|all"), "{}", HELP);
         assert!(HELP.contains("penelope replay ID --model MODEL"), "{}", HELP);
+        assert!(HELP.contains("penelope cluster run GOAL [--profile NAME] [--dry] [--sequential]"), "{}", HELP);
+        assert!(HELP.contains("--dry prints parts, model and an estimate, starts nothing"), "{}", HELP);
+        assert!(HELP.contains("(built-in, .json or .cluster)"), "{}", HELP);
     }
 }

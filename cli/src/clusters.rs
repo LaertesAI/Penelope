@@ -60,9 +60,9 @@ pub fn current_cluster() -> Option<String> {
 }
 
 
-pub const BUILTIN_PROFILES: &[&str] = &["coding", "backend", "frontend", "live-test", "research", "solo"];
+pub const BUILTIN_PROFILES: &[&str] = &["coding", "backend", "frontend", "live-test", "research", "solo", "prompt"];
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Part {
     pub name: String,
     pub role: String,
@@ -75,7 +75,7 @@ pub struct Part {
     pub depends_on: Vec<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Profile {
     pub name: String,
     pub workers: Vec<Part>,
@@ -93,6 +93,9 @@ pub struct Profile {
     pub stuck_after: usize,
     /// A cluster that may write gets its own git worktree. Research and live-test profiles turn this off.
     pub worktree: bool,
+    /// A named profile that rewrites the task before the workers of this profile start. The named profile must be
+    /// read-only and must not name a `before` of its own, so there is no hidden chain of prompt clusters.
+    pub before: Option<String>,
 }
 
 /// A number that may arrive as `3`, `"3"` or `"3 reports"`.
@@ -193,7 +196,8 @@ pub fn profile_names(ctx: &Ctx) -> Vec<String> {
     if let Ok(entries) = fs::read_dir(profile_dir(ctx)) {
         for e in entries.flatten() {
             let path = e.path();
-            if path.extension().and_then(|x| x.to_str()) != Some("json") { continue; }
+            let ext = path.extension().and_then(|x| x.to_str());
+            if !matches!(ext, Some("json") | Some("cluster")) { continue; }
             if let Some(stem) = path.file_stem().and_then(|x| x.to_str()) {
                 if !out.iter().any(|n| n == stem) { out.push(stem.to_string()); }
             }
@@ -224,6 +228,11 @@ fn part(value: &Value, fallback: &str) -> Part {
     }
 }
 
+/// A part role. `human` is a cluster-only role: it makes no model call and waits for a yes or no.
+fn part_role_known(role: &str) -> bool {
+    role == "human" || crate::route::role_names().iter().any(|r| *r == role)
+}
+
 fn parse_profile(value: &Value, fallback_name: &str) -> Result<Profile, String> {
     let name = value["name"].as_str().filter(|s| !s.trim().is_empty()).unwrap_or(fallback_name).trim().to_string();
     let workers = value["workers"].as_array().ok_or_else(|| format!("profile {} has no workers list", name))?;
@@ -231,7 +240,7 @@ fn parse_profile(value: &Value, fallback_name: &str) -> Result<Profile, String> 
     let mut list = Vec::new();
     for (i, w) in workers.iter().enumerate() {
         let p = part(w, &format!("worker{}", i + 1));
-        if !crate::route::role_names().iter().any(|r| *r == p.role) {
+        if !part_role_known(&p.role) {
             return Err(format!("profile {}: part {} has unknown role {} (use {})", name, p.name, p.role, crate::route::role_names().join(", ")));
         }
         if list.iter().any(|x: &Part| x.name == p.name) { return Err(format!("profile {}: part name {} is used twice", name, p.name)); }
@@ -239,6 +248,9 @@ fn parse_profile(value: &Value, fallback_name: &str) -> Result<Profile, String> 
     }
     let validator = value["validator"].as_object().map(|v| part(&Value::Object(v.clone()), "validator"));
     if let Some(v) = &validator {
+        if v.role == "human" {
+            return Err(format!("profile {}: the validator cannot be a human part; a validator must answer with a check and evidence. Put the human part in workers.", name));
+        }
         if !crate::route::role_names().iter().any(|r| *r == v.role) {
             return Err(format!("profile {}: validator has unknown role {}", name, v.role));
         }
@@ -276,7 +288,19 @@ fn parse_profile(value: &Value, fallback_name: &str) -> Result<Profile, String> 
     // A profile with a worker part writes, so it gets a worktree unless it says otherwise. A research or live-test
     // profile has no writer and can be set to false explicitly.
     let worktree = value["worktree"].as_bool().unwrap_or_else(|| list.iter().any(|p| p.role == "worker"));
-    Ok(Profile { name, workers: list, validator, max_models, max_depth, max_parallel, budget_eur, max_steps, retries, report_every, stuck_after, worktree })
+    // `before` names another profile that rewrites the task. It is checked at start, so this parse stays free of file
+    // reads; the chain and the read-only rule are enforced before any model call.
+    let before = match value["before"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(before) => {
+            let ok = !before.is_empty() && before.len() <= 32 && before.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-');
+            if !ok {
+                return Err(format!("profile {}: before {} is no profile name (lower case letters, digits, _ or -, at most 32)", name, before));
+            }
+            Some(before.to_string())
+        }
+        None => None,
+    };
+    Ok(Profile { name, workers: list, validator, max_models, max_depth, max_parallel, budget_eur, max_steps, retries, report_every, stuck_after, worktree, before })
 }
 
 fn builtin(name: &str) -> Option<Profile> {
@@ -349,21 +373,260 @@ fn builtin(name: &str) -> Option<Profile> {
                           "task": "Check both parts against the task and the project's checks. Answer PASS or FAIL with one reason."},
             "max_models": 8, "max_depth": 2, "max_steps": 14, "retries": 1
         }),
+        "prompt" => json!({
+            "name": "prompt",
+            "workers": [
+                {"name": "rewrite", "role": "condenser", "slot": "Aiolos", "model": "weak",
+                 "task": "Rewrite the cluster task so a worker can do it directly. Keep every fact, file, limit and check. Answer with the rewritten task only."}
+            ],
+            "validator": {"name": "check", "role": "judge", "slot": "Argos", "model": "judge",
+                          "task": "Check that the rewritten task keeps every fact of the original and is directly doable. Answer PASS or FAIL with one reason."},
+            "max_models": 2, "max_depth": 1, "max_steps": 6, "retries": 0, "worktree": false
+        }),
         _ => return None,
     };
     parse_profile(&value, name).ok()
 }
 
+/// The fixed parts a cluster file may name. The file cannot name a model setting, a tool or a task; it picks one of
+/// these templates, so parsing never evaluates anything and no text from the file reaches a shell.
+const CLUSTER_PART_NAMES: &[&str] = &["lead", "researcher", "scout", "coder", "worker", "validator", "judge", "tool", "tester", "human", "condenser"];
+
+fn cluster_template(base: &str) -> Option<(&'static str, &'static str, &'static str, &'static str)> {
+    Some(match base {
+        "lead" => ("lead", "Tiresias", "main", "Plan the cluster task. Name the files, the steps and the check that proves the result."),
+        "researcher" | "scout" => ("scout", "Nostos", "scout", "Search the project and the web. Collect facts with exact names, paths and URLs; change nothing."),
+        "coder" | "worker" => ("worker", "Telemach", "main", "Do the change in your worktree. Run the project's check and report its exact output."),
+        "validator" | "judge" => ("judge", "Argos", "judge", "Check the work against the cluster task and the evidence in the memory. Answer PASS or FAIL with one reason."),
+        "tool" => ("tool", "Nostos", "tool", "Use the screen and MCP tools. Report what is visible and what is broken."),
+        "tester" => ("worker", "Telemach", "worker", "Start the service and test the running system with commands. Report the exact requests and responses."),
+        "human" => ("human", "you", "", "Answer this approval question with yes or no."),
+        "condenser" => ("condenser", "Aiolos", "weak", "Rewrite the task so a worker can do it directly. Keep every fact, limit and check; answer with the rewritten task only."),
+        _ => return None,
+    })
+}
+
+fn cluster_part_value(name: &str, t: (&'static str, &'static str, &'static str, &'static str)) -> Value {
+    json!({"name": name, "role": t.0, "slot": t.1, "model": t.2, "task": t.3})
+}
+
+fn valid_cluster_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_lowercase())
+        && name.len() <= 32
+        && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+}
+
+/// Splits the inside of `$name(...)` at commas outside `[parts]`. Quotes and code are not part of the language.
+fn split_cluster_args(text: &str) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut depth = 0i32;
+    for c in text.chars() {
+        match c {
+            '[' => { depth += 1; cur.push(c); }
+            ']' => {
+                depth -= 1;
+                if depth < 0 { return Err("NOT parsed. parts=[...] has a ] without a [.".to_string()); }
+                cur.push(c);
+            }
+            ',' if depth == 0 => out.push(std::mem::take(&mut cur)),
+            _ => cur.push(c),
+        }
+    }
+    if depth != 0 { return Err("NOT parsed. parts=[...] is not closed.".to_string()); }
+    out.push(cur);
+    Ok(out.into_iter().map(|p| p.trim().to_string()).collect())
+}
+
+/// Parses `parts=[researcher, coder*3, validator, tool]`. A repeated part gets the names coder, coder2, coder3; a
+/// name may be used only once. There is exactly one validator.
+fn parse_cluster_parts(text: &str) -> Result<(Vec<Value>, Option<Value>), String> {
+    let inner = text.strip_prefix('[').and_then(|s| s.strip_suffix(']'))
+        .ok_or_else(|| "NOT parsed. parts=[...] needs square brackets, for example parts=[coder, validator].".to_string())?;
+    if inner.trim().is_empty() {
+        return Err("NOT parsed. parts=[...] has no part; name at least one part beside the validator.".to_string());
+    }
+    let mut workers = Vec::new();
+    let mut validator: Option<Value> = None;
+    let mut used: Vec<String> = Vec::new();
+    for item in inner.split(',') {
+        let item = item.trim();
+        if item.is_empty() { return Err("NOT parsed. There is an empty part in parts=[...].".to_string()); }
+        let (base, count) = match item.split_once('*') {
+            Some((b, c)) => {
+                if c.contains('*') { return Err(format!("NOT parsed. {} has more than one *.", item)); }
+                let n: usize = c.trim().parse().map_err(|_| format!("NOT parsed. {} needs a count after *, for example coder*3.", item))?;
+                (b.trim(), n)
+            }
+            None => (item, 1),
+        };
+        if !valid_cluster_name(base) {
+            return Err(format!("NOT parsed. {} is no part name (lower case letters, digits, _ or -, at most 32).", base));
+        }
+        if count == 0 || count > 8 {
+            return Err(format!("NOT parsed. {} repeats a part {} times; use 1 to 8.", item, count));
+        }
+        let template = cluster_template(base)
+            .ok_or_else(|| format!("NOT parsed. Unknown part {}. The parts are: {}.", base, CLUSTER_PART_NAMES.join(", ")))?;
+        if base == "validator" || base == "judge" {
+            if count != 1 { return Err(format!("NOT parsed. There is one validator; {} names {} of them.", item, count)); }
+            if validator.is_some() { return Err("NOT parsed. The validator is named twice; use validator or judge once.".to_string()); }
+            validator = Some(cluster_part_value(base, template));
+            continue;
+        }
+        for n in 1..=count {
+            let name = if count == 1 || n == 1 { base.to_string() } else { format!("{}{}", base, n) };
+            if used.iter().any(|u| u == &name) {
+                return Err(format!("NOT parsed. The part name {} is used twice.", name));
+            }
+            used.push(name.clone());
+            workers.push(cluster_part_value(&name, template));
+        }
+    }
+    if workers.is_empty() {
+        return Err("NOT parsed. parts=[...] has no worker part; name at least one part beside the validator.".to_string());
+    }
+    Ok((workers, validator))
+}
+
+/// One numeric or duration setting of a cluster file, with the same ranges `parse_profile` expects.
+fn cluster_setting(key: &str, raw: &str) -> Result<Value, String> {
+    let whole = |low: u64, high: u64| -> Result<u64, String> {
+        let n: u64 = raw.parse().map_err(|_| format!("NOT parsed. {} needs a whole number, got {}.", key, raw))?;
+        if n < low || n > high { return Err(format!("NOT parsed. {} is between {} and {}, got {}.", key, low, high, n)); }
+        Ok(n)
+    };
+    match key {
+        "max_models" => Ok(json!(whole(1, 64)?)),
+        "max_depth" => Ok(json!(whole(0, 3)?)),
+        "max_parallel" => Ok(json!(whole(1, 8)?)),
+        "max_steps" => Ok(json!(whole(1, 30)?)),
+        "retries" => Ok(json!(whole(0, 3)?)),
+        "budget_eur" => {
+            let n: f64 = raw.parse().map_err(|_| format!("NOT parsed. budget_eur needs a number, got {}.", raw))?;
+            if !(0.0..=1000.0).contains(&n) { return Err(format!("NOT parsed. budget_eur is between 0 and 1000, got {}.", n)); }
+            Ok(json!(n))
+        }
+        "report_every" => {
+            let n = seconds_of(&Value::String(raw.to_string())).ok_or_else(|| format!("NOT parsed. report_every needs seconds such as 30s, 5m or 1h, got {}.", raw))?;
+            if n > 86_400 { return Err(format!("NOT parsed. report_every is at most 24h, got {}.", raw)); }
+            Ok(json!(raw))
+        }
+        "stuck_after" => {
+            let n = count_of(&Value::String(raw.to_string())).ok_or_else(|| format!("NOT parsed. stuck_after needs a number of reports, got {}.", raw))?;
+            if n == 0 || n > 100 { return Err(format!("NOT parsed. stuck_after is between 1 and 100, got {}.", n)); }
+            Ok(json!(raw))
+        }
+        _ => Err(format!("NOT parsed. Unknown setting {}.", key)),
+    }
+}
+
+const CLUSTER_FILE_KEYS: &[&str] = &["parts", "before", "max_models", "max_depth", "max_parallel", "max_steps", "retries", "budget_eur", "report_every", "stuck_after", "worktree"];
+
+/// Parses one cluster file into a `Profile`:
+/// `$dev(parts=[researcher, coder*3, validator, tool], max_models=8, max_depth=3, budget_eur=2)`.
+/// The language is deliberately small: named built-in parts, repetitions, and numbers. No quotes, no code, no model
+/// setting and no tool name can enter through it.
+pub fn parse_cluster(text: &str) -> Result<Profile, String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err("NOT parsed. A cluster file is empty. Example: $dev(parts=[coder, validator], max_models=2)".to_string());
+    }
+    for c in trimmed.chars() {
+        if !(c.is_ascii_alphanumeric() || c.is_whitespace() || " $()[],.=*_-".contains(c)) {
+            return Err(format!("NOT parsed. The character {:?} is not allowed in a cluster file; the language has only part names, numbers and the keys {}.", c, CLUSTER_FILE_KEYS.join(", ")));
+        }
+    }
+    let rest = trimmed.strip_prefix('$')
+        .ok_or_else(|| "NOT parsed. A cluster file starts with $, for example $dev(parts=[coder, validator]).".to_string())?;
+    let open = rest.find('(')
+        .ok_or_else(|| "NOT parsed. A cluster file needs (...), for example $dev(parts=[coder, validator]).".to_string())?;
+    let inside = rest[open + 1..].strip_suffix(')')
+        .ok_or_else(|| "NOT parsed. A cluster file ends with ).".to_string())?;
+    let name = rest[..open].trim();
+    if !valid_cluster_name(name) {
+        return Err("NOT parsed. The name of a cluster is 1 to 32 lower case letters, digits, _ or -, starting with a letter.".to_string());
+    }
+    let mut parts: Option<(Vec<Value>, Option<Value>)> = None;
+    let mut settings: Vec<(String, Value)> = Vec::new();
+    for arg in split_cluster_args(inside)? {
+        if arg.is_empty() { return Err("NOT parsed. There is an empty setting in (...).".to_string()); }
+        let (key, raw) = arg.split_once('=')
+            .ok_or_else(|| format!("NOT parsed. {} is no key=value pair.", arg))?;
+        let key = key.trim().to_lowercase();
+        let raw = raw.trim();
+        if !CLUSTER_FILE_KEYS.contains(&key.as_str()) {
+            return Err(format!("NOT parsed. Unknown setting {}. The settings are: {}.", key, CLUSTER_FILE_KEYS.join(", ")));
+        }
+        if settings.iter().any(|(k, _)| k == &key) || (key == "parts" && parts.is_some()) {
+            return Err(format!("NOT parsed. The setting {} appears twice.", key));
+        }
+        if key == "parts" {
+            parts = Some(parse_cluster_parts(raw)?);
+        } else if key == "worktree" {
+            let on = match raw.to_lowercase().as_str() {
+                "true" | "yes" | "on" => true,
+                "false" | "no" | "off" => false,
+                _ => return Err(format!("NOT parsed. worktree is true or false, got {}.", raw)),
+            };
+            settings.push((key, json!(on)));
+        } else if key == "before" {
+            if !valid_cluster_name(raw) {
+                return Err(format!("NOT parsed. before needs a profile name (lower case letters, digits, _ or -, at most 32), got {}.", raw));
+            }
+            settings.push((key, json!(raw)));
+        } else {
+            let item = cluster_setting(&key, raw)?;
+            settings.push((key, item));
+        }
+    }
+    let (workers, validator) = parts
+        .ok_or_else(|| "NOT parsed. A cluster file needs parts=[...], for example parts=[coder, validator].".to_string())?;
+    let mut value = json!({"name": name, "workers": workers});
+    if let Some(v) = validator { value["validator"] = v; }
+    for (key, item) in settings { value[key.as_str()] = item; }
+    parse_profile(&value, name)
+}
+
+/// Reads a profile from a JSON or a cluster file. A cluster file must name the profile the same way its file is called.
+fn read_profile_file(path: &Path, fallback: &str) -> Result<Profile, String> {
+    let text = fs::read_to_string(path).map_err(|e| format!("cannot read {}: {}", path.display(), e))?;
+    match path.extension().and_then(|x| x.to_str()) {
+        Some("cluster") => parse_cluster(&text),
+        _ => {
+            let value: Value = serde_json::from_str(&text).map_err(|e| format!("profile {} is not JSON: {}", fallback, e))?;
+            parse_profile(&value, fallback)
+        }
+    }
+}
+
 pub fn profile(ctx: &Ctx, name: &str) -> Result<Profile, String> {
+    let name = name.trim();
+    // `--profile ./dev.cluster` and `--profile /path/dev.json` work directly, without copying a file into the folder.
+    let direct = Path::new(name);
+    if (name.ends_with(".cluster") || name.ends_with(".json")) && direct.is_file() {
+        let fallback = direct.file_stem().and_then(|x| x.to_str()).unwrap_or(name);
+        return read_profile_file(direct, fallback);
+    }
     let path = profile_dir(ctx).join(format!("{}.json", safe(name)));
     if let Ok(text) = fs::read_to_string(&path) {
         let value: Value = serde_json::from_str(&text).map_err(|e| format!("profile {} is not JSON: {}", name, e))?;
         return parse_profile(&value, name);
     }
+    let cluster_path = profile_dir(ctx).join(format!("{}.cluster", safe(name)));
+    if let Ok(text) = fs::read_to_string(&cluster_path) {
+        let p = parse_cluster(&text)?;
+        if p.name != name {
+            return Err(format!("cluster file {} names ${} but the profile is called {}. Rename one of them.",
+                               cluster_path.display(), p.name, name));
+        }
+        return Ok(p);
+    }
     if let Some(p) = builtin(name) { return Ok(p); }
     // A user profile may name a built-in profile as its base and add or remove parts.
-    Err(format!("no cluster profile {}. profiles: {}. Put one under .penelope/clusters/profiles/{}.json.",
-                 name, profile_names(ctx).join(", "), name))
+    Err(format!("no cluster profile {}. profiles: {}. Put one under .penelope/clusters/profiles/{}.json or {}.cluster.",
+                 name, profile_names(ctx).join(", "), name, name))
 }
 
 pub fn profiles_text(ctx: &Ctx) -> String {
@@ -373,16 +636,92 @@ pub fn profiles_text(ctx: &Ctx) -> String {
             Ok(p) => {
                 let parts: Vec<String> = p.workers.iter().map(|w| format!("{} ({})", w.name, w.role))
                     .chain(p.validator.iter().map(|v| format!("{} (validator)", v.name))).collect();
-                out.push_str(&format!("{:<12} {} · max {} parts, depth {}, {} parallel, {} retries, report every {}s, stuck after {}{}\n  {}\n", name, parts.join(", "),
+                out.push_str(&format!("{:<12} {} · max {} parts, depth {}, {} parallel, {} retries, report every {}s, stuck after {}{}{}\n  {}\n", name, parts.join(", "),
                                       p.max_models, p.max_depth, p.max_parallel, p.retries, p.report_every, p.stuck_after,
                                       if p.worktree { " · worktree" } else { "" },
+                                      p.before.as_deref().map(|b| format!(" · before {}", b)).unwrap_or_default(),
                                       if p.budget_eur > 0.0 { format!("{:.2} EUR budget", p.budget_eur) } else { "no euro limit".to_string() }));
             }
             Err(e) => out.push_str(&format!("{:<12} {}\n", name, e)),
         }
     }
-    out.push_str("\nA profile is a file under .penelope/clusters/profiles/NAME.json. A part names a role, a slot and a\nmodel: \"main\", \"weak\", \"scout\", \"judge\", \"worker\" or a full model setting such as an OpenCode model.\n");
+    out.push_str("\nA profile is a file under .penelope/clusters/profiles/NAME.json or NAME.cluster. A part names a role, a slot and a\nmodel: \"main\", \"weak\", \"scout\", \"judge\", \"worker\" or a full model setting such as an OpenCode model.\n");
+    out.push_str("A cluster file is one line: $dev(parts=[researcher, coder*3, validator, tool], max_models=8, max_depth=3, budget_eur=2).\nIt names built-in parts and repetitions only; it cannot carry a model, a tool or code.\n");
+    out.push_str("A part with role \"human\" waits for yes or no. Without an interface set \"human\": \"yes\" or \"no\" in\nconfig.json; Penelope never assumes yes. A profile field \"before\": \"PROFILE\" sends the task through that read-only\nprompt cluster before its workers start; the prompt profile must not name a before of its own.\n");
     out
+}
+
+fn estimate_part(ctx: &Ctx, part: &Part, steps: usize) -> (u64, u64, Option<f64>, String) {
+    if part.role == "human" {
+        return (0, 0, None, "you (a person)".to_string());
+    }
+    // A rough basis for the estimate: system, task and memory at the start, then one step of tool text per step.
+    let tokens_in = 1_500 + 800 * steps as u64;
+    let tokens_out = 250 * steps as u64;
+    match model_for_part(ctx, part) {
+        Ok(model) => {
+            let name = model["model"].as_str().unwrap_or("").to_string();
+            let euro = crate::cost::euro_for(ctx, &name, tokens_in, tokens_out);
+            (tokens_in, tokens_out, euro, part_model_name(part, &model))
+        }
+        Err(e) => (tokens_in, tokens_out, None, format!("(no model: {})", e)),
+    }
+}
+
+fn dry_cluster_text(ctx: &Ctx, p: &Profile, goal: &str, note: &str) -> String {
+    let mut out = format!("\ncluster {}{}\n", p.name, if note.is_empty() { String::new() } else { format!(" · {}", note) });
+    let task = if goal.trim().is_empty() { "(no goal given; the real run needs GOAL)" } else { goal.trim() };
+    out.push_str(&format!("  task: {}\n", task.chars().take(200).collect::<String>()));
+    out.push_str(&format!("  limits: max {} parts, depth {}, {} parallel, {} steps per part, {} retries{}{}{}\n",
+                          p.max_models, p.max_depth, p.max_parallel, p.max_steps, p.retries,
+                          if p.worktree { " · worktree" } else { "" },
+                          p.before.as_deref().map(|b| format!(" · before {}", b)).unwrap_or_default(),
+                          if p.budget_eur > 0.0 { format!(" · {:.2} EUR budget", p.budget_eur) } else { String::new() }));
+    let mut tokens_in = 0u64;
+    let mut tokens_out = 0u64;
+    let mut euro = 0.0;
+    let mut unpriced = 0usize;
+    for part in p.workers.iter().chain(p.validator.iter()) {
+        let steps = if part.role == "judge" { 4 } else { p.max_steps };
+        let (tin, tout, cost, model) = estimate_part(ctx, part, steps);
+        tokens_in += tin;
+        tokens_out += tout;
+        let price = match cost {
+            Some(value) => { euro += value; format!(" · {:.4} EUR", value) }
+            None if part.role == "human" => " · no model call".to_string(),
+            None => { unpriced += 1; " · no price in config.json".to_string() }
+        };
+        out.push_str(&format!("  {:<12} {:<10} {:<10} model {:<28} ~{:>7} in / {:>6} out{}\n",
+                              part.name, part.role, part.slot, model, tin, tout, price));
+    }
+    out.push_str(&format!("  estimate: ~{} tokens in / {} tokens out · {:.4} EUR", tokens_in, tokens_out, euro));
+    if unpriced > 0 { out.push_str(&format!(" (partial: {} parts have no price in config.json)", unpriced)); }
+    out.push('\n');
+    out
+}
+
+/// `penelope cluster run --dry`: prints the prompt cluster and the worker cluster, the model of every part and a rough
+/// token and euro estimate. It reads the profiles and the price table; it starts no model and writes no cluster file.
+pub fn dry_run(ctx: &Ctx, goal: &str, hint: Option<&str>) -> Result<String, String> {
+    let mut out = String::from("Dry run · no model call, no file change.\n");
+    if let Some(name) = hint.map(str::trim).filter(|s| !s.is_empty()) {
+        let p = profile(ctx, name)?;
+        if let Some(before) = before_profile(ctx, &p)? {
+            out.push_str(&dry_cluster_text(ctx, &before, goal, "runs first and rewrites the task"));
+        }
+        out.push_str(&dry_cluster_text(ctx, &p, goal, ""));
+        out.push_str("\nThe estimate comes from the step limit and the price table; it is a rough number, not a bill.\n");
+        return Ok(out);
+    }
+    out.push_str("No --profile: a real run asks the router for 1 to 4 clusters, which is a model call. This dry run starts none and estimates every profile instead.\n");
+    for name in profile_names(ctx) {
+        match profile(ctx, &name) {
+            Ok(p) => out.push_str(&dry_cluster_text(ctx, &p, goal, if p.before.is_some() { "has a before prompt cluster" } else { "" })),
+            Err(e) => out.push_str(&format!("\nprofile {}: {}\n", name, e)),
+        }
+    }
+    out.push_str("\nChoose one with --profile NAME. The estimate comes from the step limit and the price table; it is a rough number, not a bill.\n");
+    Ok(out)
 }
 
 fn model_for_part(ctx: &Ctx, p: &Part) -> Result<Value, String> {
@@ -1012,6 +1351,30 @@ fn validator_prompt(c: &Cluster, memory: &str) -> String {
 Otherwise FAIL with the smallest exact correction.", c.task, memory.chars().take(12_000).collect::<String>())
 }
 
+/// The question a human part puts to the person. An empty task asks for the whole cluster task.
+fn human_question(c: &Cluster, part: &Part) -> String {
+    if part.task.trim().is_empty() {
+        format!("Cluster {} asks for approval: {} — yes or no?", c.name, c.task)
+    } else {
+        part.task.trim().to_string()
+    }
+}
+
+/// Asks the person a yes/no question through the approval files of the interface. Without an interface the answer comes
+/// from config `human`; when that is not set the part refuses instead of assuming yes.
+fn human_answer(ctx: &Ctx, c: &Cluster, part: &Part, question: &str) -> Result<bool, String> {
+    if std::env::var("PENELOPE_APPROVE_DIR").ok().filter(|d| !d.trim().is_empty()).is_some() {
+        if let Some(yes) = crate::tools::ask_person(question, &c.cwd, "human", "") {
+            return Ok(yes);
+        }
+    }
+    match ctx.cfg["human"].as_str().map(|s| s.trim().to_lowercase()).as_deref() {
+        Some("yes") => Ok(true),
+        Some("no") => Ok(false),
+        _ => Err(format!("the human part {} needs a yes or no, but no person can answer here. Set PENELOPE_APPROVE_DIR to the interface folder, or set \"human\": \"yes\" or \"human\": \"no\" in config.json for a non-interactive run; Penelope never assumes yes.", part.name)),
+    }
+}
+
 fn run_workers(ctx: &Ctx, c: &mut Cluster, profile: &Profile, feedback: &str, limits: Limits, cancel: &Arc<AtomicBool>,
                watch: &Arc<Mutex<Watch>>, focus: &Arc<Mutex<String>>) -> Result<bool, String> {
     let mut all_ok = true;
@@ -1046,7 +1409,60 @@ fn run_workers(ctx: &Ctx, c: &mut Cluster, profile: &Profile, feedback: &str, li
             report(ctx, c, "dependency", &c.error);
             break;
         }
-        let wave: Vec<usize> = ready.into_iter().take(profile.max_parallel.max(1)).collect();
+        // A human part always runs alone: one person answers one question at a time and no model may guess in parallel.
+        let human = ready.iter().copied().find(|i| profile.workers[*i].role == "human");
+        let wave: Vec<usize> = if let Some(i) = human { vec![i] } else { ready.into_iter().take(profile.max_parallel.max(1)).collect() };
+        if let Some(i) = human {
+            let part = profile.workers[i].clone();
+            pending.retain(|index| *index != i);
+            c.parts[i].state = "working".to_string();
+            c.parts[i].model = if part.slot.is_empty() { "you".to_string() } else { part.slot.clone() };
+            c.updated = now();
+            c.state = "working".to_string();
+            save(ctx, c)?;
+            *focus.lock().unwrap_or_else(|e| e.into_inner()) = part.name.clone();
+            report(ctx, c, &part.name, "");
+            let question = human_question(c, &part);
+            let human_model = json!("human");
+            match human_answer(ctx, c, &part, &question) {
+                Ok(true) => {
+                    c.parts[i].state = "done".to_string();
+                    c.parts[i].output = "yes".to_string();
+                    c.parts[i].error.clear();
+                    c.output.push_str(&format!("\n--- {} (human) ---\nyes\n", part.name));
+                    memory_line(ctx, c, &part, &human_model, &format!("question: {}\nanswer: yes", question), "done");
+                    c.done = (c.done + 1).min(c.total);
+                    finished.push(i);
+                    c.updated = now();
+                    save(ctx, c)?;
+                    report(ctx, c, &part.name, "");
+                }
+                Ok(false) => {
+                    c.parts[i].state = "failed".to_string();
+                    c.parts[i].output = "no".to_string();
+                    c.parts[i].error = "the human said no".to_string();
+                    memory_line(ctx, c, &part, &human_model, &format!("question: {}\nanswer: no\nthe cluster stops here", question), "failed");
+                    c.error = format!("human part {} said no; the cluster stops before the parts that need it", part.name);
+                    c.state = "blocked".to_string();
+                    c.updated = now();
+                    save(ctx, c)?;
+                    report(ctx, c, &part.name, &c.error);
+                    return Err(c.error.clone());
+                }
+                Err(e) => {
+                    c.parts[i].state = "failed".to_string();
+                    c.parts[i].error = e.clone();
+                    memory_line(ctx, c, &part, &human_model, &format!("question: {}\nNOT answered: {}", question, e), "failed");
+                    c.error = format!("human part {}: {}", part.name, e);
+                    c.state = "blocked".to_string();
+                    c.updated = now();
+                    save(ctx, c)?;
+                    report(ctx, c, &part.name, &c.error);
+                    return Err(c.error.clone());
+                }
+            }
+            continue;
+        }
         let mut jobs: Vec<(usize, Part, Value, String, String)> = Vec::new();
         for i in &wave {
             let part = profile.workers[*i].clone();
@@ -1254,6 +1670,68 @@ fn apply_worktree(c: &Cluster) -> Result<(), String> {
     })
 }
 
+/// The profile a `before` field names, checked before anything runs. It must be read-only and must not name a `before`
+/// of its own: a task never travels through a hidden chain of prompt clusters.
+fn before_profile(ctx: &Ctx, p: &Profile) -> Result<Option<Profile>, String> {
+    let Some(name) = p.before.as_deref() else { return Ok(None) };
+    if name == p.name {
+        return Err(format!("profile {}: before names the profile itself. A prompt cluster must be another profile.", p.name));
+    }
+    let before = profile(ctx, name).map_err(|e| format!("profile {}: before {}: {}", p.name, name, e))?;
+    if let Some(next) = before.before.as_deref() {
+        return Err(format!("profile {}: before profile {} names its own before {}. A chain of prompt clusters is not allowed; a before cluster only rewrites the task.", p.name, before.name, next));
+    }
+    if let Some(w) = before.workers.iter().chain(before.validator.iter())
+        .find(|w| !matches!(w.role.as_str(), "condenser" | "scout" | "judge")) {
+        return Err(format!("profile {}: before profile {} has the part {} with role {}, which may write or act. A before cluster only rewrites the task; use condenser, scout or judge parts.", p.name, before.name, w.name, w.role));
+    }
+    if before.worktree {
+        return Err(format!("profile {}: before profile {} may write (worktree true). A before cluster only rewrites the task; set worktree false.", p.name, before.name));
+    }
+    Ok(Some(before))
+}
+
+/// Runs the named prompt cluster on the task and returns its text. The prompt cluster is a child of `c`, so its report
+/// and memory stay in the same tree. `max_depth` and `max_models` are checked before the child is created.
+fn prompt_rewrite(ctx: &Ctx, c: &Cluster, p: &Profile, session_before: Option<f64>) -> Result<Option<(String, String)>, String> {
+    let Some(before) = before_profile(ctx, p)? else { return Ok(None) };
+    let root = root_of(ctx, c)?;
+    let root_profile = profile(ctx, &root.profile)?;
+    if c.depth + 1 > root_profile.max_depth {
+        return Err(format!("the prompt cluster would be at depth {} but the root profile {} allows max_depth {}.",
+                           c.depth + 1, root_profile.name, root_profile.max_depth));
+    }
+    let need = part_count(&before);
+    let child = {
+        let _guard = SPAWN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let used = tree_models(ctx, &root.id);
+        if used + need > root_profile.max_models {
+            return Err(format!("max_models: the tree of root {} already uses {} of {} parts, and the prompt profile {} needs {} more.",
+                               root.id, used, root_profile.max_models, before.name, need));
+        }
+        let name = format!("{}-prompt", c.name);
+        new_cluster(ctx, &before, &name, &c.task, Some(&c.id), Vec::new(), c.depth + 1)?
+    };
+    let _ = run_cluster_inner(ctx, &child.id, session_before)?;
+    let finished = load(ctx, &child.id)?;
+    if finished.state != "done" {
+        return Err(format!("the prompt cluster {} ended {}: {}. The worker cluster did not start.", finished.id, finished.state,
+                           if finished.error.is_empty() { "no error line" } else { &finished.error }));
+    }
+    let text = finished.parts.iter().filter(|x| x.role != "judge" && x.role != "human")
+        .map(|x| x.output.trim()).filter(|x| !x.is_empty()).collect::<Vec<_>>().join("\n\n");
+    if text.trim().is_empty() {
+        return Err(format!("the prompt cluster {} ended done but wrote no task text.", finished.id));
+    }
+    // A model answer can be long. A task beyond this cap is cut with a visible note instead of filling every prompt.
+    let mut text = text.trim().to_string();
+    if text.chars().count() > 6000 {
+        text = text.chars().take(6000).collect::<String>();
+        text.push_str("\n[the prompt cluster answer was cut after 6000 characters]");
+    }
+    Ok(Some((text, before.name.clone())))
+}
+
 /// Runs one cluster: every worker part, then the validator. A FAIL sends the result back to the workers up to `retries`.
 pub fn run_cluster(ctx: &Ctx, id: &str) -> Result<String, String> {
     run_cluster_inner(ctx, id, None)
@@ -1282,6 +1760,28 @@ fn run_cluster_inner(ctx: &Ctx, id: &str, session_before: Option<f64>) -> Result
         report(ctx, &c, "worktree", &c.error);
         return Ok(format!("cluster {} blocked: {}", id, c.error));
     }
+    // A `before` profile rewrites the task before any worker of this cluster starts. The rewrite runs as a child cluster
+    // with its own report; a failed rewrite blocks this cluster instead of starting the workers with the old task.
+    let rewrite = match prompt_rewrite(ctx, &c, &profile, session_before) {
+        Ok(Some((task, before))) => {
+            let original = c.task.clone();
+            c.task = task;
+            let dir = cluster_dir(ctx, &c.id);
+            let _ = fs::create_dir_all(&dir);
+            let _ = fs::write(dir.join("prompt.txt"),
+                format!("before: {}\n\noriginal task:\n{}\n\nrewritten task:\n{}\n", before, original, c.task));
+            Some((before, original))
+        }
+        Ok(None) => None,
+        Err(e) => {
+            c.state = "blocked".to_string();
+            c.error = format!("the task was not rewritten: {}", e);
+            c.updated = now();
+            save(ctx, &c)?;
+            report(ctx, &c, "before", &c.error);
+            return Ok(format!("cluster {} blocked: {}", id, c.error));
+        }
+    };
     let cancel = Arc::new(AtomicBool::new(false));
     register_cancel(&c.id, &cancel);
     let _cancel_guard = CancelGuard(c.id.clone());
@@ -1296,6 +1796,9 @@ fn run_cluster_inner(ctx: &Ctx, id: &str, session_before: Option<f64>) -> Result
     save(ctx, &c)?;
     let _ = fs::write(memory_path(ctx, &c.id), format!("# Cluster {} · {}\n\nTask: {}\nProfile: {} · max {} parts, depth {}\n",
                                                          c.name, c.profile, c.task, c.profile, profile.max_models, profile.max_depth));
+    if let Some((before, _)) = &rewrite {
+        append_memory(ctx, &c, &format!("\n## before prompt · {}\n\nthe task was rewritten by the {} cluster before the worker parts started. The original and the rewritten text are in prompt.txt.\n", before, before));
+    }
     if !c.worktree.is_empty() { append_memory(ctx, &c, &format!("\nWorktree: {} · branch {}\n", c.worktree, c.branch)); }
     report(ctx, &c, "start", "");
     let before = crate::cost::total_eur(ctx);
@@ -2275,6 +2778,11 @@ mod tests {
         fs::write(profile_dir(ctx).join(format!("{}.json", name)), value.to_string()).unwrap();
     }
 
+    fn template_value(name: &str, base: &str) -> Value {
+        let t = cluster_template(base).unwrap();
+        json!({"name": name, "role": t.0, "slot": t.1, "model": t.2, "task": t.3})
+    }
+
     fn priced_models(ctx: &mut Ctx, address: &str) {
         fake_models(ctx, address);
         ctx.cfg["prices"] = json!({"test-cluster": [10.0, 10.0]});
@@ -2706,6 +3214,186 @@ mod tests {
     }
 
     #[test]
+    fn a_before_prompt_cluster_rewrites_the_task_before_the_worker_starts() {
+        let (mut ctx, dir) = ctx();
+        let probe = dir.join("hello.txt").to_string_lossy().to_string();
+        let (address, seen) = crate::llm::fake::serve(vec![
+            (200, text_reply("REWRITE: build the bridge and run cargo test")),
+            (200, tool_reply("read", json!({"path": probe.clone()}))),
+            (200, text_reply("PASS: the rewrite keeps the task")),
+            (200, text_reply("built the bridge")),
+            (200, tool_reply("read", json!({"path": probe}))),
+            (200, text_reply("PASS: the worker did the rewritten task")),
+        ]);
+        fake_models(&mut ctx, &address);
+        write_profile(&ctx, "rewriter", json!({
+            "name": "rewriter",
+            "workers": [{"name": "rewrite", "role": "condenser", "model": "weak", "task": "Rewrite the task."}],
+            "validator": {"name": "check", "role": "judge", "model": "judge"},
+            "max_models": 2, "max_depth": 1, "max_steps": 4, "retries": 0, "worktree": false
+        }));
+        write_profile(&ctx, "dev", json!({
+            "name": "dev",
+            "workers": [{"name": "coder", "role": "scout", "model": "main", "task": "Do the rewritten task."}],
+            "validator": {"name": "check", "role": "judge", "model": "judge"},
+            "before": "rewriter", "max_models": 4, "max_depth": 2, "max_steps": 8, "retries": 0, "worktree": false
+        }));
+        let p = profile(&ctx, "dev").unwrap();
+        assert_eq!(p.before.as_deref(), Some("rewriter"));
+        let c = new_cluster(&ctx, &p, "dev", "build a bridge across the north river", None, Vec::new(), 0).unwrap();
+        let out = run_cluster(&ctx, &c.id).unwrap();
+        assert!(out.contains("done"), "{}", out);
+        let c = load(&ctx, &c.id).unwrap();
+        assert_eq!((c.state.as_str(), c.task.as_str()), ("done", "REWRITE: build the bridge and run cargo test"));
+        assert_eq!(c.parts[0].output, "built the bridge");
+        let prompt = fs::read_to_string(cluster_dir(&ctx, &c.id).join("prompt.txt")).unwrap();
+        assert!(prompt.contains("north river") && prompt.contains("REWRITE: build the bridge"), "{}", prompt);
+        let memory = fs::read_to_string(memory_path(&ctx, &c.id)).unwrap();
+        assert!(memory.contains("## before prompt · rewriter") && memory.contains("Task: REWRITE: build the bridge"), "{}", memory);
+        let clusters = list(&ctx);
+        assert_eq!(clusters.len(), 2, "the prompt cluster stays in the tree");
+        let prompt_cluster = clusters.iter().find(|x| x.name == "dev-prompt").expect("the prompt cluster is stored");
+        assert_eq!((prompt_cluster.state.as_str(), prompt_cluster.parent.as_deref()), ("done", Some(c.id.as_str())));
+        let bodies: Vec<String> = seen.lock().unwrap().iter().map(|s| s.body.to_string()).collect();
+        assert!(bodies[0].contains("north river"), "the prompt cluster gets the original task: {}", bodies[0]);
+        assert!(bodies[3].contains("REWRITE: build the bridge and run cargo test"),
+                "the worker gets the rewritten task: {}", bodies[3]);
+        assert!(!bodies[3].contains("north river"),
+                "the worker does not get the orchestrator's original text: {}", bodies[3]);
+        assert_ne!(bodies[0], bodies[3]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_before_chain_and_a_writing_prompt_profile_are_refused() {
+        let (ctx, dir) = ctx();
+        write_profile(&ctx, "self", json!({
+            "name": "self",
+            "workers": [{"name": "one", "role": "scout", "model": "main"}],
+            "before": "self", "worktree": false
+        }));
+        let selfp = profile(&ctx, "self").unwrap();
+        assert!(before_profile(&ctx, &selfp).unwrap_err().contains("profile itself"), "{}", before_profile(&ctx, &selfp).unwrap_err());
+
+        write_profile(&ctx, "inner", json!({
+            "name": "inner",
+            "workers": [{"name": "one", "role": "scout", "model": "main"}],
+            "before": "prompt", "worktree": false
+        }));
+        write_profile(&ctx, "outer", json!({
+            "name": "outer",
+            "workers": [{"name": "one", "role": "scout", "model": "main"}],
+            "before": "inner", "worktree": false
+        }));
+        let outer = profile(&ctx, "outer").unwrap();
+        assert!(before_profile(&ctx, &outer).unwrap_err().contains("chain of prompt clusters"),
+                "{}", before_profile(&ctx, &outer).unwrap_err());
+
+        write_profile(&ctx, "writer", json!({
+            "name": "writer",
+            "workers": [{"name": "coder", "role": "worker", "model": "main"}],
+            "worktree": false
+        }));
+        write_profile(&ctx, "dev2", json!({
+            "name": "dev2",
+            "workers": [{"name": "one", "role": "scout", "model": "main"}],
+            "before": "writer", "worktree": false
+        }));
+        let dev2 = profile(&ctx, "dev2").unwrap();
+        let err = before_profile(&ctx, &dev2).unwrap_err();
+        assert!(err.contains("role worker") && err.contains("which may write"), "{}", err);
+
+        write_profile(&ctx, "leader", json!({
+            "name": "leader",
+            "workers": [{"name": "boss", "role": "lead", "model": "main"}],
+            "worktree": false
+        }));
+        write_profile(&ctx, "dev3", json!({
+            "name": "dev3",
+            "workers": [{"name": "one", "role": "scout", "model": "main"}],
+            "before": "leader", "worktree": false
+        }));
+        let dev3 = profile(&ctx, "dev3").unwrap();
+        let err = before_profile(&ctx, &dev3).unwrap_err();
+        assert!(err.contains("role lead") && err.contains("condenser, scout or judge"), "{}", err);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn human_push_profile(ctx: &Ctx) {
+        write_profile(ctx, "push", json!({
+            "name": "push",
+            "workers": [
+                {"name": "approve", "role": "human", "slot": "owner",
+                 "task": "Allow the git push to origin main? Answer yes or no."},
+                {"name": "push", "role": "scout", "model": "main", "needs": ["approve"],
+                 "task": "Run git push to origin main."}
+            ],
+            "validator": {"name": "check", "role": "judge", "model": "judge"},
+            "max_models": 4, "max_depth": 1, "retries": 0, "worktree": false
+        }));
+    }
+
+    #[test]
+    fn a_human_part_that_says_no_stops_the_cluster_before_the_push() {
+        let (mut ctx, dir) = ctx();
+        std::env::remove_var("PENELOPE_APPROVE_DIR");
+        let (address, seen) = crate::llm::fake::serve(vec![(200, text_reply("this must not run"))]);
+        fake_models(&mut ctx, &address);
+        human_push_profile(&ctx);
+        ctx.cfg["human"] = json!("no");
+        let p = profile(&ctx, "push").unwrap();
+        assert_eq!(p.workers[0].role, "human");
+        let c = new_cluster(&ctx, &p, "push", "push the branch", None, Vec::new(), 0).unwrap();
+        let out = run_cluster(&ctx, &c.id).unwrap();
+        assert!(out.contains("blocked"), "{}", out);
+        let c = load(&ctx, &c.id).unwrap();
+        assert_eq!(c.state.as_str(), "blocked");
+        assert!(c.error.contains("said no"), "{}", c.error);
+        assert_eq!((c.parts[0].state.as_str(), c.parts[0].output.as_str()), ("failed", "no"));
+        assert_eq!(c.parts[1].state.as_str(), "queued", "the push part never started");
+        let memory = fs::read_to_string(memory_path(&ctx, &c.id)).unwrap();
+        assert!(memory.contains("answer: no") && memory.contains("the cluster stops here"), "{}", memory);
+        let line = fs::read_to_string(cluster_dir(&ctx, &c.id).join("report.txt")).unwrap();
+        assert!(line.starts_with("S:blocked"), "the report names the blocked state: {}", line);
+        assert!(seen.lock().unwrap().is_empty(), "a no must not start a model call");
+        assert!(!dir.join("pushed.txt").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_human_part_without_an_answer_path_refuses_instead_of_assuming_yes() {
+        let (mut ctx, dir) = ctx();
+        std::env::remove_var("PENELOPE_APPROVE_DIR");
+        let (address, seen) = crate::llm::fake::serve(vec![(200, text_reply("this must not run"))]);
+        fake_models(&mut ctx, &address);
+        human_push_profile(&ctx);
+        ctx.cfg["human"] = Value::Null;
+        let p = profile(&ctx, "push").unwrap();
+        let c = new_cluster(&ctx, &p, "push", "push the branch", None, Vec::new(), 0).unwrap();
+        let out = run_cluster(&ctx, &c.id).unwrap();
+        assert!(out.contains("blocked"), "{}", out);
+        let c = load(&ctx, &c.id).unwrap();
+        assert!(c.error.contains("never assumes yes"), "{}", c.error);
+        assert_eq!(c.parts[1].state.as_str(), "queued");
+        assert!(seen.lock().unwrap().is_empty(), "an unanswered human part must not start a model call");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_human_part_cannot_be_the_validator() {
+        let (ctx, dir) = ctx();
+        write_profile(&ctx, "humancheck", json!({
+            "name": "humancheck",
+            "workers": [{"name": "one", "role": "scout", "model": "main"}],
+            "validator": {"name": "me", "role": "human"},
+            "worktree": false
+        }));
+        let err = profile(&ctx, "humancheck").unwrap_err();
+        assert!(err.contains("validator cannot be a human"), "{}", err);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_worker_part_asks_another_cluster_and_reads_the_answer_in_its_next_turn() {
         let (mut ctx, dir) = ctx();
         let probe = dir.join("hello.txt").to_string_lossy().to_string();
@@ -2741,6 +3429,107 @@ mod tests {
                 "the answer reached the worker's next request: {:?}", bodies);
         let stream = fs::read_to_string(cluster_dir(&ctx, &asker.id).join("reports.jsonl")).unwrap();
         assert!(stream.contains(" ASK ") && stream.contains("Which design?"), "{}", stream);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_cluster_file_and_its_json_profile_are_the_same_profile() {
+        let (ctx, dir) = ctx();
+        let text = "$dev(parts=[researcher, coder*3, validator, tool], max_models=8, max_depth=3, budget_eur=2)";
+        let from_file = parse_cluster(text).unwrap();
+        assert_eq!(from_file.name, "dev");
+        assert_eq!(from_file.workers.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+                   vec!["researcher", "coder", "coder2", "coder3", "tool"]);
+        assert_eq!(from_file.validator.as_ref().map(|v| v.name.as_str()), Some("validator"));
+        assert_eq!((from_file.max_models, from_file.max_depth, from_file.budget_eur), (8, 3, 2.0));
+        assert!(from_file.worktree, "a coder part writes, so the default is a worktree");
+        let from_json = parse_profile(&json!({
+            "name": "dev",
+            "workers": [
+                template_value("researcher", "researcher"),
+                template_value("coder", "coder"),
+                template_value("coder2", "coder"),
+                template_value("coder3", "coder"),
+                template_value("tool", "tool")
+            ],
+            "validator": template_value("validator", "validator"),
+            "max_models": 8, "max_depth": 3, "budget_eur": 2
+        }), "dev").unwrap();
+        assert_eq!(from_file, from_json);
+
+        fs::create_dir_all(profile_dir(&ctx)).unwrap();
+        fs::write(profile_dir(&ctx).join("dev.cluster"), text).unwrap();
+        assert_eq!(profile(&ctx, "dev").unwrap(), from_file, "a .cluster file loads under its name");
+        assert!(profile_names(&ctx).iter().any(|n| n == "dev"));
+        assert!(profiles_text(&ctx).contains("$dev(parts=[researcher, coder*3, validator, tool]"), "{}", profiles_text(&ctx));
+        // The direct path form works too.
+        assert_eq!(profile(&ctx, profile_dir(&ctx).join("dev.cluster").to_str().unwrap()).unwrap(), from_file);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_cluster_file_refuses_unknown_parts_repeats_and_code() {
+        for (text, want) in [
+            ("$dev(parts=[coder], max_models=2", "ends with )"),
+            ("$dev(parts=coder)", "square brackets"),
+            ("$dev(parts=[])", "has no part"),
+            ("$dev(parts=[coder*0])", "1 to 8"),
+            ("$dev(parts=[coder*9])", "1 to 8"),
+            ("$dev(parts=[coder, coder*2])", "used twice"),
+            ("$dev(parts=[coder*2, coder2])", "Unknown part coder2"),
+            ("$dev(parts=[wizard])", "Unknown part wizard"),
+            ("$dev(parts=[validator, judge])", "validator is named twice"),
+            ("$dev(parts=[validator*2])", "one validator"),
+            ("$dev(parts=[validator])", "no worker part"),
+            ("$dev(parts=[coder], nope=1)", "Unknown setting nope"),
+            ("$dev(parts=[coder]; rm -rf /)", "not allowed"),
+            ("$Dev(parts=[coder])", "name of a cluster"),
+            ("$dev(parts=[coder], max_depth=9)", "max_depth is between"),
+            ("$dev(parts=[coder], budget_eur=abc)", "budget_eur needs a number"),
+            ("$dev(parts=[coder], max_models=2, max_models=3)", "appears twice"),
+        ] {
+            let err = parse_cluster(text).unwrap_err();
+            assert!(err.contains(want), "{} -> {}", text, err);
+        }
+        let p = parse_cluster("$dev(parts=[coder*2, human*2, validator], before=prompt, worktree=false)").unwrap();
+        assert_eq!(p.workers.iter().map(|x| x.name.as_str()).collect::<Vec<_>>(), vec!["coder", "coder2", "human", "human2"]);
+        assert_eq!(p.workers[2].role, "human");
+        assert_eq!(p.before.as_deref(), Some("prompt"));
+        assert!(!p.worktree);
+    }
+
+    #[test]
+    fn a_dry_run_prints_parts_models_and_an_estimate_without_a_model_call() {
+        let (mut ctx, dir) = ctx();
+        let (address, seen) = crate::llm::fake::serve(vec![(200, text_reply("this must not run"))]);
+        priced_models(&mut ctx, &address);
+        fs::create_dir_all(profile_dir(&ctx)).unwrap();
+        fs::write(profile_dir(&ctx).join("rewriter.cluster"),
+                  "$rewriter(parts=[condenser, validator], max_models=2, max_depth=1, worktree=false)").unwrap();
+        fs::write(profile_dir(&ctx).join("drydev.cluster"),
+                  "$drydev(parts=[researcher, coder*2, validator, tool], before=rewriter, max_models=8, max_depth=3, budget_eur=2)").unwrap();
+        let out = dry_run(&ctx, "build a bridge", Some("drydev")).unwrap();
+        assert!(out.starts_with("Dry run"), "{}", out);
+        assert!(out.contains("cluster rewriter · runs first and rewrites the task"), "{}", out);
+        assert!(out.contains("cluster drydev"), "{}", out);
+        for name in ["researcher", "coder", "coder2", "validator", "tool"] {
+            assert!(out.contains(name), "{} misses {}: {}", out, name, out);
+        }
+        assert!(out.contains("model test-cluster"), "{}", out);
+        assert!(out.contains("estimate:") && out.contains("tokens in") && out.contains("EUR"), "{}", out);
+        assert!(seen.lock().unwrap().is_empty(), "the dry run must not call a model");
+        assert!(list(&ctx).is_empty(), "the dry run must not create a cluster");
+        assert!(!ctx.root.join("usage.json").exists(), "the dry run must not write usage");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_cluster_file_that_names_another_profile_is_refused_at_load() {
+        let (ctx, dir) = ctx();
+        fs::create_dir_all(profile_dir(&ctx)).unwrap();
+        fs::write(profile_dir(&ctx).join("wrong.cluster"), "$other(parts=[coder, validator])").unwrap();
+        let err = profile(&ctx, "wrong").unwrap_err();
+        assert!(err.contains("names $other") && err.contains("called wrong"), "{}", err);
         let _ = fs::remove_dir_all(&dir);
     }
 
