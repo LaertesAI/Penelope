@@ -3,9 +3,9 @@
 <p align="center">
   <a href="cli/Cargo.toml"><img src="https://img.shields.io/badge/version-0.11.0-C4623E?style=flat-square&labelColor=1C1A17" alt="version 0.11.0"></a>
   <a href="cli/Cargo.toml"><img src="https://img.shields.io/badge/Rust_edition-2021-C4623E?style=flat-square&labelColor=1C1A17" alt="Rust edition 2021"></a>
-  <a href="#build"><img src="https://img.shields.io/badge/tests-126_passing-C4623E?style=flat-square&labelColor=1C1A17" alt="126 tests passing"></a>
+  <a href="#build"><img src="https://img.shields.io/badge/tests-132_passing-C4623E?style=flat-square&labelColor=1C1A17" alt="132 tests passing"></a>
   <a href="#status"><img src="https://img.shields.io/badge/platform-Linux-C4623E?style=flat-square&labelColor=1C1A17" alt="platform Linux"></a>
-  <a href="#parts"><img src="https://img.shields.io/badge/MCP_tools-43-C4623E?style=flat-square&labelColor=1C1A17" alt="43 MCP tools"></a>
+  <a href="#parts"><img src="https://img.shields.io/badge/MCP_tools-46-C4623E?style=flat-square&labelColor=1C1A17" alt="46 MCP tools"></a>
   <a href="docs/PROVIDERS.md"><img src="https://img.shields.io/badge/providers-35-C4623E?style=flat-square&labelColor=1C1A17" alt="35 providers"></a>
   <a href="#status"><img src="https://img.shields.io/badge/status-alpha-C4623E?style=flat-square&labelColor=1C1A17" alt="status alpha"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/licence-MIT-C4623E?style=flat-square&labelColor=1C1A17" alt="licence MIT"></a>
@@ -26,12 +26,12 @@ model, keeps notes in a memory map, and asks before every change to a file.
 | Date | 2026-11-25 |
 | Stage | alpha: one developer, one PC, no packaged release |
 | Repository | https://github.com/LaertesAI/Penelope, branch `main` |
-| Source | [`cli/`](cli), 46 Rust files, 17,689 lines |
-| Binary | `cli/target/release/penelope`, 7.2 MB (7,508,528 bytes), built from source |
+| Source | [`cli/`](cli), 47 Rust files, 18,763 lines |
+| Binary | `cli/target/release/penelope`, 7.7 MB (7,750,144 bytes), built from source |
 | Build | `cargo build --release`, profile `release` with `opt-level = 2` and `strip = true` |
 | Toolchain | rustc 1.99.1, edition 2021 |
-| Tests | 126 passed, 0 failed, no test needs a key. Live runs are listed in the devlog. |
-| Real runs | 29 with the `claude` command up to 0.10.0, plus live runs with OpenCode Go on 2026-11-24: a tool call, an agent step and a ScreenCodec open/click/snapshot sequence. See [`DEVLOG.md`](docs/DEVLOG.md). |
+| Tests | 132 passed, 0 failed, no test needs a key. Live runs are listed in the devlog. |
+| Real runs | 29 with the `claude` command up to 0.10.0, live OpenCode Go runs on 2026-11-24, and three live cluster runs with Claude + haiku on 2026-11-25. See [`DEVLOG.md`](docs/DEVLOG.md). |
 | Platform | Linux. Background jobs read `/proc`. Windows and macOS are untried. |
 | Settings folder | `.penelope/` in the project, else `~/.penelope/` |
 | Licence | MIT, see [`LICENSE`](LICENSE). `cli/Cargo.toml` carries the same field. |
@@ -53,6 +53,9 @@ The tool count comes from `spec::TOOLS`, the provider count from `cli/src/provid
 - One contract layer checks every tool call: the role must hold the tool, then every argument must match the JSON schema.
 - Agents are written with `$name(role=..., goal="...", max_sub_agents=3)`; the lead can also delegate with the tool
   `agent`. A store of memory is shared by every session, and `penelope brain` writes an Obsidian vault of it.
+- Clusters are the larger architecture: an orchestrator builds groups from parts, starts them in parallel, orders
+  them with `after`, and gives every cluster one memory file. A part can be a Laertes family, an OpenCode model or the
+  Claude command. The validator can send a result back before the cluster closes.
 
 ## Build
 
@@ -61,7 +64,7 @@ Needed: a Rust toolchain, Linux, and one model source (the `claude` command, an 
 ```bash
 cd cli
 cargo build --release
-cargo test                          # 126 tests, no model call
+cargo test                          # 132 tests, no model call
 ./target/release/penelope doctor    # one line per program and setting Penelope depends on
 ```
 
@@ -115,7 +118,7 @@ In the full screen interface `/models` opens the provider list. Arrow keys choos
 | Routed tool output | `run` executes a shell command. Output over 40 lines goes to the weaker model and comes back as at most 12 lines. The raw output stays on disk under a run id. | 0.1 | yes |
 | Web pages | `fetch` loads a page and the weaker model answers one question from it. The page text never enters the main model. | 0.1 | 1 page |
 | Memory map | Notes live at waypoints under `.penelope/memory/`. A lookup follows signposts one level at a time and never searches all notes. A finished walk is stored, so the same request jumps to its waypoint. | 0.1 | 3 runs |
-| MCP server | `penelope mcp` offers all 43 tools to any MCP client. | 0.1 | every turn |
+| MCP server | `penelope mcp` offers all 46 tools to any MCP client. | 0.1 | every turn |
 | MCP management | `penelope mcp add/remove/allow/deny/list/call` manages standalone servers next to the plugin servers. | 0.11 | 1 test, live echo server |
 | Local HTTP API | `penelope serve` answers `/search`, `/read`, `/embed`, `/rerank`, `/redact` and `/whoami` on loopback, with a bearer token for a remote bind and 120 requests per minute. | 0.11 | 6 tests, live curl |
 | Worktrees | `penelope work new/list/diff/apply/remove` keeps a task on its own branch; the live tree changes only on `apply`. | 0.12 | 1 test, live git worktree |
@@ -147,6 +150,7 @@ In the full screen interface `/models` opens the provider list. Arrow keys choos
 | Privacy model | `roles.filter` puts a model between the others. Strict JSON, fallback to the fixed rules, failures counted. | 0.11 | test against a stand-in server |
 | Router model | `roles.router` chooses the plan. A broken plan falls back to the fixed plan; the limits of the user always win. | 0.11 | test against a stand-in server |
 | Agents with `$` | Name, role, thinking, goal, limits, budget. The goal is not stored. The crew panel shows the names and models. | 0.11 | 1 live one-step agent, parser tests |
+| Clusters | The orchestrator starts 1–4 clusters from parts. A profile names workers, an optional validator, slots (Telemach, Argos, Nostos), model or role per part, max parts and depth. Clusters can run in parallel and wait on each other with `after`; every part writes one `memory.md`; the validator can send the result back. `/cluster GOAL`, `/clusters`, `penelope cluster`. | 0.12 | 5 tests, live solo cluster with worker + validator |
 | Crew panel | Lead, subagents by their names, plugged model and state. A Laertes family is gold and says "in training". | 0.11 | screen picture, 1 live run |
 | Shared memory | `scope global` and a shared map for every project; consolidation keeps rules and complaints without a model call. | 0.11 | 2 tests |
 | Brain and Obsidian | `/brain` draws the map; `penelope brain --write` makes a vault of Markdown files with `[[links]]`. | 0.11 | 1 test, screen picture |
@@ -182,11 +186,11 @@ In the full screen interface `/models` opens the provider list. Arrow keys choos
 | Messages API | The kind `anthropic` talks to the Messages API with tool use. | 0.10 | test only |
 | Sessions for HTTP endpoints | The messages of a conversation lie in `.penelope/sessions/ID.history.json`, so `penelope chat --resume N` goes on with it. | 0.10 | 1 resumed session against a stand-in script, no real provider |
 
-The 43 tools: `run`, `run_detail`, `job_start`, `job_read`, `job_stop`, `fetch`, `web_search`, `read`, `write`, `edit`, `unzip`, `pr_create`,
+The 46 tools: `run`, `run_detail`, `job_start`, `job_read`, `job_stop`, `fetch`, `web_search`, `read`, `write`, `edit`, `unzip`, `pr_create`,
 `undo`, `find`, `grep`, `tree`, `outline`, `ask_user`, `scout`, `scouts`, `plan`, `memory_go`, `memory_note`,
 `memory_forget`, `memory_map`, `skill`, `git_commit`, `check`, `tool_new`, `tool_list`, `screen`, `cursor`,
 `mcp_servers`, `mcp_call`, `session_search`, `http_request`, `json_query`, `git_diff`, `clipboard`, `agent`,
-`computer`, `skill_new`, `research`.
+`cluster_start`, `cluster_status`, `cluster_kill`, `computer`, `skill_new`, `research`.
 
 ## The full screen interface
 
@@ -217,6 +221,7 @@ or output selects the plain chat by itself.
 Commands: `/new` (or F5), `/models` (providers; `r` role models, `m` exact names, `e` effort), `/sessions`, `/setup`, `/providers`, `/undo`, `/jobs`,
 `/scout [auto|web|offer|off]`, `/crew`, `/map`, `/go TEXT`, `/note TEXT`, `/btw TEXT`, `/rules [session|global] TEXT`, `/forge TOPIC`,
 `/unravel`, `/forget TEXT`, `/stats`, `/cost`, `/context TEXT`, `/route`, `/tools`, `/agents`, `/orchestrate GOAL`,
+`/cluster GOAL [--profile NAME]`, `/clusters`.
 `/brain [write]`, `/mcp [probe|add NAME COMMAND|remove NAME|allow NAME|deny NAME|call SERVER TOOL JSON]`,
 `/screen tools|open URL|see|click ID|desktop`, `/cursor X Y [click]`, `/export`, `/price MODEL IN OUT`, `/auto`,
 `/learn`, `/skills`, `/consolidate`, `/mode [NAME]`, `/login [NAME]`, `/logout NAME`, `/auth [verify]`, `/rewind N`,
@@ -285,6 +290,9 @@ penelope work diff task-1                     # the patch, live tree untouched
 penelope work apply task-1                    # one explicit yes
 penelope allow                                # confirmed commands for this project, masked
 penelope ask --json "run the tests"           # event stream for CI
+penelope cluster run "build the thing"         # the orchestrator plans clusters and runs them
+penelope cluster profiles                      # the parts of every profile
+penelope cluster list                          # the cluster tree
 penelope models                                # the model list the provider reports
 penelope plugin commands                      # slash commands provided by plugins
 penelope plugin command notes:summarize a.md  # print the expanded prompt
@@ -316,7 +324,7 @@ penelope screen demo URL       # real ScreenCodec: open and read in one process
 penelope screen tools          # the tools ScreenCodec really offers
 penelope cursor X Y [--click]  # Penelope's own pointer
 penelope stats
-penelope mcp [--root DIR]         # serve the 43 tools to another MCP client
+penelope mcp [--root DIR]         # serve the 46 tools to another MCP client
 penelope mcp add NAME COMMAND [ARGS...] [--allow]
 penelope mcp remove NAME
 penelope mcp allow|deny NAME

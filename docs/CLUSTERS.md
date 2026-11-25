@@ -1,8 +1,28 @@
 # Penelope as a cluster framework
 
-Written on 2026-11-25 from the user's description. Status: plan, nothing of it is built. `PLAN.md` and
-`ROADMAP.md` describe the harness as it stands (roles, agents, delegate); this file describes the target architecture
-that replaces the fixed role chain.
+Written on 2026-11-25 from the user's description. Status: the first working layer is built in `cli/src/clusters.rs`
+(profiles, parts, reports, one memory file, validator retry, dependencies, parallel execution and the cluster tools).
+`PLAN.md` and `ROADMAP.md` still describe the older agent layer; the cluster layer is the target architecture for the
+fixed role chain.
+
+## What is built now
+
+- A cluster profile is a JSON file under `.penelope/clusters/profiles/NAME.json`, or one of the built-ins `coding`,
+  `backend`, `frontend`, `live-test`, `research` and `solo`.
+- A profile is a list of parts. A part has `name`, `role`, `slot`, `task`, `model` and optional `mcp`. `model` may be
+  `main`, `weak`, `scout`, `judge`, `worker`, a role name, or a full model setting (for example an OpenCode model).
+- The orchestrator asks the router model for a plan of 1–4 clusters and falls back to one `coding` cluster. It can be
+  forced with `--profile`.
+- Clusters with no `after` start together in threads; a cluster waits for the ids named by `after`. A subcluster waits
+  for its parent and its depth is checked against the parent's `max_depth`.
+- Every part writes into the cluster's one `memory.md`. The validator reads that memory, runs the project's check where
+  it can, and answers `PASS` or `FAIL`. A `FAIL` sends the result back to the workers for up to `retries` rounds.
+- The report file uses the compact line (`S:working|P:1/2|T:12s|F:backend|E:...`). `cluster_status` shows the tree,
+  one cluster, its parts, report and memory.
+- Tools: `cluster_start`, `cluster_status`, `cluster_kill`. Commands: `/cluster GOAL`, `/clusters`,
+  `penelope cluster run/list/status/dump/profiles/kill`.
+- Live check: a `solo` cluster with the real Claude command created `hello.txt`, ran `cat`, and the haiku validator
+  returned `PASS` with the `cat` evidence. The cluster closed `S:done|P:2/2|T:12s`.
 
 ## The idea in one paragraph
 
@@ -110,6 +130,10 @@ a report with `S:stuck` or an unchanged `P` over `stuck_after` reports leads to 
 
 ## Open points
 
-- Which models run inside clusters in the first version: Claude through the `claude` CLI, local Qwen models, or both.
-- Whether a cluster's workers share one context or each get their own.
-- How the orchestrator merges results of parallel dev clusters that touch the same files.
+- A cluster cannot yet create a new subcluster while it runs; the orchestrator writes subclusters into the plan.
+- Workers inside one cluster run in order. Parallel workers need a merge rule for overlapping files.
+- A coding cluster still works in the live tree. The worktree isolation from `penelope work` is the next step.
+- Cost is recorded per cluster and role, but there is no hard per-cluster stop while a model call is running.
+- The zombie watch (`stuck_after`, repeated tool calls) is stored in the profile but not enforced yet.
+- The 8 Laertes families are parts with `slot` labels; a family in training blocks its cluster instead of being
+  silently replaced. A real plan endpoint is still missing.

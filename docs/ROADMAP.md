@@ -7,7 +7,8 @@ The repository is public at https://github.com/LaertesAI/Penelope. Licence: MIT,
 
 | Part | Where | Evidence |
 |---|---|---|
-| Command `penelope` in Rust | `cli/` | 126 tests |
+| Command `penelope` in Rust | `cli/` | 132 tests |
+| Clusters with parts, profiles, reports, one memory file and a validator | `cli/src/clusters.rs` | 5 tests, live solo cluster, [`CLUSTERS.md`](CLUSTERS.md) |
 | Full screen terminal interface | `cli/src/tui/` | 8 tests, 9 real turns |
 | Text that appears piece by piece | `cli/src/backend.rs`, `cli/src/tui/mod.rs` | 1 test, 15 words arrived in 7 pieces |
 | Privacy filter for the request and for tool output, level `pii` for e-mail addresses and IBANs | `cli/src/privacy.rs`, `cli/src/tools.rs` | 4 tests, a made-up token stayed hidden in 4 real turns |
@@ -64,7 +65,7 @@ The repository is public at https://github.com/LaertesAI/Penelope. Licence: MIT,
 | Updater client and blueprint | `cli/src/update.rs`, `docs/AUTOUPDATE.md` | 1 test, no server |
 | Windows branches (cmd, taskkill, clipboard, pointer, PATHEXT) | `cli/src/platform.rs`, `cli/src/jobs.rs` | source only, untested |
 | Brand: hand-drawn weave, lockup, small marks | `brand/` | see `brand/BRAND.md` |
-| One contract table for 43 tools, schema check and role gate | `cli/src/spec.rs`, `cli/src/route.rs` | 4 tests, every name reaches a handler, 3 live calls |
+| One contract table for 46 tools, schema check and role gate | `cli/src/spec.rs`, `cli/src/route.rs` | 4 tests, every name reaches a handler, 3 live calls |
 | Tools Penelope writes for a project | `cli/src/forge.rs` | 2 tests, no shell break-out |
 | Eight roles, a model per role, `provider use --role` | `cli/src/route.rs`, `cli/src/providers.rs` | 1 test, 1 live agent step |
 | Privacy model between the models with a strict JSON contract and a fallback | `cli/src/privacy.rs` | 1 test |

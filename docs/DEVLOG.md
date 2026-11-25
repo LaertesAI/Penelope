@@ -5,7 +5,7 @@
 **Scope:** one contract layer for every tool, models in every role, agents written with `$`, shared memory and an
 Obsidian brain, cost in euro, ScreenCodec and Penelope's own cursor, plugin install and import, a startup weave, and
 the commands and views that make these reachable.  
-**Tests:** 126 passed, 0 failed. No test needs a key. The live runs against OpenCode Go are written down below and used no test fixture.
+**Tests:** 132 passed, 0 failed. No test needs a key. The live runs against OpenCode Go are written down below and used no test fixture.
 
 This is a working increment, not a claim that every limit is gone. The last section names what is still open and how
 each claim can be checked on this machine.
@@ -31,7 +31,7 @@ Penelope writes for herself is a row that joins the same table at runtime.
 
 ### One table
 
-`cli/src/spec.rs` holds 43 built-in tools as `(name, description, schema)`. The schema is JSON text, parsed when the
+`cli/src/spec.rs` holds 46 built-in tools as `(name, description, schema)`. The schema is JSON text, parsed when the
 list is built. The file's test checks:
 
 - every name is unique, lower case, and has a description;
@@ -205,6 +205,32 @@ how many steps ran, the tokens in and out, and the euro of this run.
 
 The crew panel reads `.penelope/crew/`, one small file per member. It can therefore show a step that is running while
 the transcript is still quiet, and two scouts that finish together cannot overwrite each other.
+
+## Clusters: parts, one memory file, a validator
+
+The agent layer is still there, but the architecture now has a larger unit: an orchestrator starts clusters. A cluster
+is not a subagent. It is a group of parts with one job, built from a profile. A profile names its workers, an optional
+validator, the role and slot of each part, and the model: `main`, `weak`, `scout`, `judge`, `worker`, a role name, or a
+full model setting such as an OpenCode model. A part can therefore be Telemach, Argos, a Claude model, or a small local
+model, and parts that are not needed are simply left out of the list.
+
+The built-in profiles are `coding` (backend and frontend workers + Argos validator), `backend`, `frontend`, `live-test`
+(tester + ScreenCodec tool part), `research` (two scouts) and `solo`. A user profile under
+`.penelope/clusters/profiles/NAME.json` replaces a built-in of the same name. `max_models`, `max_depth`, `max_steps`,
+`retries` and `budget_eur` are checked before a cluster starts; a part that names a Laertes family in training blocks
+its cluster instead of being silently replaced.
+
+The orchestrator asks the router model for a plan of one to four clusters and falls back to one `coding` cluster. A plan
+may name `after` dependencies and a `parent`; independent clusters run in threads, a live-test cluster waits for the
+coding clusters, and a subcluster waits for its parent. Every cluster writes one `memory.md`; every part appends to it.
+The validator reads that memory, checks the project where it can, and answers `PASS` or `FAIL`. A FAIL sends the result
+back to the workers for up to `retries` rounds. The report is the compact line from the architecture note:
+`S:done|P:2/2|T:12s|F:end|E:-`.
+
+Tools `cluster_start`, `cluster_status` and `cluster_kill` and the commands `/cluster GOAL`, `/clusters` and
+`penelope cluster run/list/status/dump/profiles/kill` are the entry points. A live run with the real Claude command used
+the `solo` profile: the worker created `hello.txt`, ran `cat`, the haiku validator checked the output and returned PASS,
+and the cluster closed `done`. Five cluster tests run without a real provider.
 
 ## A small main context
 
@@ -873,7 +899,7 @@ New CLI commands: `tools`, `tool list`, `tool call NAME JSON`, `route`, `agents`
 
 ## Tests and evidence
 
-`cargo test` in `cli/`: **126 passed, 0 failed**. The new tests, all without a real provider:
+`cargo test` in `cli/`: **132 passed, 0 failed**. The new tests, all without a real provider:
 
 | Test | What it proves |
 |---|---|
@@ -949,6 +975,11 @@ New CLI commands: `tools`, `tool list`, `tool call NAME JSON`, `route`, `agents`
 | `search::the_fanout_switch_is_written_and_the_health_line_names_every_engine` | fanout setting and health line |
 | `providers::the_provider_list_wins_over_the_static_catalog_and_is_cached` | `/models` parsing, effort column, cache, Anthropic header |
 | `tui::the_picker_uses_the_provider_list_and_its_effort_column` | picker and `e` use the fetched list |
+| `clusters::profiles_are_built_from_parts_and_a_missing_part_is_refused` | profile parts, limits and unknown role |
+| `clusters::a_cluster_is_created_reported_and_killed_without_a_model` | state file, memory, report, kill flag |
+| `clusters::a_plan_keeps_dependencies_and_refuses_an_unknown_profile` | `after`, cycle and profile validation |
+| `clusters::one_cluster_runs_worker_parts_and_its_validator` | two workers, validator PASS, one memory file |
+| `clusters::the_orchestrator_plan_runs_dependent_clusters_in_order` | orchestrator plan, `after`, two clusters |
 | `search::ranking_deduplicates_and_prefers_a_diverse_list` | one result per URL, one host does not fill the list |
 | `search::parses_the_three_keyed_shapes` | Tavily, Exa and Firecrawl response shapes |
 | `scrape::an_article_becomes_markdown_and_the_noise_is_gone` | main article, JSON-LD, table, code, boilerplate |
@@ -1014,7 +1045,7 @@ body.
 
 ```bash
 cd cli
-cargo test                     # 126 tests, no model, no key
+cargo test                     # 132 tests, no model, no key
 
 ./target/release/penelope tools
 ./target/release/penelope serve --print-config

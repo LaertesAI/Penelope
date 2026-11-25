@@ -1,6 +1,6 @@
 # Penelope: features, bugs and open goals
 
-State: 2026-11-25, working tree after the 0.11.0 second pass and the first 0.12 work. Test suite: 126 tests.
+State: 2026-11-25, working tree after the 0.11.0 second pass and the first 0.12 work. Test suite: 132 tests.
 This is the honest list behind `README.md` and `PLAN-0.12.md`. A feature is only listed as working when a test or a
 live run on this PC backs it.
 
@@ -9,8 +9,9 @@ live run on this PC backs it.
 | Area | Feature | Evidence |
 |---|---|---|
 | Normal use | TUI, plain chat, `ask`, sessions, `/quit` | TUI started in tmux 120×40; plain chat completed a turn; `ask` returned `ok` |
-| Contracts | 43 tools, one schema table, role gate | `spec` and `route` tests, every name reaches a handler |
+| Contracts | 46 tools, one schema table, role gate | `spec` and `route` tests, every name reaches a handler |
 | Agents | `$name(...)`, plans, roles, budgets, crew panel | parser, router and live one-step tests |
+| Clusters | orchestrator plan, profiles from parts, parallel clusters, `after`/parent order, one memory file, validator retry, reports, kill | 5 tests, live solo cluster with Claude + haiku validator |
 | Tools | read/write/edit, undo, find/grep/tree, jobs, git, clipboard, HTTP, JSON | unit tests and real changes |
 | Search | 10 sources, parallel fanout, cache, dedupe/rank, health, reranker client, SearXNG pool | live 3 engines; `search health --probe` |
 | Search ops | `search probe [--daily]`, `search instances add URL`, `search fanout on|off` | 2 tests, live 3 engines, daily marker |
@@ -68,6 +69,7 @@ live run on this PC backs it.
 | B29 | low | The model list comes from the provider, but the effort column is still inferred by model family when the endpoint does not report it. A custom model name can show `no effort` even when its API accepts the field. | `providers::supports_effort`, `fetch_models` | Add an explicit per-setting override in 0.13 |
 | B31 | low | Plugin commands expand `$ARGUMENTS`, `$@` and `$1` to `$9`; Claude command features such as `!` bash execution and `@file` in the body are not interpreted. | `plugins::expand_args` | Add the safe subset after a permission check |
 | B32 | low | Search "clustering" is dedupe, scoring and domain diversity, not semantic grouping; the agent steps share one `previous` text, not a message bus. | `search::rank`, `agents::run_with_cancel` | Embedding clusters and a real message log (0.13) |
+| B33 | medium | The first cluster layer runs workers inside one cluster in order, keeps coding clusters in the live tree, cannot spawn a subcluster while running, and does not enforce the zombie watch yet. | `clusters.rs`, CLUSTERS.md open points | Parallel workers, worktree isolation, dynamic subclusters, zombie watch |
 | B30 | low | `pr_create` needs `gh` and an already pushed branch; it never pushes. | `tools.rs` | Add a push step with its own question |
 
 ## Goals for 0.12
@@ -76,7 +78,7 @@ live run on this PC backs it.
 - [ ] `search probe --daily` runs from a systemd timer; 20 queries survive a blocked engine.
 - [ ] Attack corpus: 20 ScreenCodec injections + 20 normal pages; recall 100 %, false positives < 10 %.
 - [ ] 20 consecutive test runs are green; the one flake is found.
-- [ ] Linux, Windows and macOS CI run the same 126 tests; macOS is signed or labelled unsigned.
+- [ ] Linux, Windows and macOS CI run the same 132 tests; macOS is signed or labelled unsigned.
 - [ ] `pip-audit` and `cargo audit` run in CI; a known CVE fails the job.
 - [ ] A `deploy/` unit and README for the daily probe.
 - [ ] Test loop, LSP, tree-sitter index, eval/replay and an ACP server.
@@ -86,7 +88,7 @@ live run on this PC backs it.
 
 ```bash
 cd cli
-cargo test                       # 126 tests
+cargo test                       # 132 tests
 cargo build --release
 ./target/release/penelope doctor
 ./target/release/penelope work list
