@@ -98,6 +98,19 @@ pub fn report(ctx: &Ctx) -> String {
     out
 }
 
+/// The euro one call costs at the prices in config.json. `None` when the model has no price: a hard euro limit cannot
+/// stop a model that is not priced, and the caller must not pretend that it can.
+pub fn euro_for(ctx: &Ctx, model: &str, tokens_in: u64, tokens_out: u64) -> Option<f64> {
+    let (i, o) = price(ctx, model)?;
+    let rate = ctx.cfg["eur_per_usd"].as_f64().unwrap_or(0.92);
+    Some((tokens_in as f64 * i + tokens_out as f64 * o) / 1_000_000.0 * rate)
+}
+
+/// The hard limit of one whole session in euro. 0 means no limit.
+pub fn session_budget(ctx: &Ctx) -> f64 {
+    ctx.cfg["session_budget_eur"].as_f64().unwrap_or(0.0).max(0.0)
+}
+
 /// The euro spent so far in this folder. A model without a price adds nothing and is counted in `unpriced` by `summary`.
 pub fn total_eur(ctx: &Ctx) -> f64 {
     let v: Value = fs::read_to_string(ctx.root.join("usage.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_else(|| json!({"models": {}}));

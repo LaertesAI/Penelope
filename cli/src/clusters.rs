@@ -12,15 +12,22 @@
 use crate::config::Ctx;
 use serde_json::{json, Value};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Serializes the small registry writes; clusters run in threads.
 static WRITE_LOCK: Mutex<()> = Mutex::new(());
 /// Two clusters may merge at the same time after their validators. One patch lands, the second sees a conflict.
 static MERGE_LOCK: Mutex<()> = Mutex::new(());
+/// The cancel flag of every cluster that is running in this process. `kill()` sets it at once; a watcher on the kill
+/// file reaches a cluster started by another process within 100 ms.
+static CANCELS: Mutex<Vec<(String, Arc<AtomicBool>)>> = Mutex::new(Vec::new());
+/// The live child of every Claude CLI part, by `cluster id/part name`. A kill signals the whole tree.
+static CHILDREN: Mutex<Vec<(String, u32)>> = Mutex::new(Vec::new());
 
 pub const BUILTIN_PROFILES: &[&str] = &["coding", "backend", "frontend", "live-test", "research", "solo"];
 
@@ -420,6 +427,136 @@ fn budget_spent(ctx: &Ctx, before: f64) -> f64 {
     (crate::cost::total_eur(ctx) - before).max(0.0)
 }
 
+fn register_cancel(id: &str, cancel: &Arc<AtomicBool>) {
+    let mut all = CANCELS.lock().unwrap_or_else(|e| e.into_inner());
+    all.retain(|(key, _)| key != id);
+    all.push((id.to_string(), cancel.clone()));
+}
+
+fn unregister_cancel(id: &str) {
+    CANCELS.lock().unwrap_or_else(|e| e.into_inner()).retain(|(key, _)| key != id);
+}
+
+/// Sets the flag of a cluster in this process and signals its running Claude children. A cluster started by another
+/// process sees the kill file through its watcher.
+fn signal_cancel(id: &str) {
+    let flag = CANCELS.lock().unwrap_or_else(|e| e.into_inner()).iter()
+        .find(|(key, _)| key == id).map(|(_, flag)| flag.clone());
+    if let Some(flag) = flag {
+        flag.store(true, Ordering::SeqCst);
+    }
+    kill_children(id);
+}
+
+/// Kills one process and its descendants. `pgrep` and `kill` are the smallest portable tools for a tree without a new
+/// crate; a missing tool leaves the direct child kill as the fallback.
+fn kill_tree(pid: u32) {
+    let children: Vec<u32> = Command::new("pgrep").args(["-P", &pid.to_string()]).output().ok()
+        .map(|out| String::from_utf8_lossy(&out.stdout).lines().filter_map(|line| line.trim().parse().ok()).collect())
+        .unwrap_or_default();
+    for child in children {
+        kill_tree(child);
+    }
+    let _ = Command::new("kill").args(["-KILL", &pid.to_string()]).status();
+}
+
+fn register_child(key: &str, pid: u32) {
+    let mut all = CHILDREN.lock().unwrap_or_else(|e| e.into_inner());
+    all.retain(|(slot, _)| slot != key);
+    all.push((key.to_string(), pid));
+}
+
+fn unregister_child(key: &str) {
+    CHILDREN.lock().unwrap_or_else(|e| e.into_inner()).retain(|(slot, _)| slot != key);
+}
+
+fn kill_children(id: &str) {
+    let prefix = format!("{}/", id);
+    let pids: Vec<u32> = CHILDREN.lock().unwrap_or_else(|e| e.into_inner()).iter()
+        .filter(|(key, _)| key.starts_with(&prefix)).map(|(_, pid)| *pid).collect();
+    for pid in pids {
+        kill_tree(pid);
+    }
+}
+
+/// Watches the kill file of one cluster while it runs. 100 ms is short enough to end a part inside the two-second
+/// promise and long enough not to spin on disk.
+struct KillWatch {
+    stop: Arc<AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl KillWatch {
+    fn start(ctx: &Ctx, id: &str, cancel: Arc<AtomicBool>) -> KillWatch {
+        let stop = Arc::new(AtomicBool::new(false));
+        let idle = stop.clone();
+        let dir = cluster_dir(ctx, id);
+        let id = id.to_string();
+        let handle = std::thread::spawn(move || {
+            while !idle.load(Ordering::SeqCst) {
+                if dir.join("kill").is_file() {
+                    cancel.store(true, Ordering::SeqCst);
+                    kill_children(&id);
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        });
+        KillWatch { stop, handle: Some(handle) }
+    }
+}
+
+impl Drop for KillWatch {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+struct CancelGuard(String);
+
+impl Drop for CancelGuard {
+    fn drop(&mut self) {
+        unregister_cancel(&self.0);
+    }
+}
+
+/// The two hard limits of a part: the budget of its cluster and the budget of the whole session. Both are checked
+/// after every model answer with the usage of the loop that is still running, so the call that crosses a limit is the
+/// last call of the part.
+#[derive(Clone, Copy)]
+struct Limits {
+    cluster: f64,
+    cluster_before: f64,
+    session: f64,
+    session_before: f64,
+}
+
+impl Limits {
+    fn check(&self, ctx: &Ctx, model: &str, usage: &crate::llm::Usage) -> Option<String> {
+        let pending = crate::cost::euro_for(ctx, model, usage.tokens_in, usage.tokens_out).unwrap_or(0.0);
+        self.at(ctx, pending)
+    }
+
+    fn over(&self, ctx: &Ctx) -> Option<String> {
+        self.at(ctx, 0.0)
+    }
+
+    fn at(&self, ctx: &Ctx, pending: f64) -> Option<String> {
+        let cluster_spent = (crate::cost::total_eur(ctx) - self.cluster_before).max(0.0) + pending;
+        if self.cluster > 0.0 && cluster_spent >= self.cluster {
+            return Some(format!("BUDGET: the cluster used {:.4} of {:.2} EUR in the call that crossed its limit", cluster_spent, self.cluster));
+        }
+        let session_spent = (crate::cost::total_eur(ctx) - self.session_before).max(0.0) + pending;
+        if self.session > 0.0 && session_spent >= self.session {
+            return Some(format!("BUDGET: the session used {:.4} of {:.2} EUR in the call that crossed its limit", session_spent, self.session));
+        }
+        None
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Check {
     name: String,
@@ -498,7 +635,8 @@ fn args_with_cwd(name: &str, args: &Value, cwd: &str) -> Value {
     args
 }
 
-fn run_model(ctx: &Ctx, c: &Cluster, part: &Part, system: &str, task: &str, max_steps: usize) -> Result<Done, String> {
+fn run_model(ctx: &Ctx, c: &Cluster, part: &Part, system: &str, task: &str, max_steps: usize,
+             cancel: &AtomicBool, limits: Limits) -> Result<Done, String> {
     let model = model_for_part(ctx, part)?;
     if let Some(family) = crate::crew::family_of(&model) {
         return Err(format!("{} slot is in training and cannot answer yet", family));
@@ -510,9 +648,11 @@ fn run_model(ctx: &Ctx, c: &Cluster, part: &Part, system: &str, task: &str, max_
         let mut usage = crate::llm::Usage::default();
         let role = part.role.clone();
         let cluster_cwd = c.cwd.clone();
+        let model_name = model["model"].as_str().unwrap_or("").to_string();
         let mut checks: Vec<Check> = Vec::new();
+        let mut tick = |usage: &crate::llm::Usage| limits.check(ctx, &model_name, usage);
         let out = crate::agents::with_mcp_scope(&part.mcp, || crate::route::with_role(&role, || {
-            crate::llm::run_loop(&model, system, &mut history, &tools, max_steps, None, &mut usage,
+            crate::llm::run_loop_with(&model, system, &mut history, &tools, max_steps, Some(cancel), &mut usage, &mut tick,
                 &mut |call| {
                     // A part works in its cluster folder. A tool call without a cwd gets the worktree, never the live tree.
                     let args = args_with_cwd(&call.name, &call.args, &cluster_cwd);
@@ -521,7 +661,8 @@ fn run_model(ctx: &Ctx, c: &Cluster, part: &Part, system: &str, task: &str, max_
                     (text, ok)
                 }, &mut |_| {})
         }))?;
-        crate::cost::record(ctx, &format!("cluster:{}", c.name), model["model"].as_str().unwrap_or(""), usage.tokens_in, usage.tokens_out);
+        crate::cost::record(ctx, &format!("cluster:{}", c.name), &model_name, usage.tokens_in, usage.tokens_out);
+        if let Some(stop) = limits.over(ctx) { return Err(stop); }
         return Ok(Done { text: out, checks });
     }
     if kind != "claude-cli" {
@@ -543,9 +684,45 @@ fn run_model(ctx: &Ctx, c: &Cluster, part: &Part, system: &str, task: &str, max_
     // Every tool of the part runs inside the worktree of its cluster. The Claude command itself also starts there,
     // so a tool that writes without a cwd cannot reach the live tree.
     if !c.cwd.trim().is_empty() { cmd.current_dir(&c.cwd); }
-    let out = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).output()
+    let mut child = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()
         .map_err(|e| format!("cannot start the claude command: {}", e))?;
-    let v: Value = serde_json::from_slice(&out.stdout).map_err(|_| format!("the claude command ended with {} and no result", out.status))?;
+    let pid = child.id();
+    let slot = format!("{}/{}", c.id, part.name);
+    register_child(&slot, pid);
+    let mut stdout = child.stdout.take().ok_or_else(|| "the claude command has no output pipe".to_string())?;
+    let reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stdout.read_to_end(&mut bytes);
+        bytes
+    });
+    let mut cancelled = false;
+    loop {
+        if cancel.load(Ordering::SeqCst) || kill_requested(ctx, &c.id) {
+            cancelled = true;
+            break;
+        }
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(e) => {
+                unregister_child(&slot);
+                let _ = child.kill();
+                let _ = reader.join();
+                return Err(format!("the claude command failed: {}", e));
+            }
+        }
+    }
+    if cancelled {
+        // The command starts one tree: the model, its tool servers and their children. All of it goes.
+        kill_tree(pid);
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    let bytes = reader.join().unwrap_or_default();
+    unregister_child(&slot);
+    if cancelled { return Err("stopped".to_string()); }
+    let status = child.wait().map_err(|e| format!("the claude command failed: {}", e))?;
+    let v: Value = serde_json::from_slice(&bytes).map_err(|_| format!("the claude command ended with {} and no result", status))?;
     if v["is_error"].as_bool().unwrap_or(false) {
         return Err(v["result"].as_str().unwrap_or("the claude command reported an error").trim().to_string());
     }
@@ -554,6 +731,7 @@ fn run_model(ctx: &Ctx, c: &Cluster, part: &Part, system: &str, task: &str, max_
     crate::cost::record(ctx, &format!("cluster:{}", c.name), model["model"].as_str().unwrap_or(""), tokens_in, tokens_out);
     let checks = checks_from_log(&log);
     let _ = fs::remove_file(&log);
+    if let Some(stop) = limits.over(ctx) { return Err(stop); }
     Ok(Done { text: v["result"].as_str().unwrap_or("").trim().to_string(), checks })
 }
 
@@ -578,14 +756,14 @@ fn validator_prompt(c: &Cluster, memory: &str) -> String {
 Otherwise FAIL with the smallest exact correction.", c.task, memory.chars().take(12_000).collect::<String>())
 }
 
-fn run_workers(ctx: &Ctx, c: &mut Cluster, profile: &Profile, feedback: &str, before: f64) -> Result<bool, String> {
+fn run_workers(ctx: &Ctx, c: &mut Cluster, profile: &Profile, feedback: &str, limits: Limits, cancel: &AtomicBool) -> Result<bool, String> {
     let mut all_ok = true;
     c.error.clear();
     c.evidence.clear();
     for (i, part) in profile.workers.iter().enumerate() {
-        if kill_requested(ctx, &c.id) { return Err("killed".to_string()); }
-        if profile.budget_eur > 0.0 && budget_spent(ctx, before) >= profile.budget_eur {
-            c.error = format!("budget of {:.2} EUR used before {}", profile.budget_eur, part.name);
+        if kill_requested(ctx, &c.id) || cancel.load(Ordering::SeqCst) { return Err("killed".to_string()); }
+        if let Some(stop) = limits.over(ctx) {
+            c.error = stop;
             return Err(c.error.clone());
         }
         let model = match model_for_part(ctx, part) {
@@ -608,7 +786,7 @@ fn run_workers(ctx: &Ctx, c: &mut Cluster, profile: &Profile, feedback: &str, be
         let memory = fs::read_to_string(memory_path(ctx, &c.id)).unwrap_or_default();
         let task = format!("Cluster task: {}\n\nYour part: {}\n\nCluster memory so far:\n{}\n\nDo your part and report the evidence.",
                            c.task, if part.task.is_empty() { &c.task } else { &part.task }, memory.chars().take(10_000).collect::<String>());
-        match run_model(ctx, c, part, &system, &task, profile.max_steps) {
+        match run_model(ctx, c, part, &system, &task, profile.max_steps, cancel, limits) {
             Ok(done) => {
                 c.parts[i].state = "done".to_string();
                 c.parts[i].output = done.text.clone();
@@ -616,6 +794,29 @@ fn run_workers(ctx: &Ctx, c: &mut Cluster, profile: &Profile, feedback: &str, be
                 c.output.push_str(&format!("\n--- {} ({}) ---\n{}\n", part.name, part.slot, done.text));
                 memory_line(ctx, c, part, &model, &done.text, "done");
                 c.done = (c.done + 1).min(c.total);
+                if let Some(stop) = limits.over(ctx) {
+                    // The answer is not merged: the call that crossed the limit is the last call of the cluster.
+                    c.parts[i].state = "failed".to_string();
+                    c.parts[i].error = stop.clone();
+                    c.error = stop;
+                    c.updated = now();
+                    save(ctx, c)?;
+                    report(ctx, c, &part.name, &c.error);
+                    return Err(c.error.clone());
+                }
+            }
+            Err(e) if e.starts_with("BUDGET: ") => {
+                c.parts[i].state = "failed".to_string();
+                c.parts[i].error = e.clone();
+                memory_line(ctx, c, part, &model, &format!("NOT done: {}", e), "failed");
+                c.error = e;
+                c.updated = now();
+                save(ctx, c)?;
+                report(ctx, c, &part.name, &c.error);
+                return Err(c.error.clone());
+            }
+            Err(e) if e == "stopped" && (cancel.load(Ordering::SeqCst) || kill_requested(ctx, &c.id)) => {
+                return Err("killed".to_string());
             }
             Err(e) => {
                 c.parts[i].state = "failed".to_string();
@@ -632,12 +833,10 @@ fn run_workers(ctx: &Ctx, c: &mut Cluster, profile: &Profile, feedback: &str, be
     Ok(all_ok)
 }
 
-fn validate(ctx: &Ctx, c: &mut Cluster, profile: &Profile, before: f64) -> Result<bool, String> {
+fn validate(ctx: &Ctx, c: &mut Cluster, profile: &Profile, limits: Limits, cancel: &AtomicBool) -> Result<bool, String> {
     let Some(part) = &profile.validator else { return Ok(true); };
-    if kill_requested(ctx, &c.id) { return Err("killed".to_string()); }
-    if profile.budget_eur > 0.0 && budget_spent(ctx, before) >= profile.budget_eur {
-        return Err(format!("budget of {:.2} EUR used before the validator", profile.budget_eur));
-    }
+    if kill_requested(ctx, &c.id) || cancel.load(Ordering::SeqCst) { return Err("killed".to_string()); }
+    if let Some(stop) = limits.over(ctx) { return Err(stop); }
     let model = match model_for_part(ctx, part) {
         Ok(m) => m,
         Err(e) => { c.error = e; c.evidence.clear(); return Ok(false); }
@@ -649,10 +848,12 @@ fn validate(ctx: &Ctx, c: &mut Cluster, profile: &Profile, before: f64) -> Resul
     save(ctx, c)?;
     report(ctx, c, "validator", "");
     let memory = fs::read_to_string(memory_path(ctx, &c.id)).unwrap_or_default();
-    let out = run_model(ctx, c, part, &validator_system(c, part, &model), &validator_prompt(c, &memory), 4);
+    let out = run_model(ctx, c, part, &validator_system(c, part, &model), &validator_prompt(c, &memory), 4, cancel, limits);
     let done = match out {
         Ok(d) => d,
         Err(e) => {
+            if e.starts_with("BUDGET: ") { return Err(e); }
+            if e == "stopped" && (cancel.load(Ordering::SeqCst) || kill_requested(ctx, &c.id)) { return Err("killed".to_string()); }
             c.error = format!("validator: {}", e);
             c.evidence.clear();
             if let Some(p) = c.parts.get_mut(idx) { p.state = "failed".to_string(); p.error = e.clone(); }
@@ -715,6 +916,12 @@ fn apply_worktree(c: &Cluster) -> Result<(), String> {
 
 /// Runs one cluster: every worker part, then the validator. A FAIL sends the result back to the workers up to `retries`.
 pub fn run_cluster(ctx: &Ctx, id: &str) -> Result<String, String> {
+    run_cluster_inner(ctx, id, None)
+}
+
+/// `run_cluster` with the euro baseline of the whole orchestration. Every cluster of one session therefore shares one
+/// `session_budget_eur`, beside its own `budget_eur`.
+fn run_cluster_inner(ctx: &Ctx, id: &str, session_before: Option<f64>) -> Result<String, String> {
     let mut c = load(ctx, id)?;
     if c.state == "killed" { return Ok(format!("cluster {} was already killed", id)); }
     let profile = profile(ctx, &c.profile)?;
@@ -735,6 +942,10 @@ pub fn run_cluster(ctx: &Ctx, id: &str) -> Result<String, String> {
         report(ctx, &c, "worktree", &c.error);
         return Ok(format!("cluster {} blocked: {}", id, c.error));
     }
+    let cancel = Arc::new(AtomicBool::new(false));
+    register_cancel(&c.id, &cancel);
+    let _cancel_guard = CancelGuard(c.id.clone());
+    let _kill_watch = KillWatch::start(ctx, &c.id, cancel.clone());
     c.started = if c.started == 0 { now() } else { c.started };
     c.state = "working".to_string();
     c.done = 0;
@@ -748,11 +959,13 @@ pub fn run_cluster(ctx: &Ctx, id: &str) -> Result<String, String> {
     if !c.worktree.is_empty() { append_memory(ctx, &c, &format!("\nWorktree: {} · branch {}\n", c.worktree, c.branch)); }
     report(ctx, &c, "start", "");
     let before = crate::cost::total_eur(ctx);
+    let limits = Limits { cluster: profile.budget_eur, cluster_before: before,
+                          session: crate::cost::session_budget(ctx), session_before: session_before.unwrap_or(before) };
     let mut feedback = String::new();
     let mut ok = false;
     let mut workers_ok = true;
     for attempt in 0..=profile.retries {
-        if kill_requested(ctx, &c.id) {
+        if kill_requested(ctx, &c.id) || cancel.load(Ordering::SeqCst) {
             let note = cleanup_worktree(&mut c);
             c.state = "killed".to_string();
             c.error = "killed by the orchestrator".to_string();
@@ -761,7 +974,7 @@ pub fn run_cluster(ctx: &Ctx, id: &str) -> Result<String, String> {
             report(ctx, &c, "kill", "killed");
             return Ok(format!("cluster {} killed{}", id, if note.is_empty() { String::new() } else { format!(" · {}", note) }));
         }
-        workers_ok = match run_workers(ctx, &mut c, &profile, &feedback, before) {
+        workers_ok = match run_workers(ctx, &mut c, &profile, &feedback, limits, &cancel) {
             Ok(v) => v,
             Err(e) if e == "killed" => {
                 let note = cleanup_worktree(&mut c);
@@ -772,7 +985,7 @@ pub fn run_cluster(ctx: &Ctx, id: &str) -> Result<String, String> {
         };
         if !workers_ok { break; }
         if profile.validator.is_none() { ok = true; break; }
-        match validate(ctx, &mut c, &profile, before) {
+        match validate(ctx, &mut c, &profile, limits, &cancel) {
             Ok(true) => { ok = true; break; }
             Ok(false) => {
                 feedback = c.error.clone();
@@ -782,10 +995,22 @@ pub fn run_cluster(ctx: &Ctx, id: &str) -> Result<String, String> {
                     let _ = fs::OpenOptions::new().create(true).append(true).open(memory_path(ctx, &c.id)).and_then(|mut f| std::io::Write::write_all(&mut f, note.as_bytes()));
                 }
             }
+            Err(e) if e == "killed" => {
+                let note = cleanup_worktree(&mut c);
+                c.state = "killed".to_string(); c.error = "killed by the orchestrator".to_string(); c.updated = now(); save(ctx, &c)?;
+                return Ok(format!("cluster {} killed{}", id, if note.is_empty() { String::new() } else { format!(" · {}", note) }));
+            }
             Err(e) => { c.state = "blocked".to_string(); c.error = e; c.updated = now(); save(ctx, &c)?; return Ok(format!("cluster {} blocked: {}", id, c.error)); }
         }
     }
     let mut blocked = false;
+    if ok {
+        if let Some(stop) = limits.over(ctx) {
+            ok = false;
+            blocked = true;
+            c.error = stop;
+        }
+    }
     if ok && profile.worktree {
         if profile.validator.is_none() {
             ok = false;
@@ -974,6 +1199,8 @@ pub fn orchestrate(ctx: &Ctx, goal: &str, hint: Option<&str>, parallel: bool) ->
     let created = create_plan(ctx, &plan)?;
     let mut done: Vec<String> = Vec::new();
     let mut pending: Vec<(String, PlanCluster)> = created.clone();
+    // One euro baseline for the whole orchestration: every cluster also answers to the session budget.
+    let session_before = crate::cost::total_eur(ctx);
     let mut guard = 0;
     while !pending.is_empty() && guard < 8 {
         guard += 1;
@@ -983,11 +1210,11 @@ pub fn orchestrate(ctx: &Ctx, goal: &str, hint: Option<&str>, parallel: bool) ->
             let mut handles = Vec::new();
             for (id, _) in &ready {
                 let ctx = ctx.clone(); let id = id.clone();
-                handles.push(std::thread::spawn(move || { let _ = run_cluster(&ctx, &id); }));
+                handles.push(std::thread::spawn(move || { let _ = run_cluster_inner(&ctx, &id, Some(session_before)); }));
             }
             for h in handles { let _ = h.join(); }
         } else {
-            for (id, _) in &ready { let _ = run_cluster(ctx, id); }
+            for (id, _) in &ready { let _ = run_cluster_inner(ctx, id, Some(session_before)); }
         }
         for (_, p) in &ready { done.push(p.name.clone()); }
         pending.retain(|(_, p)| !ready.iter().any(|(_, r)| r.name == p.name));
@@ -1037,8 +1264,16 @@ pub fn kill(ctx: &Ctx, id: &str) -> String {
     if c.state == "done" || c.state == "failed" || c.state == "killed" { return format!("cluster {} is already {}", id, c.state); }
     let _ = fs::create_dir_all(cluster_dir(ctx, id));
     let _ = fs::write(cluster_dir(ctx, id).join("kill"), "1");
+    // A cluster in this process stops at once, including a model call that is waiting for its answer.
+    signal_cancel(id);
     // The worktree and its branch go now. A running cluster repeats the removal when it sees the kill flag.
     let note = cleanup_worktree(&mut c);
+    // The run may have stopped between the load above and the kill file. Never downgrade its final state to `killing`.
+    if let Ok(latest) = load(ctx, id) {
+        if matches!(latest.state.as_str(), "done" | "failed" | "killed") {
+            return format!("cluster {} stopped{}", id, if note.is_empty() { String::new() } else { format!(" · {}", note) });
+        }
+    }
     c.state = "killing".to_string();
     c.updated = now();
     let _ = save(ctx, &c);
@@ -1080,9 +1315,13 @@ mod tests {
     }
 
     fn tool_reply(name: &str, args: Value) -> String {
+        tool_reply_usage(name, args, 10, 2)
+    }
+
+    fn tool_reply_usage(name: &str, args: Value, tokens_in: u64, tokens_out: u64) -> String {
         json!({"choices": [{"finish_reason": "tool_calls", "message": {"role": "assistant", "content": "",
             "tool_calls": [{"id": "call-1", "type": "function", "function": {"name": name, "arguments": args.to_string()}}]}}],
-            "usage": {"prompt_tokens": 10, "completion_tokens": 2}}).to_string()
+            "usage": {"prompt_tokens": tokens_in, "completion_tokens": tokens_out}}).to_string()
     }
 
     fn fake_models(ctx: &mut Ctx, address: &str) {
@@ -1337,6 +1576,90 @@ mod tests {
         assert!(crate::proof::accept(&r).is_ok());
         let memory = fs::read_to_string(memory_path(&ctx, &c.id)).unwrap();
         assert!(memory.contains("evidence: cat hello.txt ok"), "{}", memory);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn write_profile(ctx: &Ctx, name: &str, value: Value) {
+        fs::create_dir_all(profile_dir(ctx)).unwrap();
+        fs::write(profile_dir(ctx).join(format!("{}.json", name)), value.to_string()).unwrap();
+    }
+
+    fn priced_models(ctx: &mut Ctx, address: &str) {
+        fake_models(ctx, address);
+        ctx.cfg["prices"] = json!({"test-cluster": [10.0, 10.0]});
+    }
+
+    #[test]
+    fn a_kill_ends_a_sleeping_api_call_within_two_seconds() {
+        let (address, _seen) = crate::llm::fake::serve_parallel(vec![(200, text_reply("too late"), 5_000)]);
+        let (mut ctx, dir) = ctx();
+        fake_models(&mut ctx, &address);
+        let p = profile(&ctx, "solo").unwrap();
+        let c = new_cluster(&ctx, &p, "sleepy", "do the thing", None, Vec::new(), 0).unwrap();
+        let id = c.id.clone();
+        let runner_ctx = ctx.clone();
+        let handle = std::thread::spawn(move || run_cluster(&runner_ctx, &id));
+        std::thread::sleep(Duration::from_millis(400));
+        let started = std::time::Instant::now();
+        let said = kill(&ctx, &c.id);
+        assert!(said.contains("will stop"), "{}", said);
+        let out = handle.join().unwrap().unwrap();
+        let elapsed = started.elapsed();
+        assert!(elapsed < Duration::from_secs(2), "the kill took {:?}: {}", elapsed, out);
+        assert!(out.contains("killed"), "{}", out);
+        let c = load(&ctx, &c.id).unwrap();
+        assert_eq!(c.state.as_str(), "killed");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_call_that_crosses_the_cluster_budget_blocks_without_a_merge() {
+        let dir_text = std::env::temp_dir().join("penelope-budget-target");
+        let (address, seen) = crate::llm::fake::serve_parallel(vec![
+            (200, tool_reply_usage("write", json!({"path": "hello.txt", "text": "spent\n", "cwd": dir_text.to_string_lossy()}),
+                                   1_000_000, 1_000_000), 0),
+        ]);
+        let (mut ctx, dir) = ctx();
+        priced_models(&mut ctx, &address);
+        write_profile(&ctx, "budget", json!({
+            "name": "budget",
+            "workers": [{"name": "one", "role": "scout", "model": "main"}],
+            "validator": {"name": "check", "role": "judge", "model": "judge"},
+            "budget_eur": 0.01, "worktree": false, "retries": 0
+        }));
+        let p = profile(&ctx, "budget").unwrap();
+        let c = new_cluster(&ctx, &p, "budget", "try a big call", None, Vec::new(), 0).unwrap();
+        let out = run_cluster(&ctx, &c.id).unwrap();
+        assert!(out.contains("blocked"), "{}", out);
+        let c = load(&ctx, &c.id).unwrap();
+        assert_eq!(c.state.as_str(), "blocked");
+        assert!(c.error.starts_with("BUDGET: "), "{}", c.error);
+        assert_eq!(seen.lock().unwrap().len(), 1, "the call that crossed the limit was the last one");
+        assert_eq!(fs::read_to_string(dir.join("hello.txt")).unwrap(), "base\n", "nothing was merged");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_session_budget_stops_a_cluster_that_has_no_budget_of_its_own() {
+        let (address, seen) = crate::llm::fake::serve_parallel(vec![
+            (200, tool_reply_usage("read", json!({"path": "hello.txt"}), 1_000_000, 1_000_000), 0),
+        ]);
+        let (mut ctx, dir) = ctx();
+        priced_models(&mut ctx, &address);
+        ctx.cfg["session_budget_eur"] = json!(0.01);
+        write_profile(&ctx, "nobudget", json!({
+            "name": "nobudget",
+            "workers": [{"name": "one", "role": "scout", "model": "main"}],
+            "validator": {"name": "check", "role": "judge", "model": "judge"},
+            "worktree": false, "retries": 0
+        }));
+        let p = profile(&ctx, "nobudget").unwrap();
+        let c = new_cluster(&ctx, &p, "session", "read one file", None, Vec::new(), 0).unwrap();
+        let out = run_cluster(&ctx, &c.id).unwrap();
+        assert!(out.contains("blocked"), "{}", out);
+        let c = load(&ctx, &c.id).unwrap();
+        assert!(c.error.starts_with("BUDGET: the session"), "{}", c.error);
+        assert_eq!(seen.lock().unwrap().len(), 1);
         let _ = fs::remove_dir_all(&dir);
     }
 

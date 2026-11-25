@@ -46,6 +46,28 @@ without V; a Claude tool log becomes `cargo test ok` and `cat missing.txt failed
 Open: a live Claude validator was not run in this session (no Claude login in the test environment). The tool-log
 path is covered by a unit test of `checks_from_log`, not by a real `claude` call.
 
+### 1.3 Stop a running model call, hard budget
+
+`run_cluster()` now starts a watcher on the cluster's `kill` file and keeps an `Arc<AtomicBool>` in a process-wide
+slot. The flag reaches `llm::run_loop` through the new `run_loop_with`; `chat_cancel` sends the HTTP request from a
+worker thread and returns as soon as the flag is set, so a kill ends a part that is still waiting for the provider.
+`cluster kill ID` also sets the flag directly when the cluster runs in the same process. A Claude CLI part is started
+as a child and kept in a process slot; on cancel the child and its descendants are killed, not only the parent.
+
+The budget is checked after every model answer with the usage of the loop that is still running. `budget_eur` on the
+profile is joined by `session_budget_eur` in `config.json`; the orchestration takes one euro baseline and every cluster
+of the session shares it. A crossing returns `BUDGET: ...`, the cluster ends `blocked`, and no worktree patch is
+applied. A model without a price cannot be stopped in euro and is not guessed.
+
+Measured: `cd cli && cargo test` → `184 passed; 0 failed` (2026-11-25). New tests: a fake server sleeps five seconds,
+`cluster kill` returns the run in under two seconds after the kill, state `killed`; a reply with one million input and
+output tokens against a 0.01 EUR cluster budget blocks after one request and leaves `hello.txt` at `base`; the same
+crossing against `session_budget_eur` blocks a cluster that has no budget of its own.
+
+Open: an abandoned HTTP request keeps its socket until the provider's timeout; the part is over, but the provider may
+still bill the answer. The Claude kill path has no live Claude login in this environment and is covered by unit
+structure only, not by a real `claude` child.
+
 This is a working increment, not a claim that every limit is gone. The last section names what is still open and how
 each claim can be checked on this machine.
 

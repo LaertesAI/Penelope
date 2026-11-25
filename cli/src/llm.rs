@@ -4,6 +4,8 @@
 
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
+use std::time::Duration;
 
 /// The version header of the Messages API, from the API reference on 2026-11-24. The setting `api_version` replaces it.
 pub const ANTHROPIC_VERSION: &str = "2026-10-21";
@@ -69,43 +71,106 @@ fn scrub(text: &str, key: &str) -> String {
     if key.len() < 6 { text.to_string() } else { text.replace(key, "[key]") }
 }
 
-/// Sends one request and returns the body as JSON. Status 429 and 5xx are tried again twice.
-fn post(url: &str, headers: &[(&str, String)], body: &Value, key: &str, seconds: u64) -> Result<Value, String> {
+/// One raw HTTP answer. The body stays text until the key is scrubbed out of it.
+struct RawReply {
+    status: u16,
+    location: Option<String>,
+    retry_after: Option<u64>,
+    body: String,
+}
+
+fn send_raw(url: &str, headers: &[(String, String)], body: &Value, seconds: u64) -> Result<RawReply, String> {
+    let mut req = crate::net::agent(seconds).post(url);
+    for (name, value) in headers {
+        req = req.set(name, value);
+    }
+    let read = |resp: ureq::Response| -> Result<RawReply, String> {
+        let status = resp.status();
+        let location = resp.header("location").map(str::to_string);
+        let retry_after = resp.header("retry-after").and_then(|s| s.parse::<u64>().ok());
+        let body = resp.into_string().map_err(|e| format!("the answer of {} could not be read: {}", url, e))?;
+        Ok(RawReply { status, location, retry_after, body })
+    };
+    match req.send_json(body.clone()) {
+        Ok(resp) => read(resp),
+        Err(ureq::Error::Status(_, resp)) => read(resp),
+        Err(e) => Err(format!("no answer from {}: {}", url, e)),
+    }
+}
+
+/// Sends one request in a thread and returns as soon as the cancel flag is set. The socket of the abandoned request
+/// closes at its own timeout; the part itself is over at once, which is what a kill promises.
+fn send_cancel(url: &str, headers: &[(String, String)], body: &Value, seconds: u64, cancel: &AtomicBool) -> Result<RawReply, String> {
+    if cancel.load(Ordering::SeqCst) {
+        return Err("stopped".to_string());
+    }
+    let (tx, rx) = mpsc::channel();
+    let label = url.to_string();
+    let (url, headers, body) = (url.to_string(), headers.to_vec(), body.clone());
+    std::thread::spawn(move || { let _ = tx.send(send_raw(&url, &headers, &body, seconds)); });
+    loop {
+        if cancel.load(Ordering::SeqCst) {
+            return Err("stopped".to_string());
+        }
+        match rx.recv_timeout(Duration::from_millis(50)) {
+            Ok(result) => return result,
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Err(format!("no answer from {}", label)),
+        }
+    }
+}
+
+/// Sleeps in short pieces so a kill does not wait for the retry pause. False means cancelled.
+fn sleep_cancel(seconds: u64, cancel: Option<&AtomicBool>) -> bool {
+    let until = std::time::Instant::now() + Duration::from_secs(seconds);
+    while std::time::Instant::now() < until {
+        if cancel.map(|c| c.load(Ordering::SeqCst)).unwrap_or(false) {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    cancel.map(|c| !c.load(Ordering::SeqCst)).unwrap_or(true)
+}
+
+/// Sends one request and returns the body as JSON. Status 429 and 5xx are tried again twice. A set cancel flag ends
+/// the wait at once, including the pause between two tries.
+fn post(url: &str, headers: &[(&str, String)], body: &Value, key: &str, seconds: u64, cancel: Option<&AtomicBool>) -> Result<Value, String> {
+    let headers: Vec<(String, String)> = headers.iter().map(|(name, value)| (name.to_string(), value.clone())).collect();
     let mut wait = 2;
     for attempt in 0..3 {
-        let mut req = crate::net::agent(seconds).post(url);
-        for (name, value) in headers {
-            req = req.set(name, value);
+        if cancel.map(|c| c.load(Ordering::SeqCst)).unwrap_or(false) {
+            return Err("stopped".to_string());
         }
-        match req.send_json(body.clone()) {
-            Ok(resp) => {
-                if (300..400).contains(&resp.status()) {
-                    let to = resp.header("location").unwrap_or("an address the answer did not name");
-                    return Err(format!("{} answered with a redirect to {}. Redirects are not followed, so the key cannot travel to another host.", url, to));
-                }
-                let text = resp.into_string().map_err(|e| format!("the answer of {} could not be read: {}", url, e))?;
-                return serde_json::from_str(&scrub(&text, key)).map_err(|_| format!("{} answered with text that is no JSON", url));
-            }
-            Err(ureq::Error::Status(code, resp)) => {
-                let after = resp.header("retry-after").and_then(|s| s.parse::<u64>().ok());
-                let text = scrub(&resp.into_string().unwrap_or_default(), key);
-                if (code == 429 || code >= 500) && attempt < 2 {
-                    std::thread::sleep(std::time::Duration::from_secs(after.unwrap_or(wait).min(20)));
-                    wait *= 3;
-                    continue;
-                }
-                let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
-                let said = v["error"]["message"].as_str().or(v["message"].as_str()).or(v["error"].as_str()).map(String::from)
-                    .unwrap_or_else(|| text.split_whitespace().collect::<Vec<_>>().join(" "));
-                let hint = match code {
-                    401 | 403 => ". Check the environment variable with the key (penelope providers shows whether it is set)",
-                    404 => ". Check the address and the model name in config.json",
-                    _ => "",
-                };
-                return Err(format!("{} answered with status {}: {}{}", url, code, said.chars().take(300).collect::<String>(), hint));
-            }
-            Err(e) => return Err(scrub(&format!("no answer from {}: {}", url, e), key)),
+        let raw = match cancel {
+            Some(cancel) => send_cancel(url, &headers, body, seconds, cancel)?,
+            None => send_raw(url, &headers, body, seconds)?,
+        };
+        if (300..400).contains(&raw.status) {
+            let to = raw.location.as_deref().unwrap_or("an address the answer did not name");
+            return Err(format!("{} answered with a redirect to {}. Redirects are not followed, so the key cannot travel to another host.", url, to));
         }
+        let text = scrub(&raw.body, key);
+        if (200..300).contains(&raw.status) {
+            return serde_json::from_str(&text).map_err(|_| format!("{} answered with text that is no JSON", url));
+        }
+        let code = raw.status;
+        if (code == 429 || code >= 500) && attempt < 2 {
+            let pause = raw.retry_after.unwrap_or(wait).min(20);
+            if !sleep_cancel(pause, cancel) {
+                return Err("stopped".to_string());
+            }
+            wait *= 3;
+            continue;
+        }
+        let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+        let said = v["error"]["message"].as_str().or(v["message"].as_str()).or(v["error"].as_str()).map(String::from)
+            .unwrap_or_else(|| text.split_whitespace().collect::<Vec<_>>().join(" "));
+        let hint = match code {
+            401 | 403 => ". Check the environment variable with the key (penelope providers shows whether it is set)",
+            404 => ". Check the address and the model name in config.json",
+            _ => "",
+        };
+        return Err(format!("{} answered with status {}: {}{}", url, code, said.chars().take(300).collect::<String>(), hint));
     }
     Err(format!("{} gave no answer in 3 tries", url))
 }
@@ -128,6 +193,11 @@ pub fn effort(model: &Value) -> Option<&str> {
 }
 
 pub fn chat(model: &Value, system: &str, history: &[Value], tools: &[Value]) -> Result<Reply, String> {
+    chat_cancel(model, system, history, tools, None)
+}
+
+/// `chat` with a cancel flag. The flag ends an HTTP request that is still waiting for its answer.
+pub fn chat_cancel(model: &Value, system: &str, history: &[Value], tools: &[Value], cancel: Option<&AtomicBool>) -> Result<Reply, String> {
     let key = crate::providers::key(model);
     let name = model["model"].as_str().unwrap_or("");
     let seconds = model["timeout"].as_u64().unwrap_or(300);
@@ -160,7 +230,7 @@ pub fn chat(model: &Value, system: &str, history: &[Value], tools: &[Value]) -> 
             body["fallbacks"] = model["fallbacks"].clone();
             headers.push(("anthropic-beta", "server-side-fallback-2026-07-01".to_string()));
         }
-        let v = post(&format!("{}/v1/messages", base), &headers, &body, &key, seconds)?;
+        let v = post(&format!("{}/v1/messages", base), &headers, &body, &key, seconds, cancel)?;
         let stop = v["stop_reason"].as_str().unwrap_or("").to_string();
         let blocks = v["content"].as_array().cloned().unwrap_or_default();
         if blocks.is_empty() && stop.is_empty() {
@@ -202,7 +272,7 @@ pub fn chat(model: &Value, system: &str, history: &[Value], tools: &[Value]) -> 
     if !key.is_empty() {
         headers.push(("Authorization", format!("Bearer {}", key)));
     }
-    let v = post(&format!("{}/chat/completions", base), &headers, &body, &key, seconds)?;
+    let v = post(&format!("{}/chat/completions", base), &headers, &body, &key, seconds, cancel)?;
     let choice = &v["choices"][0];
     if !choice["message"].is_object() {
         return Err(format!("the answer holds no message: {}", v.to_string().chars().take(200).collect::<String>()));
@@ -227,14 +297,29 @@ pub fn chat(model: &Value, system: &str, history: &[Value], tools: &[Value]) -> 
 #[allow(clippy::too_many_arguments)]
 pub fn run_loop(model: &Value, system: &str, history: &mut Vec<Value>, tools: &[Value], rounds: usize, cancel: Option<&AtomicBool>, usage: &mut Usage,
                 exec: &mut dyn FnMut(&ToolCall) -> (String, bool), on_text: &mut dyn FnMut(&str)) -> Result<String, String> {
+    run_loop_with(model, system, history, tools, rounds, cancel, usage, &mut |_| None, exec, on_text)
+}
+
+/// `run_loop` with a tick after every model answer. The tick sees the usage of the whole loop; a returned text ends
+/// the loop with that error. Clusters use it to check a budget and the zombie watch while a part is still running.
+#[allow(clippy::too_many_arguments)]
+pub fn run_loop_with(model: &Value, system: &str, history: &mut Vec<Value>, tools: &[Value], rounds: usize, cancel: Option<&AtomicBool>, usage: &mut Usage,
+                     tick: &mut dyn FnMut(&Usage) -> Option<String>,
+                     exec: &mut dyn FnMut(&ToolCall) -> (String, bool), on_text: &mut dyn FnMut(&str)) -> Result<String, String> {
     let kind = kind_of(model).to_string();
     for _ in 0..rounds {
         if cancel.map(|c| c.load(Ordering::SeqCst)).unwrap_or(false) {
             return Err("stopped".to_string());
         }
-        let reply = chat(model, system, history, tools)?;
+        if let Some(stop) = tick(usage) {
+            return Err(stop);
+        }
+        let reply = chat_cancel(model, system, history, tools, cancel)?;
         usage.tokens_in += reply.tokens_in;
         usage.tokens_out += reply.tokens_out;
+        if let Some(stop) = tick(usage) {
+            return Err(stop);
+        }
         let stop = reply.stop.as_str();
         if stop.starts_with("refusal") || stop == "content_filter" {
             return Err(format!("the model declined this request: {}. The request is not part of the stored history.", stop));
@@ -362,6 +447,58 @@ pub mod fake {
                 let mut stream = reader.into_inner();
                 let _ = write!(stream, "HTTP/1.1 {} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", status, reply.len(), reply);
                 let _ = stream.flush();
+            }
+        });
+        (address, seen)
+    }
+
+    /// Like `serve`, but every answer waits its own delay in milliseconds before it is written, and each connection
+    /// has its own thread. Tests use it for a model call that sleeps and for parts that must overlap.
+    pub fn serve_parallel(replies: Vec<(u16, String, u64)>) -> (String, Arc<Mutex<Vec<Seen>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = format!("http://{}", listener.local_addr().unwrap());
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let queue = Arc::new(Mutex::new(replies));
+        std::thread::spawn(move || {
+            let mut handlers = Vec::new();
+            loop {
+                let Ok((stream, _)) = listener.accept() else { return };
+                let job = queue.clone();
+                let log = log.clone();
+                handlers.push(std::thread::spawn(move || {
+                    let (status, reply, delay) = match job.lock().unwrap().pop() { Some(r) => r, None => return };
+                    let mut reader = BufReader::new(stream);
+                    let (mut first, mut headers, mut length) = (String::new(), Vec::new(), 0usize);
+                    let _ = reader.read_line(&mut first);
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                            break;
+                        }
+                        let line = line.trim().to_lowercase();
+                        if let Some(n) = line.strip_prefix("content-length:") {
+                            length = n.trim().parse().unwrap_or(0);
+                        }
+                        headers.push(line);
+                    }
+                    let mut body = vec![0u8; length];
+                    let _ = reader.read_exact(&mut body);
+                    log.lock().unwrap().push(Seen { path: first.split_whitespace().nth(1).unwrap_or("").to_string(), headers,
+                                                    body: serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null) });
+                    if delay > 0 {
+                        std::thread::sleep(std::time::Duration::from_millis(delay));
+                    }
+                    let mut stream = reader.into_inner();
+                    let _ = write!(stream, "HTTP/1.1 {} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", status, reply.len(), reply);
+                    let _ = stream.flush();
+                }));
+                if queue.lock().unwrap().is_empty() {
+                    break;
+                }
+            }
+            for handler in handlers {
+                let _ = handler.join();
             }
         });
         (address, seen)
