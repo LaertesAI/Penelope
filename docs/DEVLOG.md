@@ -207,6 +207,39 @@ asker's memory carries the answer, so a later target read does not see what it a
 This is a working increment, not a claim that every limit is gone. The last section names what is still open and how
 each claim can be checked on this machine.
 
+### 1.8 A prompt cluster before the workers, and a human part
+
+A profile may name `before: "PROFILE"`. Before any worker of the cluster starts, `run_cluster` creates a child cluster
+from that profile with the original task, runs it, and takes its worker text as the new task. The task the workers
+receive is therefore the output of the prompt cluster, not the text the orchestrator wrote. The original and the
+rewritten task are stored in `<cluster>/prompt.txt`; the main memory names the prompt cluster and keeps only the
+rewritten task, so the worker prompt is not filled with both texts. A failed prompt cluster blocks the main cluster
+and no worker starts.
+
+The chain is explicit and bounded: a profile cannot name itself, a prompt profile cannot name its own `before`, and a
+prompt profile may not have a `worker` part or `worktree: true`, so it can only rewrite and cannot write. The prompt
+cluster is a child in the same tree and obeys the root `max_depth` and `max_models`; `max_models` counts its parts
+before it is created. The built-in `prompt` profile uses Aiolos (condenser) and Argos (judge) with `worktree: false`.
+
+A worker part with `role: "human"` makes no model call. It asks a yes/no question through
+`tools::ask_person` when `PENELOPE_APPROVE_DIR` is set, and it always runs alone, never inside a parallel wave. A yes
+marks the part done and lets the parts that need it run. A no marks the part failed, writes the question and the
+answer into the memory, and stops the cluster before any dependent part. Without an interface the answer comes from
+`"human": "yes"` or `"human": "no"` in `config.json`; if that setting is missing the part is refused with a message
+that names both settings. The code never falls back to yes.
+
+Measured: `cd cli && cargo test` → `232 passed; 0 failed` plus the 2 eval integration tests (2026-11-26). New tests:
+a rewriter cluster receives `build a bridge across the north river` and the worker request contains
+`REWRITE: build the bridge and run cargo test` and no `north river`; the prompt cluster is a done child and
+`prompt.txt` holds both texts; a human part before a `git push` part is answered `no`, the push part stays `queued`,
+no model request is made and no file is written; a human part without an interface and without `human` is refused
+with `never assumes yes`; a self-named before, a before chain and a before profile with a worker part are refused; a
+human validator is refused.
+
+Open: a kill during the prompt cluster writes the kill file of the parent, but the already running prompt child is
+not signalled until it returns; the next check stops the parent before any worker. The prompt text is cut at 6,000
+characters with a visible note. `ask_person` keeps its existing 120-second timeout; a timeout counts as no.
+
 ## Why this version exists
 
 The request had one sentence that decided the architecture: *no interface in tool routing may be corrupted in any
