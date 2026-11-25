@@ -595,7 +595,7 @@ fn roles_dialog(f: &mut Frame, app: &App, area: Rect, sel: usize) {
         let chosen = i == sel;
         let bg = if chosen { NIGHT } else { RAISED };
         fill(f, Rect::new(inner.x.saturating_sub(1), y, inner.width + 2, 1), bg);
-        let m = &app.ctx.cfg["roles"][role];
+        let m = if *role == "scout" { &app.ctx.cfg["scout"] } else { &app.ctx.cfg["roles"][role] };
         let model = m["model"].as_str().filter(|s| !s.is_empty()).unwrap_or("follows the weak model");
         let effort = m["effort"].as_str().unwrap_or("");
         put(f, inner, inner.x, y, if chosen { "●" } else { "○" }, on(if chosen { SEA } else { DIM }, bg));

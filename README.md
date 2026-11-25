@@ -353,7 +353,7 @@ penelope doctor
 
 | Setting | Values | Effect |
 |---|---|---|
-| `main`, `weak`, `scout` | `kind` is `claude-cli`, `openai` or `anthropic` | The HTTP kinds take `base_url`, `model` and `api_key_env`. `anthropic` also takes `max_tokens` (default 16000) and `api_version`. Without `scout` the scout uses `weak`. Search stays client-side by default; the local server is in [`docs/SERVER.md`](docs/SERVER.md) and the remaining APIs are in [`docs/SERVER-APIS.md`](docs/SERVER-APIS.md). |
+| `main`, `weak`, `scout` | `kind` is `claude-cli`, `openai` or `anthropic` | The HTTP kinds take `base_url`, `model`, `api_key_env` and optionally `effort` (`low`, `medium`, `high`, `max`, or an OpenCode level). `anthropic` also takes `max_tokens` (default 16000) and `api_version`. Without `scout` the scout uses `weak`. Search stays client-side by default; the local server is in [`docs/SERVER.md`](docs/SERVER.md) and the remaining APIs are in [`docs/SERVER-APIS.md`](docs/SERVER-APIS.md). |
 | `run_policy` | `safe`, `all` | `safe` runs read-only and build commands without shell operators. Every other command asks in the interface and is refused outside it. `all` runs every command. |
 | `edit_policy` | `ask`, `all` | `ask` asks before every change to a file. `all` changes files without a question. |
 | `delegate` | `auto`, `web`, `offer`, `off` | `auto` sends every search to the scout, the main model has no search tools. `web` sends web research only. `offer` lets the main model choose. `off` has no scout. |
