@@ -5,7 +5,7 @@
 **Scope:** one contract layer for every tool, models in every role, agents written with `$`, shared memory and an
 Obsidian brain, cost in euro, ScreenCodec and Penelope's own cursor, plugin install and import, a startup weave, and
 the commands and views that make these reachable.  
-**Tests:** 162 passed, 0 failed. No test needs a key. The live runs against OpenCode Go are written down below and used no test fixture.
+**Tests:** 165 passed, 0 failed. No test needs a key. The live runs against OpenCode Go are written down below and used no test fixture.
 
 This is a working increment, not a claim that every limit is gone. The last section names what is still open and how
 each claim can be checked on this machine.
@@ -855,7 +855,7 @@ the command, inserted `/demo:echo `, typed `plugin-ok` and got `plugin-ok` back 
 The branch `feat/cluster-building-blocks` carried three unwired modules: `proof.rs` (a report line with an evidence
 field `V:`), `notes.rs` (Markdown notes with links and `confirmed`/`open`/`stale`) and `advise.rs` (accepted and
 rejected results per part and task type, with a suggestion after five results). They were cherry-picked onto the
-cluster branch, the three `mod` lines stayed in `main.rs`, and the suite rose to 162 tests. Nothing calls the modules
+cluster branch, the three `mod` lines stayed in `main.rs`, and the suite rose to 165 tests. Nothing calls the modules
 yet; they are the base for Phase 1.2 and Phase 2.
 
 The one unexplained 105/109 flake did not return: twenty complete `cargo test` runs in a row passed, 20 of 20. The
@@ -924,7 +924,7 @@ New CLI commands: `tools`, `tool list`, `tool call NAME JSON`, `route`, `agents`
 
 ## Tests and evidence
 
-`cargo test` in `cli/`: **162 passed, 0 failed**. The new tests, all without a real provider:
+`cargo test` in `cli/`: **165 passed, 0 failed**. The new tests, all without a real provider:
 
 | Test | What it proves |
 |---|---|
@@ -1074,7 +1074,7 @@ body.
 
 ```bash
 cd cli
-cargo test                     # 162 tests, no model, no key
+cargo test                     # 165 tests, no model, no key
 
 ./target/release/penelope tools
 ./target/release/penelope serve --print-config

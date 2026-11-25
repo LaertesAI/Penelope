@@ -3,7 +3,7 @@
 <p align="center">
   <a href="cli/Cargo.toml"><img src="https://img.shields.io/badge/version-0.11.0-C4623E?style=flat-square&labelColor=1C1A17" alt="version 0.11.0"></a>
   <a href="cli/Cargo.toml"><img src="https://img.shields.io/badge/Rust_edition-2021-C4623E?style=flat-square&labelColor=1C1A17" alt="Rust edition 2021"></a>
-  <a href="#build"><img src="https://img.shields.io/badge/tests-162_passing-C4623E?style=flat-square&labelColor=1C1A17" alt="162 tests passing"></a>
+  <a href="#build"><img src="https://img.shields.io/badge/tests-165_passing-C4623E?style=flat-square&labelColor=1C1A17" alt="165 tests passing"></a>
   <a href="#status"><img src="https://img.shields.io/badge/platform-Linux-C4623E?style=flat-square&labelColor=1C1A17" alt="platform Linux"></a>
   <a href="#parts"><img src="https://img.shields.io/badge/MCP_tools-46-C4623E?style=flat-square&labelColor=1C1A17" alt="46 MCP tools"></a>
   <a href="docs/PROVIDERS.md"><img src="https://img.shields.io/badge/providers-35-C4623E?style=flat-square&labelColor=1C1A17" alt="35 providers"></a>
@@ -16,7 +16,7 @@
 Penelope is a coding agent for the terminal, written in Rust. It sends searches and long tool output to a cheaper
 model, keeps notes in a memory map, and asks before every change to a file.
 
-<p align="center"><img src="docs/screens/chat.png" alt="penelope: transcript on the left, the woven mark and the session numbers on the right" width="100%"></p>
+<p align="center"><img src="docs/screens/chat.png" alt="penelope in kitty: transcript on the left, the painted picture and the session numbers on the right" width="100%"></p>
 
 ## Status
 
@@ -26,11 +26,11 @@ model, keeps notes in a memory map, and asks before every change to a file.
 | Date | 2026-11-25 |
 | Stage | alpha: one developer, one PC, no packaged release |
 | Repository | https://github.com/LaertesAI/Penelope, branch `main` |
-| Source | [`cli/`](cli), 50 Rust files, 19,463 lines |
-| Binary | `cli/target/release/penelope`, 7.7 MB (7,755,256 bytes), built from source |
+| Source | [`cli/`](cli), 51 Rust files, 19,597 lines |
+| Binary | `cli/target/release/penelope`, 7.7 MB (7,838,000 bytes), built from source |
 | Build | `cargo build --release`, profile `release` with `opt-level = 2` and `strip = true` |
 | Toolchain | rustc 1.99.1, edition 2021 |
-| Tests | 162 passed, 0 failed, no test needs a key. Live runs are listed in the devlog. |
+| Tests | 165 passed, 0 failed, no test needs a key. Live runs are listed in the devlog. |
 | Real runs | 29 with the `claude` command up to 0.10.0, live OpenCode Go runs on 2026-11-24, and three live cluster runs with Claude + haiku on 2026-11-25. See [`DEVLOG.md`](docs/DEVLOG.md). |
 | Platform | Linux. Background jobs read `/proc`. Windows and macOS are untried. |
 | Settings folder | `.penelope/` in the project, else `~/.penelope/` |
@@ -64,7 +64,7 @@ Needed: a Rust toolchain, Linux, and one model source (the `claude` command, an 
 ```bash
 cd cli
 cargo build --release
-cargo test                          # 162 tests, no model call
+cargo test                          # 165 tests, no model call
 ./target/release/penelope doctor    # one line per program and setting Penelope depends on
 ```
 
@@ -135,7 +135,7 @@ The two screens are separate. `/providers` connects a provider: arrows choose, `
 | Plugins | `penelope plugin add DIR` registers a plugin folder of Claude Code with its commands, skills and MCP servers. `/plugins` is a filterable screen; a command runs as `/plugin:command ARGS`. | 0.2 / 0.12 | 3 tests, live command turn |
 | ZIP and server | `unzip` unpacks a ZIP inside the workspace after one question; `penelope serve` runs the local search, read, embed, rerank and redact API. | 0.11 | 3 tests, live ZIP, live HTTP API |
 | Statistic | `penelope stats` counts the characters kept away from the main model and the masked items. | 0.2 | yes |
-| Full screen interface | Transcript, input box, side panel with the woven mark, command list on `/`, palette on `ctrl+p`. | 0.3 | 12 turns |
+| Full screen interface | Transcript, input box, side panel with the painted picture, command list on `/`, palette on `ctrl+p`. | 0.3 | 12 turns |
 | Approval | A command outside the safe list asks: run once, allow all in this session, or refuse. | 0.3 | 3 commands |
 | Privacy filter | Known key formats, values behind names such as `password` or `token`, and private key blocks become `[masked:...]`. The level `pii` adds e-mail addresses and IBANs. | 0.4 | 5 turns |
 | Text piece by piece | The answer appears while the model writes. | 0.4 | 15 words in 7 pieces |
@@ -195,7 +195,11 @@ The 46 tools: `run`, `run_detail`, `job_start`, `job_read`, `job_stop`, `fetch`,
 
 ## The full screen interface
 
-<p align="center"><img src="docs/screens/home.png" alt="Start screen of Penelope with the woven mark and the wordmark, the state of the memory map and the input box" width="80%"></p>
+<p align="center"><img src="docs/screens/home.png" alt="Start screen of penelope in kitty with the painted picture of Penelope at the loom and the input box" width="80%"></p>
+
+The painted picture is a real picture, sent through the graphics protocol of kitty. It shows in kitty, Ghostty, WezTerm and Konsole.
+Other terminals and tmux show the name alone. `PENELOPE_PICTURE=off` switches it off, `PENELOPE_PICTURE=on` forces it.
+The screens in this file are pictures of kitty on a virtual display. The chat screen shows the stored transcript of the run of 2026-11-24, opened as a session.
 
 `penelope` without arguments opens it. `penelope chat --plain` keeps the line by line chat. A pipe on standard input
 or output selects the plain chat by itself.

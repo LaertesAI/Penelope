@@ -1,8 +1,7 @@
-//! Colours and pictures of the terminal interface. A picture is a grid of pixels. Two pixels share one character
-//! cell: the upper half block carries the upper pixel as text colour and the lower pixel as background colour.
+//! Colours and moods of the terminal interface, and the screen as an SVG picture.
+//! The painted picture of Penelope lives in `picture.rs`.
 
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -33,47 +32,6 @@ pub fn col(c: Rgb) -> Color {
     } else {
         let q = |v: u8| ((v as u16 * 5 + 127) / 255) as u8;
         Color::Indexed(16 + 36 * q(c.0) + 6 * q(c.1) + q(c.2))
-    }
-}
-
-#[derive(Clone)]
-pub struct Bitmap {
-    pub w: usize,
-    pub h: usize,
-    px: Vec<Rgb>,
-}
-
-impl Bitmap {
-    fn from_rgb(w: usize, h: usize, bytes: &[u8]) -> Bitmap {
-        Bitmap { w, h, px: bytes.chunks(3).take(w * h).map(|c| (c[0], c[1], c[2])).collect() }
-    }
-
-    fn set(&mut self, x: usize, y: usize, c: Rgb) {
-        if x < self.w && y < self.h {
-            self.px[y * self.w + x] = c;
-        }
-    }
-
-    /// Rows of character cells the picture needs.
-    pub fn rows(&self) -> u16 {
-        self.h.div_ceil(2) as u16
-    }
-
-    /// Draws the picture with its upper left corner at (x, y). Cells outside `clip` are left alone.
-    pub fn draw(&self, buf: &mut Buffer, x: u16, y: u16, clip: Rect) {
-        for row in 0..self.h.div_ceil(2) {
-            for cx in 0..self.w {
-                let (px, py) = (x + cx as u16, y + row as u16);
-                if px < clip.x || px >= clip.right() || py < clip.y || py >= clip.bottom() {
-                    continue;
-                }
-                let top = self.px[row * 2 * self.w + cx];
-                let bottom = if row * 2 + 1 < self.h { self.px[(row * 2 + 1) * self.w + cx] } else { top };
-                if let Some(cell) = buf.cell_mut((px, py)) {
-                    cell.set_symbol(if top == bottom { " " } else { "▀" }).set_fg(col(top)).set_bg(col(bottom));
-                }
-            }
-        }
     }
 }
 
@@ -112,35 +70,6 @@ impl Mood {
     }
 }
 
-/// The full mark from `brand/term-mark.svg`, 40 by 40 pixels, 40 columns and 20 rows. The start screen uses it; the
-/// side panel keeps the smaller woven square with the mood thread.
-pub fn mark() -> Bitmap {
-    Bitmap::from_rgb(40, 40, include_bytes!("../../art/mark_40x40.rgb"))
-}
-
-/// The woven square, 22 columns and 11 rows. The loose thread at the lower right takes the colour of the mood.
-/// `blink` dims the thread for one frame while Penelope is awake.
-pub fn head(mood: Mood, blink: bool) -> Bitmap {
-    let mut bm = Bitmap::from_rgb(22, 22, include_bytes!("../../art/weave_22x22.rgb"));
-    let mask = include_bytes!("../../art/thread_22x22.gray");
-    let thread = match mood {
-        Mood::Awake if blink => DIM,
-        Mood::Awake => CLAY,
-        Mood::Thinking | Mood::Working => SEA,
-        Mood::Asking => RED,
-        Mood::Learned => PAPER,
-        Mood::Asleep => DIM,
-    };
-    for (i, a) in mask.iter().take(22 * 22).enumerate() {
-        if *a > 0 {
-            let (a, base) = (*a as u32, bm.px[i]);
-            let mix = |t: u8, b: u8| ((t as u32 * a + b as u32 * (255 - a)) / 255) as u8;
-            bm.set(i % 22, i / 22, (mix(thread.0, base.0), mix(thread.1, base.1), mix(thread.2, base.2)));
-        }
-    }
-    bm
-}
-
 fn hex(c: Color, fallback: Rgb) -> String {
     let (r, g, b) = match c {
         Color::Rgb(r, g, b) => (r, g, b),
@@ -176,6 +105,11 @@ pub fn buffer_svg(buf: &Buffer) -> String {
                 }
             }
         }
+    }
+    if let Some(r) = super::picture::wanted() {
+        // the painted picture is square and as wide as its place
+        let side = r.width as f32 * cw;
+        out.push_str(&format!("<image x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" href=\"{}\"/>\n", r.x as f32 * cw, r.y as f32 * ch, side, side, super::picture::data_uri()));
     }
     out.push_str(&glyphs);
     out.push_str("</svg>\n");
