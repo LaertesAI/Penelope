@@ -3,9 +3,9 @@
 <p align="center">
   <a href="cli/Cargo.toml"><img src="https://img.shields.io/badge/version-0.11.0-C4623E?style=flat-square&labelColor=1C1A17" alt="version 0.11.0"></a>
   <a href="cli/Cargo.toml"><img src="https://img.shields.io/badge/Rust_edition-2021-C4623E?style=flat-square&labelColor=1C1A17" alt="Rust edition 2021"></a>
-  <a href="#build"><img src="https://img.shields.io/badge/tests-112_passing-C4623E?style=flat-square&labelColor=1C1A17" alt="112 tests passing"></a>
+  <a href="#build"><img src="https://img.shields.io/badge/tests-118_passing-C4623E?style=flat-square&labelColor=1C1A17" alt="118 tests passing"></a>
   <a href="#status"><img src="https://img.shields.io/badge/platform-Linux-C4623E?style=flat-square&labelColor=1C1A17" alt="platform Linux"></a>
-  <a href="#parts"><img src="https://img.shields.io/badge/MCP_tools-42-C4623E?style=flat-square&labelColor=1C1A17" alt="42 MCP tools"></a>
+  <a href="#parts"><img src="https://img.shields.io/badge/MCP_tools-43-C4623E?style=flat-square&labelColor=1C1A17" alt="43 MCP tools"></a>
   <a href="docs/PROVIDERS.md"><img src="https://img.shields.io/badge/providers-35-C4623E?style=flat-square&labelColor=1C1A17" alt="35 providers"></a>
   <a href="#status"><img src="https://img.shields.io/badge/status-alpha-C4623E?style=flat-square&labelColor=1C1A17" alt="status alpha"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/licence-MIT-C4623E?style=flat-square&labelColor=1C1A17" alt="licence MIT"></a>
@@ -26,11 +26,11 @@ model, keeps notes in a memory map, and asks before every change to a file.
 | Date | 2026-11-25 |
 | Stage | alpha: one developer, one PC, no packaged release |
 | Repository | https://github.com/LaertesAI/Penelope, branch `main` |
-| Source | [`cli/`](cli), 46 Rust files, 15,878 lines |
-| Binary | `cli/target/release/penelope`, 6.9 MB (7,268,368 bytes), built from source |
+| Source | [`cli/`](cli), 46 Rust files, 16,694 lines |
+| Binary | `cli/target/release/penelope`, 7.0 MB (7,386,840 bytes), built from source |
 | Build | `cargo build --release`, profile `release` with `opt-level = 2` and `strip = true` |
 | Toolchain | rustc 1.99.1, edition 2021 |
-| Tests | 112 passed, 0 failed, no test needs a key. Live runs are listed in the devlog. |
+| Tests | 118 passed, 0 failed, no test needs a key. Live runs are listed in the devlog. |
 | Real runs | 29 with the `claude` command up to 0.10.0, plus live runs with OpenCode Go on 2026-11-24: a tool call, an agent step and a ScreenCodec open/click/snapshot sequence. See [`DEVLOG.md`](docs/DEVLOG.md). |
 | Platform | Linux. Background jobs read `/proc`. Windows and macOS are untried. |
 | Settings folder | `.penelope/` in the project, else `~/.penelope/` |
@@ -61,7 +61,7 @@ Needed: a Rust toolchain, Linux, and one model source (the `claude` command, an 
 ```bash
 cd cli
 cargo build --release
-cargo test                          # 112 tests, no model call
+cargo test                          # 118 tests, no model call
 ./target/release/penelope doctor    # one line per program and setting Penelope depends on
 ```
 
@@ -92,6 +92,10 @@ penelope provider use alibaba-intl --workspace ID   # the address holds the work
 penelope provider use openai --base-url http://localhost:9000/v1 --model NAME
 ```
 
+In the full screen interface `/models` opens the provider list. Arrow keys choose, `tab` switches main/weaker, `m` opens the model names, and `enter` signs in:
+- Claude: the official `claude auth login` page, then the terminal comes back.
+- API providers: a second window takes the key and shows only its first four characters; `enter` stores it, `esc` cancels.
+
 - `config.json` stores the name of the environment variable. A key is read at the start of a request and stored nowhere.
 - The setup refuses a pasted key in place of a variable name.
 - A Claude subscription works through the `claude` command only. Penelope has no login of its own.
@@ -108,10 +112,16 @@ penelope provider use openai --base-url http://localhost:9000/v1 --model NAME
 | Routed tool output | `run` executes a shell command. Output over 40 lines goes to the weaker model and comes back as at most 12 lines. The raw output stays on disk under a run id. | 0.1 | yes |
 | Web pages | `fetch` loads a page and the weaker model answers one question from it. The page text never enters the main model. | 0.1 | 1 page |
 | Memory map | Notes live at waypoints under `.penelope/memory/`. A lookup follows signposts one level at a time and never searches all notes. A finished walk is stored, so the same request jumps to its waypoint. | 0.1 | 3 runs |
-| MCP server | `penelope mcp` offers all 42 tools to any MCP client. | 0.1 | every turn |
+| MCP server | `penelope mcp` offers all 43 tools to any MCP client. | 0.1 | every turn |
 | MCP management | `penelope mcp add/remove/allow/deny/list/call` manages standalone servers next to the plugin servers. | 0.11 | 1 test, live echo server |
 | Local HTTP API | `penelope serve` answers `/search`, `/read`, `/embed`, `/rerank`, `/redact` and `/whoami` on loopback, with a bearer token for a remote bind and 120 requests per minute. | 0.11 | 6 tests, live curl |
 | Worktrees | `penelope work new/list/diff/apply/remove` keeps a task on its own branch; the live tree changes only on `apply`. | 0.12 | 1 test, live git worktree |
+| Checkpoints and rewind | A checkpoint at every turn; `/rewind N` restores the transcript and the file changes of the last N turns. | 0.12 | 2 tests |
+| Role models | `/models` → `r`: tool calls, processing, research/web search, coding, judge, router and filter, each with its own provider. | 0.12 | 1 test |
+| Exact models and effort | `/models` → `m` lists exact Claude and OpenCode model names; `e` cycles the effort level. | 0.12 | 1 test, live menu |
+| Monthly budget | `/budget 20`, consumption and the rest of the month in the side panel and `/cost`. | 0.12 | 1 test |
+| Sandbox and allowlist | `/sandbox on` runs shell commands through bubblewrap without network; a confirmed command is kept hashed for this project. | 0.12 | 2 tests, live bwrap |
+| CI event stream | `penelope ask --json` writes newline-delimited events for CI and editors. | 0.12 | live Claude event stream |
 | Search ops | `search probe [--daily]`, `search instances add URL`, health file and a systemd timer. | 0.12 | 1 test, daily marker |
 | Eyes | With `screencodec-mcp` installed, pages and pictures arrive as text. | 0.1 | wired, no run in the harness |
 | Auto-learning | After each answer the weaker model files lasting rules of the user at a waypoint. | 0.2 | 2 runs |
@@ -143,7 +153,7 @@ penelope provider use openai --base-url http://localhost:9000/v1 --model NAME
 | Plugin install and import | `/plugins install LINK` clones, unpacks or registers a plugin; the first start takes over the plugins of other harnesses. A ZIP is unpacked into the plugin home first. | 0.11 | 5 tests, live ZIP |
 | Plugin administration | `plugin update NAME` pulls a git plugin or re-reads a local/ZIP one; `plugin remove NAME` takes it out of the registry and leaves the folder. | 0.11 | 1 test, live update/remove |
 | More tools | `session_search`, `http_request`, `json_query`, `git_diff`, `clipboard`, `agent`. | 0.11 | 1 test |
-| Startup animation | Five frames on a terminal, the first thread on the home screen; a pipe or `--no-animation` skips it. | 0.11 | 1 test |
+| Startup animation and keys | A crisp wordmark, a short weaving animation on the home screen, F5 for a new session and F6 twice for delete. | 0.11 / 0.12 | TUI tests, tmux capture |
 | Web search, ranked | 10 sources, cache, canonical URLs, diversity, scores, rate-limit fallback. A server search API and a reranker follow the same JSON contract. | 0.11 | 9 tests, live 8 results, live health rows |
 | Scraper | HTML to Markdown: article, metadata, JSON-LD, lists, tables, code, boilerplate removed. | 0.11 | 6 tests |
 | Research | several queries, the pages behind the hits, a cited report on the weak model. | 0.11 | 1 test, live cited report |
@@ -169,7 +179,7 @@ penelope provider use openai --base-url http://localhost:9000/v1 --model NAME
 | Messages API | The kind `anthropic` talks to the Messages API with tool use. | 0.10 | test only |
 | Sessions for HTTP endpoints | The messages of a conversation lie in `.penelope/sessions/ID.history.json`, so `penelope chat --resume N` goes on with it. | 0.10 | 1 resumed session against a stand-in script, no real provider |
 
-The 42 tools: `run`, `run_detail`, `job_start`, `job_read`, `job_stop`, `fetch`, `web_search`, `read`, `write`, `edit`, `unzip`,
+The 43 tools: `run`, `run_detail`, `job_start`, `job_read`, `job_stop`, `fetch`, `web_search`, `read`, `write`, `edit`, `unzip`, `pr_create`,
 `undo`, `find`, `grep`, `tree`, `outline`, `ask_user`, `scout`, `scouts`, `plan`, `memory_go`, `memory_note`,
 `memory_forget`, `memory_map`, `skill`, `git_commit`, `check`, `tool_new`, `tool_list`, `screen`, `cursor`,
 `mcp_servers`, `mcp_call`, `session_search`, `http_request`, `json_query`, `git_diff`, `clipboard`, `agent`,
@@ -177,7 +187,7 @@ The 42 tools: `run`, `run_detail`, `job_start`, `job_read`, `job_stop`, `fetch`,
 
 ## The full screen interface
 
-<p align="center"><img src="docs/screens/home.png" alt="Start screen of penelope with the name, the woven mark and the input box" width="80%"></p>
+<p align="center"><img src="docs/screens/home.png" alt="Start screen of Penelope with the crisp wordmark, the state of the memory map and the input box" width="80%"></p>
 
 `penelope` without arguments opens it. `penelope chat --plain` keeps the line by line chat. A pipe on standard input
 or output selects the plain chat by itself.
@@ -201,12 +211,13 @@ or output selects the plain chat by itself.
 | `f12` | save the screen as an SVG picture under `.penelope/screens/` |
 | `ctrl+c` | empty the input, leave when it is empty |
 
-Commands: `/new`, `/model`, `/models`, `/sessions`, `/setup`, `/providers`, `/undo`, `/jobs`,
-`/scout [auto|web|offer|off]`, `/crew`, `/map`, `/go TEXT`, `/note TEXT`, `/btw TEXT`, `/rules [TEXT]`, `/forge TOPIC`,
+Commands: `/new` (or F5), `/models` (providers; `r` role models, `m` exact names, `e` effort), `/sessions`, `/setup`, `/providers`, `/undo`, `/jobs`,
+`/scout [auto|web|offer|off]`, `/crew`, `/map`, `/go TEXT`, `/note TEXT`, `/btw TEXT`, `/rules [session|global] TEXT`, `/forge TOPIC`,
 `/unravel`, `/forget TEXT`, `/stats`, `/cost`, `/context TEXT`, `/route`, `/tools`, `/agents`, `/orchestrate GOAL`,
 `/brain [write]`, `/mcp [probe|add NAME COMMAND|remove NAME|allow NAME|deny NAME|call SERVER TOOL JSON]`,
 `/screen tools|open URL|see|click ID|desktop`, `/cursor X Y [click]`, `/export`, `/price MODEL IN OUT`, `/auto`,
-`/learn`, `/skills`, `/consolidate`, `/mode [NAME]`, `/login [NAME]`, `/logout NAME`, `/auth [verify]`,
+`/learn`, `/skills`, `/consolidate`, `/mode [NAME]`, `/login [NAME]`, `/logout NAME`, `/auth [verify]`, `/rewind N`,
+`/budget [EUR]`, `/sandbox on|off`,
 `/input [install|enable]`, `/audit`, `/update`,
 `/plugins install LINK|import|allow NAME|deny NAME|update NAME|remove NAME`, `/doctor`, `/copy`, `/shot`, `/sidebar`,
 `/help`, `/quit`.
@@ -268,6 +279,8 @@ penelope search instances add http://127.0.0.1:8080
 penelope work new task-1                      # a git worktree on branch agent/task-1
 penelope work diff task-1                     # the patch, live tree untouched
 penelope work apply task-1                    # one explicit yes
+penelope allow                                # confirmed commands for this project, masked
+penelope ask --json "run the tests"           # event stream for CI
 penelope research "How does tokio select work?" --depth standard --pages 4
 penelope scout "Where does this project parse its settings?"
 penelope run --ask "which test fails?" cargo test
@@ -296,7 +309,7 @@ penelope screen demo URL       # real ScreenCodec: open and read in one process
 penelope screen tools          # the tools ScreenCodec really offers
 penelope cursor X Y [--click]  # Penelope's own pointer
 penelope stats
-penelope mcp [--root DIR]         # serve the 42 tools to another MCP client
+penelope mcp [--root DIR]         # serve the 43 tools to another MCP client
 penelope mcp add NAME COMMAND [ARGS...] [--allow]
 penelope mcp remove NAME
 penelope mcp allow|deny NAME
@@ -353,6 +366,8 @@ penelope doctor
 | `roles` | object | One model setting per role: `router`, `filter`, `judge`, `worker`, `condenser`. A role without a model runs on fixed rules. `penelope provider use NAME --role ROLE` writes one. |
 | `cursor` | `command`, `enabled` | `command` takes `{x}`, `{y}` and `{label}`; empty tries xdotool or ydotool. `enabled` false turns the pointer off. |
 | `prices` | object | Dollars per million tokens: `{"model-name": [input, output]}`. The longest name that occurs in the model wins. A model without a price is marked `no price`. |
+| `monthly_budget_eur` | number | A monthly euro limit, default 0 (no limit). The side panel and `/cost` show spent and remaining. Set it with `/budget 20`. |
+| `sandbox` | `off`, `bwrap` | `bwrap` runs every `run` through bubblewrap: read-only root, the working folder writable, private `/tmp`, no network. |
 | `eur_per_usd` | number | The rate for the cost report, default 0.92. |
 | `global_memory` | path | The shared memory. Empty means `~/.penelope/global-memory`. |
 | `plugin_dirs` | list | Folders that `plugin import` scans. Empty means the folders of Claude, Codex, Cursor, OpenCode and `~/.penelope/plugins`. |

@@ -5,7 +5,7 @@
 **Scope:** one contract layer for every tool, models in every role, agents written with `$`, shared memory and an
 Obsidian brain, cost in euro, ScreenCodec and Penelope's own cursor, plugin install and import, a startup weave, and
 the commands and views that make these reachable.  
-**Tests:** 112 passed, 0 failed. No test needs a key. The live runs against OpenCode Go are written down below and used no test fixture.
+**Tests:** 118 passed, 0 failed. No test needs a key. The live runs against OpenCode Go are written down below and used no test fixture.
 
 This is a working increment, not a claim that every limit is gone. The last section names what is still open and how
 each claim can be checked on this machine.
@@ -31,7 +31,7 @@ Penelope writes for herself is a row that joins the same table at runtime.
 
 ### One table
 
-`cli/src/spec.rs` holds 42 built-in tools as `(name, description, schema)`. The schema is JSON text, parsed when the
+`cli/src/spec.rs` holds 43 built-in tools as `(name, description, schema)`. The schema is JSON text, parsed when the
 list is built. The file's test checks:
 
 - every name is unique, lower case, and has a description;
@@ -746,6 +746,42 @@ adds fake `system:`/`assistant:` lines and instruction tokens. The page is still
 CI is now a matrix for Linux, Windows and macOS; Windows and macOS are marked experimental until a runner proves them.
 `cargo audit` and the website's `pip-audit` run in the same workflows.
 
+### The interface after the second pass
+
+The start screen is typographic now: a spaced `P E N E L O P E`, a thin clay rule and the four state lines. The old
+80×16 bitmap wordmark and the flat orange mark are gone; at terminal size they read as blocks. On a new session the
+rule is woven from left to right for 1.5 s, then the screen settles. `PENELOPE_NO_ANIM=1` or a pipe skips it.
+
+Keys: **F5** starts a new session and resets the animation. **F6** arms a delete; a second F6 within four seconds
+removes the current transcript, its history and its tab. A first F6 only shows the warning.
+
+`/models` is a provider screen now, not a list of three aliases:
+
+- arrows choose a provider, `tab` switches main/weaker, `enter` signs in or opens the key window;
+- a Claude provider runs the official `claude auth login` on the plain terminal and returns;
+- an API provider opens a masked key window: the first four characters stay visible, the rest are bullets, `enter`
+  stores and `esc` cancels;
+- `r` opens the crew model list: tool calls, processing, research/web search, coding, judge, router and filter;
+- `m` lists exact names (`claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`, the full OpenCode Go list);
+- `e` cycles the model's effort (`low`, `medium`, `high`, `max`, and the OpenCode levels where offered).
+
+`/rules session TEXT` keeps a rule in the project; `/rules global TEXT` keeps it for every project. A tip appears in
+the transcript every four turns and points at F5/F6, the role models, exact names and effort.
+
+### Budget, checkpoints, sandbox, CI
+
+- `/budget 20` sets `monthly_budget_eur`; the side panel and `/cost` show the month's spend and what is left.
+- A checkpoint is written before every turn. `/rewind 3` restores the transcript and the file changes of the last three
+  turns through the same undo records.
+- `/sandbox on` runs `run` through bubblewrap: read-only root, the working folder writable, private `/tmp`, no network.
+  It fails closed when `bwrap` is missing.
+- A command confirmed in the approval dialog is stored as a hash with a masked preview in `.penelope/allowed.json`;
+  the next identical command runs without a second question. `penelope allow` lists them, `penelope allow clear` empties
+  the list.
+- `penelope ask --json "..."` emits newline-delimited JSON events (`start`, `delta`, `text`, `tool_start`, `tool_end`,
+  `masked_request`, `masked_answer`, `result`, `error`) for CI and editors.
+- The `pr_create` tool opens a pull request with `gh` after a question. It never pushes.
+
 ## Startup animation
 
 `cli/src/startup.rs` draws five frames: the loose thread grows `~`, `~~`, `~~~`, `~~~~`, and the name and model line
@@ -795,7 +831,7 @@ New CLI commands: `tools`, `tool list`, `tool call NAME JSON`, `route`, `agents`
 
 ## Tests and evidence
 
-`cargo test` in `cli/`: **112 passed, 0 failed**. The new tests, all without a real provider:
+`cargo test` in `cli/`: **118 passed, 0 failed**. The new tests, all without a real provider:
 
 | Test | What it proves |
 |---|---|
@@ -857,6 +893,12 @@ New CLI commands: `tools`, `tool list`, `tool call NAME JSON`, `route`, `agents`
 | `search::a_searxng_instance_is_added_once_and_a_daily_probe_is_idempotent` | config write, duplicate refusal, daily marker |
 | `scrape::hidden_html_and_a_fake_system_block_are_flagged` | CSS-hidden, `hidden`, fake system lines |
 | `work::a_worktree_is_made_diffed_applied_and_removed` | real git worktree, live tree untouched until apply |
+| `tui::the_provider_list_opens_a_masked_key_window_and_a_claude_login` | provider list, masked key, claude login flag |
+| `tui::roles_have_models_and_opencode_and_claude_names_are_exact` | role models, exact Claude/OpenCode names |
+| `tui::a_turn_checkpoint_rewinds_the_transcript_and_turn_counter` | checkpoint restore |
+| `files::rewind_to_a_turn_restores_every_later_change` | file rewind by turn |
+| `tools::the_sandbox_has_no_network_and_only_the_project_is_writable` | bwrap argv |
+| `tools::a_confirmed_command_is_kept_hashed_for_the_project` | project allowlist |
 | `search::ranking_deduplicates_and_prefers_a_diverse_list` | one result per URL, one host does not fill the list |
 | `search::parses_the_three_keyed_shapes` | Tavily, Exa and Firecrawl response shapes |
 | `scrape::an_article_becomes_markdown_and_the_noise_is_gone` | main article, JSON-LD, table, code, boilerplate |
@@ -922,7 +964,7 @@ body.
 
 ```bash
 cd cli
-cargo test                     # 112 tests, no model, no key
+cargo test                     # 118 tests, no model, no key
 
 ./target/release/penelope tools
 ./target/release/penelope serve --print-config

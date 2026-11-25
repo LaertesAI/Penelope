@@ -1,6 +1,6 @@
 # Penelope: features, bugs and open goals
 
-State: 2026-11-25, working tree after the 0.11.0 second pass and the first 0.12 work. Test suite: 112 tests.
+State: 2026-11-25, working tree after the 0.11.0 second pass and the first 0.12 work. Test suite: 118 tests.
 This is the honest list behind `README.md` and `PLAN-0.12.md`. A feature is only listed as working when a test or a
 live run on this PC backs it.
 
@@ -9,7 +9,7 @@ live run on this PC backs it.
 | Area | Feature | Evidence |
 |---|---|---|
 | Normal use | TUI, plain chat, `ask`, sessions, `/quit` | TUI started in tmux 120×40; plain chat completed a turn; `ask` returned `ok` |
-| Contracts | 42 tools, one schema table, role gate | `spec` and `route` tests, every name reaches a handler |
+| Contracts | 43 tools, one schema table, role gate | `spec` and `route` tests, every name reaches a handler |
 | Agents | `$name(...)`, plans, roles, budgets, crew panel | parser, router and live one-step tests |
 | Tools | read/write/edit, undo, find/grep/tree, jobs, git, clipboard, HTTP, JSON | unit tests and real changes |
 | Search | 10 sources, cache, ranking, health, reranker client, SearXNG pool | live 8 hits; `search health --probe` |
@@ -24,6 +24,14 @@ live run on this PC backs it.
 | Cost | euro per role/model | live rows |
 | Worktree | `work new/list/diff/apply/remove` | 1 test, live git worktree |
 | Injection | text, zero-width/bidi, CSS-hidden, hidden attribute, fake system lines | 2 tests |
+| Interface | crisp text start screen, weaving animation on a new session, F5 new, F6 delete | tmux captures, TUI tests |
+| Models | provider list, masked API-key window, Claude login, role models, exact names, effort, OpenCode list | 2 TUI tests, live menu |
+| Budget | monthly spend and remaining in the side panel and `/cost` | 1 cost test |
+| Checkpoints | checkpoint per turn, `/rewind N` restores transcript and files | 2 tests |
+| Sandbox | `bwrap` with read-only root, one writable folder and no network | 1 test, live `echo` |
+| Allowlist | confirmed commands hashed per project, `penelope allow` | 1 test |
+| CI stream | `penelope ask --json` events | live Claude JSON stream |
+| PR | `pr_create` with a question, never pushes | spec/handler, no live PR |
 
 ## Bugs and weak spots
 
@@ -49,6 +57,16 @@ live run on this PC backs it.
 | B18 | low | A scanned PDF still needs OCR. | `scrape.rs` | reader API or OCR |
 | B19 | low | `mcp add` has no `env`/`cwd`/remote transport. | `plugins.rs` | 0.13 |
 | B20 | low | The website account/admin views are real for login only; downloads and full admin pages are still mock. | `Laertes/website` | Website 0.12 |
+| B21 | medium | No test loop after an edit and no stop after three failed attempts. | no `test_command` runner | Add `test_command` and a bounded repair loop |
+| B22 | medium | No LSP tool; rust-analyzer is installed but not wired. | `which rust-analyzer` | `lsp` tool with diagnostics and types |
+| B23 | medium | No tree-sitter repo index; grep and tree are the only overview. | no tree-sitter dependency | Index files and symbols at start |
+| B24 | medium | No `eval tasks.jsonl` and no `replay ID`; only the live cost report exists. | `cost.rs`, no eval module | Batch runner with hit rate, tokens and euro |
+| B25 | medium | No ACP server for Zed/Neovim. | no ACP module | JSON-RPC endpoint over stdio |
+| B26 | medium | The Laertes provider is a placeholder without a plan key or a model list. | `providers.rs` | Add the plan endpoint and models |
+| B27 | low | `/rewind` restores the transcript and files but starts a fresh chat history; the next HTTP turn does not see the rewound messages. | `rewind` in TUI | Rebuild the model history from the checkpoint |
+| B28 | low | Research and web search share the scout role; they cannot have separate models yet. | `ROLE_MODELS` | Split the research tool onto its own role |
+| B29 | low | Effort reaches Claude CLI and OpenAI-compatible bodies; the Anthropic Messages API ignores it. | `llm.rs` | Map effort to a thinking budget |
+| B30 | low | `pr_create` needs `gh` and an already pushed branch; it never pushes. | `tools.rs` | Add a push step with its own question |
 
 ## Goals for 0.12
 
@@ -56,15 +74,17 @@ live run on this PC backs it.
 - [ ] `search probe --daily` runs from a systemd timer; 20 queries survive a blocked engine.
 - [ ] Attack corpus: 20 ScreenCodec injections + 20 normal pages; recall 100 %, false positives < 10 %.
 - [ ] 20 consecutive test runs are green; the one flake is found.
-- [ ] Linux, Windows and macOS CI run the same 110 tests; macOS is signed or labelled unsigned.
+- [ ] Linux, Windows and macOS CI run the same 118 tests; macOS is signed or labelled unsigned.
 - [ ] `pip-audit` and `cargo audit` run in CI; a known CVE fails the job.
 - [ ] A `deploy/` unit and README for the daily probe.
+- [ ] Test loop, LSP, tree-sitter index, eval/replay and an ACP server.
+- [ ] A real Laertes plan provider with its model list.
 
 ## How to reproduce the baseline
 
 ```bash
 cd cli
-cargo test                       # 112 tests
+cargo test                       # 118 tests
 cargo build --release
 ./target/release/penelope doctor
 ./target/release/penelope work list
