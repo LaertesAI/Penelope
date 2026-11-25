@@ -24,6 +24,8 @@ mod net;
 mod mode;
 mod platform;
 mod plugins;
+#[allow(dead_code)]
+mod proof;
 mod privacy;
 mod providers;
 mod research;
