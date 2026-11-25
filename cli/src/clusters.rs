@@ -12,13 +12,15 @@
 use crate::config::Ctx;
 use serde_json::{json, Value};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Serializes the small registry writes; clusters run in threads.
 static WRITE_LOCK: Mutex<()> = Mutex::new(());
+/// Two clusters may merge at the same time after their validators. One patch lands, the second sees a conflict.
+static MERGE_LOCK: Mutex<()> = Mutex::new(());
 
 pub const BUILTIN_PROFILES: &[&str] = &["coding", "backend", "frontend", "live-test", "research", "solo"];
 
@@ -43,6 +45,8 @@ pub struct Profile {
     pub budget_eur: f64,
     pub max_steps: usize,
     pub retries: usize,
+    /// A cluster that may write gets its own git worktree. Research and live-test profiles turn this off.
+    pub worktree: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -73,6 +77,13 @@ pub struct Cluster {
     pub output: String,
     pub error: String,
     pub memory: String,
+    /// The git root of the project, when this cluster has a worktree.
+    pub project: String,
+    /// The worktree of this cluster; empty for a research or live-test cluster.
+    pub worktree: String,
+    pub branch: String,
+    /// The working directory for every tool call of this cluster: the worktree, or empty for the live tree.
+    pub cwd: String,
     pub parts: Vec<PartRun>,
 }
 
@@ -162,7 +173,10 @@ fn parse_profile(value: &Value, fallback_name: &str) -> Result<Profile, String> 
     let budget_eur = value["budget_eur"].as_f64().unwrap_or(0.0).max(0.0);
     let max_steps = value["max_steps"].as_u64().unwrap_or(12).clamp(1, 30) as usize;
     let retries = value["retries"].as_u64().unwrap_or(1).min(3) as usize;
-    Ok(Profile { name, workers: list, validator, max_models, max_depth, budget_eur, max_steps, retries })
+    // A profile with a worker part writes, so it gets a worktree unless it says otherwise. A research or live-test
+    // profile has no writer and can be set to false explicitly.
+    let worktree = value["worktree"].as_bool().unwrap_or_else(|| list.iter().any(|p| p.role == "worker"));
+    Ok(Profile { name, workers: list, validator, max_models, max_depth, budget_eur, max_steps, retries, worktree })
 }
 
 fn builtin(name: &str) -> Option<Profile> {
@@ -209,7 +223,7 @@ fn builtin(name: &str) -> Option<Profile> {
             ],
             "validator": {"name": "check", "role": "judge", "slot": "Argos", "model": "judge",
                           "task": "Check the live evidence against the task. PASS only when the running system was really tested."},
-            "max_models": 4, "max_depth": 1, "max_steps": 16, "retries": 1
+            "max_models": 4, "max_depth": 1, "max_steps": 16, "retries": 1, "worktree": false
         }),
         "research" => json!({
             "name": "research",
@@ -221,7 +235,7 @@ fn builtin(name: &str) -> Option<Profile> {
             ],
             "validator": {"name": "check", "role": "judge", "slot": "Argos", "model": "judge",
                           "task": "Check that the report has sources and answers the question. PASS or FAIL with one reason."},
-            "max_models": 8, "max_depth": 2, "max_steps": 12, "retries": 1
+            "max_models": 8, "max_depth": 2, "max_steps": 12, "retries": 1, "worktree": false
         }),
         "coding" => json!({
             "name": "coding",
@@ -259,8 +273,9 @@ pub fn profiles_text(ctx: &Ctx) -> String {
             Ok(p) => {
                 let parts: Vec<String> = p.workers.iter().map(|w| format!("{} ({})", w.name, w.role))
                     .chain(p.validator.iter().map(|v| format!("{} (validator)", v.name))).collect();
-                out.push_str(&format!("{:<12} {} · max {} parts, depth {}, {} retries\n  {}\n", name, parts.join(", "),
+                out.push_str(&format!("{:<12} {} · max {} parts, depth {}, {} retries{}\n  {}\n", name, parts.join(", "),
                                       p.max_models, p.max_depth, p.retries,
+                                      if p.worktree { " · worktree" } else { "" },
                                       if p.budget_eur > 0.0 { format!("{:.2} EUR budget", p.budget_eur) } else { "no euro limit".to_string() }));
             }
             Err(e) => out.push_str(&format!("{:<12} {}\n", name, e)),
@@ -298,7 +313,8 @@ fn save(ctx: &Ctx, c: &Cluster) -> Result<(), String> {
     let value = json!({
         "id": c.id, "name": c.name, "profile": c.profile, "task": c.task, "parent": c.parent, "after": c.after,
         "depth": c.depth, "state": c.state, "done": c.done, "total": c.total, "started": c.started, "updated": c.updated,
-        "output": c.output, "error": c.error, "memory": c.memory, "parts": parts
+        "output": c.output, "error": c.error, "memory": c.memory, "parts": parts,
+        "project": c.project, "worktree": c.worktree, "branch": c.branch, "cwd": c.cwd
     });
     let path = cluster_file(ctx, &c.id);
     let tmp = path.with_extension("json.tmp");
@@ -330,6 +346,10 @@ fn cluster_from(v: &Value) -> Cluster {
         output: v["output"].as_str().unwrap_or("").to_string(),
         error: v["error"].as_str().unwrap_or("").to_string(),
         memory: v["memory"].as_str().unwrap_or("").to_string(),
+        project: v["project"].as_str().unwrap_or("").to_string(),
+        worktree: v["worktree"].as_str().unwrap_or("").to_string(),
+        branch: v["branch"].as_str().unwrap_or("").to_string(),
+        cwd: v["cwd"].as_str().unwrap_or("").to_string(),
         parts: v["parts"].as_array().map(|a| a.iter().map(|p| PartRun {
             name: p["name"].as_str().unwrap_or("").to_string(), slot: p["slot"].as_str().unwrap_or("").to_string(),
             role: p["role"].as_str().unwrap_or("").to_string(), model: p["model"].as_str().unwrap_or("").to_string(),
@@ -394,6 +414,19 @@ struct Done {
     text: String,
 }
 
+/// Fills the cwd of a tool call that takes one and did not name it. A call for a tool without cwd stays as it is.
+fn args_with_cwd(name: &str, args: &Value, cwd: &str) -> Value {
+    let mut args = args.clone();
+    if cwd.trim().is_empty() { return args; }
+    let takes = crate::spec::schema(name).map(|s| s["properties"].get("cwd").is_some()).unwrap_or(false);
+    if !takes { return args; }
+    if let Some(obj) = args.as_object_mut() {
+        let given = obj.get("cwd").and_then(Value::as_str).map(|s| !s.trim().is_empty()).unwrap_or(false);
+        if !given { obj.insert("cwd".to_string(), json!(cwd)); }
+    }
+    args
+}
+
 fn run_model(ctx: &Ctx, c: &Cluster, part: &Part, system: &str, task: &str, max_steps: usize) -> Result<Done, String> {
     let model = model_for_part(ctx, part)?;
     if let Some(family) = crate::crew::family_of(&model) {
@@ -405,9 +438,14 @@ fn run_model(ctx: &Ctx, c: &Cluster, part: &Part, system: &str, task: &str, max_
         let mut history = vec![crate::llm::user_message(task)];
         let mut usage = crate::llm::Usage::default();
         let role = part.role.clone();
+        let cluster_cwd = c.cwd.clone();
         let out = crate::agents::with_mcp_scope(&part.mcp, || crate::route::with_role(&role, || {
             crate::llm::run_loop(&model, system, &mut history, &tools, max_steps, None, &mut usage,
-                &mut |call| crate::tools::dispatch_retry(ctx, &role, &call.name, &call.args), &mut |_| {})
+                &mut |call| {
+                    // A part works in its cluster folder. A tool call without a cwd gets the worktree, never the live tree.
+                    let args = args_with_cwd(&call.name, &call.args, &cluster_cwd);
+                    crate::tools::dispatch_retry(ctx, &role, &call.name, &args)
+                }, &mut |_| {})
         }))?;
         crate::cost::record(ctx, &format!("cluster:{}", c.name), model["model"].as_str().unwrap_or(""), usage.tokens_in, usage.tokens_out);
         return Ok(Done { text: out });
@@ -424,6 +462,9 @@ fn run_model(ctx: &Ctx, c: &Cluster, part: &Part, system: &str, task: &str, max_
     cmd.args(["-p", task, "--output-format", "json", "--model", model["model"].as_str().unwrap_or("sonnet"),
               "--append-system-prompt", system, "--strict-mcp-config", "--mcp-config", &cfg, "--tools", "", "--allowedTools", &allowed.join(",")]);
     if let Some(level) = crate::llm::effort(&model) { cmd.args(["--effort", level]); }
+    // Every tool of the part runs inside the worktree of its cluster. The Claude command itself also starts there,
+    // so a tool that writes without a cwd cannot reach the live tree.
+    if !c.cwd.trim().is_empty() { cmd.current_dir(&c.cwd); }
     let out = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).output()
         .map_err(|e| format!("cannot start the claude command: {}", e))?;
     let v: Value = serde_json::from_slice(&out.stdout).map_err(|_| format!("the claude command ended with {} and no result", out.status))?;
@@ -551,11 +592,53 @@ fn validate(ctx: &Ctx, c: &mut Cluster, profile: &Profile, before: f64) -> Resul
     Ok(ok)
 }
 
+fn cleanup_worktree(c: &mut Cluster) -> String {
+    if c.worktree.is_empty() || c.project.is_empty() { return String::new(); }
+    match crate::work::remove_with_branch(Path::new(&c.project), &c.id) {
+        Ok(note) => {
+            c.worktree.clear();
+            c.branch.clear();
+            c.cwd.clear();
+            note
+        }
+        Err(e) => format!("the worktree could not be removed: {}", e),
+    }
+}
+
+/// Applies the patch of the cluster's worktree to the live tree. Called only after the validator answered PASS.
+fn apply_worktree(c: &Cluster) -> Result<(), String> {
+    let project = PathBuf::from(&c.project);
+    if !project.is_dir() { return Err(format!("the project folder {} is gone", project.display())); }
+    let bytes = crate::work::patch_of(&project, &c.id)?;
+    if bytes.is_empty() { return Ok(()); }
+    let _guard = MERGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    crate::work::apply_bytes(&project, &bytes).map_err(|e| {
+        format!("merge conflict: the patch did not apply to the live tree ({}). Nothing was resolved automatically; the worktree {} stays for inspection.", e, c.worktree)
+    })
+}
+
 /// Runs one cluster: every worker part, then the validator. A FAIL sends the result back to the workers up to `retries`.
 pub fn run_cluster(ctx: &Ctx, id: &str) -> Result<String, String> {
     let mut c = load(ctx, id)?;
     if c.state == "killed" { return Ok(format!("cluster {} was already killed", id)); }
     let profile = profile(ctx, &c.profile)?;
+    if kill_requested(ctx, &c.id) {
+        let note = cleanup_worktree(&mut c);
+        c.state = "killed".to_string();
+        c.error = "killed by the orchestrator".to_string();
+        c.updated = now();
+        save(ctx, &c)?;
+        report(ctx, &c, "kill", "killed");
+        return Ok(format!("cluster {} killed{}", id, if note.is_empty() { String::new() } else { format!(" · {}", note) }));
+    }
+    if profile.worktree && (c.worktree.is_empty() || !Path::new(&c.worktree).is_dir()) {
+        c.state = "blocked".to_string();
+        c.error = format!("the profile {} writes, but the cluster has no worktree. Nothing was run in the live tree.", profile.name);
+        c.updated = now();
+        save(ctx, &c)?;
+        report(ctx, &c, "worktree", &c.error);
+        return Ok(format!("cluster {} blocked: {}", id, c.error));
+    }
     c.started = if c.started == 0 { now() } else { c.started };
     c.state = "working".to_string();
     c.done = 0;
@@ -565,6 +648,7 @@ pub fn run_cluster(ctx: &Ctx, id: &str) -> Result<String, String> {
     save(ctx, &c)?;
     let _ = fs::write(memory_path(ctx, &c.id), format!("# Cluster {} · {}\n\nTask: {}\nProfile: {} · max {} parts, depth {}\n",
                                                          c.name, c.profile, c.task, c.profile, profile.max_models, profile.max_depth));
+    if !c.worktree.is_empty() { append_memory(ctx, &c, &format!("\nWorktree: {} · branch {}\n", c.worktree, c.branch)); }
     report(ctx, &c, "start", "");
     let before = crate::cost::total_eur(ctx);
     let mut feedback = String::new();
@@ -572,18 +656,20 @@ pub fn run_cluster(ctx: &Ctx, id: &str) -> Result<String, String> {
     let mut workers_ok = true;
     for attempt in 0..=profile.retries {
         if kill_requested(ctx, &c.id) {
+            let note = cleanup_worktree(&mut c);
             c.state = "killed".to_string();
             c.error = "killed by the orchestrator".to_string();
             c.updated = now();
             save(ctx, &c)?;
             report(ctx, &c, "kill", "killed");
-            return Ok(format!("cluster {} killed", id));
+            return Ok(format!("cluster {} killed{}", id, if note.is_empty() { String::new() } else { format!(" · {}", note) }));
         }
         workers_ok = match run_workers(ctx, &mut c, &profile, &feedback, before) {
             Ok(v) => v,
             Err(e) if e == "killed" => {
+                let note = cleanup_worktree(&mut c);
                 c.state = "killed".to_string(); c.error = "killed by the orchestrator".to_string(); c.updated = now(); save(ctx, &c)?;
-                return Ok(format!("cluster {} killed", id));
+                return Ok(format!("cluster {} killed{}", id, if note.is_empty() { String::new() } else { format!(" · {}", note) }));
             }
             Err(e) => { c.state = "blocked".to_string(); c.error = e; c.updated = now(); save(ctx, &c)?; return Ok(format!("cluster {} blocked: {}", id, c.error)); }
         };
@@ -602,7 +688,21 @@ pub fn run_cluster(ctx: &Ctx, id: &str) -> Result<String, String> {
             Err(e) => { c.state = "blocked".to_string(); c.error = e; c.updated = now(); save(ctx, &c)?; return Ok(format!("cluster {} blocked: {}", id, c.error)); }
         }
     }
-    c.state = if ok { "done" } else { "failed" }.to_string();
+    let mut blocked = false;
+    if ok && profile.worktree {
+        if profile.validator.is_none() {
+            ok = false;
+            blocked = true;
+            c.error = "the worktree was not applied: a profile without a validator cannot answer PASS".to_string();
+        } else if let Err(e) = apply_worktree(&c) {
+            ok = false;
+            blocked = true;
+            c.error = e;
+        } else {
+            append_memory(ctx, &c, &format!("\n## merge\n\nworktree {} applied to {}\n", c.worktree, c.project));
+        }
+    }
+    c.state = if ok { "done" } else if blocked { "blocked" } else { "failed" }.to_string();
     if !ok && c.error.is_empty() {
         c.error = if workers_ok { "the validator did not pass the cluster".to_string() } else { "at least one part failed".to_string() };
     }
@@ -612,15 +712,35 @@ pub fn run_cluster(ctx: &Ctx, id: &str) -> Result<String, String> {
     Ok(format!("cluster {} {} · {}/{} parts · {:.4} EUR", id, c.state, c.done, c.total, budget_spent(ctx, before)))
 }
 
+fn append_memory(ctx: &Ctx, c: &Cluster, text: &str) {
+    let _ = fs::OpenOptions::new().create(true).append(true).open(memory_path(ctx, &c.id)).and_then(|mut f| std::io::Write::write_all(&mut f, text.as_bytes()));
+}
+
 fn new_cluster(ctx: &Ctx, profile: &Profile, name: &str, task: &str, parent: Option<&str>, after: Vec<String>, depth: usize) -> Result<Cluster, String> {
     let id = format!("{}-{}", safe(name), stamp());
     let parts: Vec<PartRun> = profile.workers.iter().map(|p| PartRun { name: p.name.clone(), slot: p.slot.clone(), role: p.role.clone(), model: String::new(), state: "queued".into(), output: String::new(), error: String::new() })
         .chain(profile.validator.iter().map(|p| PartRun { name: p.name.clone(), slot: p.slot.clone(), role: p.role.clone(), model: String::new(), state: "queued".into(), output: String::new(), error: String::new() }))
         .collect();
+    // The project is the folder above `.penelope`. A profile that may write needs a git worktree: without git the
+    // cluster is refused here, so a coding part can never fall back to the live tree.
+    let root = ctx.root.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| ctx.root.clone());
+    let (project, worktree, branch, cwd) = if profile.worktree {
+        let project = crate::work::project(&root.to_string_lossy()).map_err(|e| {
+            format!("NOT created. cluster {} needs a git worktree, but {} is no git project: {}", name, root.display(), e)
+        })?;
+        let (path, branch) = crate::work::create(&project, &id).map_err(|e| {
+            format!("NOT created. cluster {} needs a git worktree: {}", name, e)
+        })?;
+        let path = path.to_string_lossy().to_string();
+        (project.to_string_lossy().to_string(), path.clone(), branch, path)
+    } else {
+        (String::new(), String::new(), String::new(), String::new())
+    };
     let c = Cluster { id: id.clone(), name: name.to_string(), profile: profile.name.clone(), task: task.to_string(),
                       parent: parent.map(str::to_string), after, depth, state: "queued".to_string(), done: 0,
                       total: parts.len(), started: now(), updated: now(), output: String::new(), error: String::new(),
-                      memory: memory_path(ctx, &id).to_string_lossy().to_string(), parts };
+                      memory: memory_path(ctx, &id).to_string_lossy().to_string(),
+                      project, worktree, branch, cwd, parts };
     save(ctx, &c)?;
     let _ = fs::write(memory_path(ctx, &id), format!("# Cluster {} · {}\n\nTask: {}\n\n", name, profile.name, task));
     Ok(c)
@@ -773,6 +893,7 @@ pub fn status_text(ctx: &Ctx, id: Option<&str>) -> String {
         let c = match load(ctx, id) { Ok(c) => c, Err(e) => return e };
         let mut out = format!("cluster {} · {} · profile {} · state {}\nTask: {}\nProgress: {}/{}\nMemory: {}\n",
                               c.id, c.name, c.profile, c.state, c.task, c.done, c.total, c.memory);
+        if !c.worktree.is_empty() { out.push_str(&format!("Worktree: {} · branch {}\n", c.worktree, c.branch)); }
         if !c.error.is_empty() { out.push_str(&format!("Error: {}\n", c.error)); }
         for p in &c.parts {
             out.push_str(&format!("  {:<12} {:<10} {:<12} {:<10} {}\n", p.name, p.role, p.slot, p.state, p.model));
@@ -807,10 +928,12 @@ pub fn kill(ctx: &Ctx, id: &str) -> String {
     if c.state == "done" || c.state == "failed" || c.state == "killed" { return format!("cluster {} is already {}", id, c.state); }
     let _ = fs::create_dir_all(cluster_dir(ctx, id));
     let _ = fs::write(cluster_dir(ctx, id).join("kill"), "1");
+    // The worktree and its branch go now. A running cluster repeats the removal when it sees the kill flag.
+    let note = cleanup_worktree(&mut c);
     c.state = "killing".to_string();
     c.updated = now();
     let _ = save(ctx, &c);
-    format!("cluster {} will stop before its next part", id)
+    format!("cluster {} will stop before its next part{}", id, if note.is_empty() { String::new() } else { format!(" · {}", note) })
 }
 
 /// The tool and CLI entry: run an orchestration and return its summary.
@@ -828,7 +951,43 @@ mod tests {
     fn ctx() -> (Ctx, PathBuf) {
         let dir = std::env::temp_dir().join(format!("penelope-clusters-{}-{:?}", std::process::id(), std::thread::current().id()));
         let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let run = |args: &[&str]| {
+            let out = Command::new("git").current_dir(&dir).args(args).output().unwrap();
+            assert!(out.status.success(), "git {:?}: {}", args, String::from_utf8_lossy(&out.stderr));
+        };
+        run(&["init", "-q"]);
+        run(&["config", "user.email", "test@example.test"]);
+        run(&["config", "user.name", "Test"]);
+        fs::write(dir.join("hello.txt"), "base\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-q", "-m", "base"]);
         (crate::config::load(&dir.join(".penelope")), dir)
+    }
+
+    fn text_reply(text: &str) -> String {
+        json!({"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": text}}],
+               "usage": {"prompt_tokens": 10, "completion_tokens": 2}}).to_string()
+    }
+
+    fn tool_reply(name: &str, args: Value) -> String {
+        json!({"choices": [{"finish_reason": "tool_calls", "message": {"role": "assistant", "content": "",
+            "tool_calls": [{"id": "call-1", "type": "function", "function": {"name": name, "arguments": args.to_string()}}]}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 2}}).to_string()
+    }
+
+    fn fake_models(ctx: &mut Ctx, address: &str) {
+        let model = json!({"kind": "openai", "base_url": format!("{}/v1", address), "model": "test-cluster", "api_key_env": ""});
+        ctx.cfg["main"] = model.clone();
+        ctx.cfg["weak"] = model.clone();
+        ctx.cfg["edit_policy"] = json!("all");
+        ctx.cfg["roles"]["judge"] = model.clone();
+        ctx.cfg["roles"]["router"] = model;
+    }
+
+    fn branch_exists(dir: &Path, branch: &str) -> bool {
+        Command::new("git").arg("-C").arg(dir).args(["branch", "--list", branch]).output()
+            .map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty()).unwrap_or(false)
     }
 
     #[test]
@@ -837,8 +996,10 @@ mod tests {
         let coding = profile(&ctx, "coding").unwrap();
         assert_eq!((coding.workers.len(), coding.validator.as_ref().map(|v| v.name.as_str())), (2, Some("check")));
         assert_eq!((coding.max_models, coding.max_depth), (8, 2));
+        assert!(coding.worktree, "a profile with a worker part writes in a worktree");
+        assert!(!profile(&ctx, "research").unwrap().worktree && !profile(&ctx, "live-test").unwrap().worktree);
         let text = profiles_text(&ctx);
-        assert!(text.contains("coding") && text.contains("backend (worker)"), "{}", text);
+        assert!(text.contains("coding") && text.contains("backend (worker)") && text.contains("worktree"), "{}", text);
         fs::create_dir_all(profile_dir(&ctx)).unwrap();
         fs::write(profile_dir(&ctx).join("tiny.json"), r#"{"name":"tiny","workers":[{"name":"one","role":"worker","model":"main"},{"name":"two","role":"worker","model":"main"}],"max_models":1}"#).unwrap();
         assert!(profile(&ctx, "tiny").unwrap_err().contains("max_models"));
@@ -876,21 +1037,15 @@ mod tests {
             (200, json!({"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content":
                 "{\"clusters\":[{\"name\":\"one\",\"profile\":\"solo\",\"task\":\"first\"},{\"name\":\"two\",\"profile\":\"solo\",\"task\":\"second\",\"after\":[\"one\"]}]}"}}],
                 "usage": {"prompt_tokens": 10, "completion_tokens": 20}}).to_string()),
-            (200, json!({"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "one done"}}],
-                         "usage": {"prompt_tokens": 10, "completion_tokens": 2}}).to_string()),
-            (200, json!({"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "PASS: one is done"}}],
-                         "usage": {"prompt_tokens": 10, "completion_tokens": 2}}).to_string()),
-            (200, json!({"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "two done"}}],
-                         "usage": {"prompt_tokens": 10, "completion_tokens": 2}}).to_string()),
-            (200, json!({"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "PASS: two is done"}}],
-                         "usage": {"prompt_tokens": 10, "completion_tokens": 2}}).to_string()),
+            (200, text_reply("one done")),
+            (200, tool_reply("run", json!({"command": "cat hello.txt"}))),
+            (200, text_reply("PASS: one is done")),
+            (200, text_reply("two done")),
+            (200, tool_reply("run", json!({"command": "cat hello.txt"}))),
+            (200, text_reply("PASS: two is done")),
         ]);
         let (mut ctx, dir) = ctx();
-        let model = json!({"kind": "openai", "base_url": format!("{}/v1", address), "model": "test-orchestrator", "api_key_env": ""});
-        ctx.cfg["main"] = model.clone();
-        ctx.cfg["weak"] = model.clone();
-        ctx.cfg["roles"]["judge"] = model.clone();
-        ctx.cfg["roles"]["router"] = model;
+        fake_models(&mut ctx, &address);
         let said = orchestrate(&ctx, "do two things", None, true).unwrap();
         assert!(said.contains("2 clusters started"), "{}", said);
         let clusters = list(&ctx);
@@ -904,18 +1059,13 @@ mod tests {
     #[test]
     fn one_cluster_runs_worker_parts_and_its_validator() {
         let (address, _seen) = crate::llm::fake::serve(vec![
-            (200, json!({"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "backend done"}}],
-                         "usage": {"prompt_tokens": 10, "completion_tokens": 2}}).to_string()),
-            (200, json!({"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "frontend done"}}],
-                         "usage": {"prompt_tokens": 11, "completion_tokens": 2}}).to_string()),
-            (200, json!({"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "PASS: both parts are in the memory"}}],
-                         "usage": {"prompt_tokens": 12, "completion_tokens": 3}}).to_string()),
+            (200, text_reply("backend done")),
+            (200, text_reply("frontend done")),
+            (200, tool_reply("run", json!({"command": "cat hello.txt"}))),
+            (200, text_reply("PASS: both parts are in the memory")),
         ]);
         let (mut ctx, dir) = ctx();
-        let model = json!({"kind": "openai", "base_url": format!("{}/v1", address), "model": "test-cluster", "api_key_env": ""});
-        ctx.cfg["main"] = model.clone();
-        ctx.cfg["weak"] = model.clone();
-        ctx.cfg["roles"]["judge"] = model.clone();
+        fake_models(&mut ctx, &address);
         let said = orchestrate(&ctx, "build the thing", Some("coding"), true).unwrap();
         assert!(said.contains("2 clusters") == false && said.contains("clusters started"), "{}", said);
         let c = list(&ctx).into_iter().next().unwrap();
@@ -924,6 +1074,77 @@ mod tests {
         assert!(c.output.contains("backend done") && c.output.contains("frontend done"));
         let memory = fs::read_to_string(memory_path(&ctx, &c.id)).unwrap();
         assert!(memory.contains("## backend") && memory.contains("## check") && memory.contains("PASS"), "{}", memory);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn two_clusters_keep_their_edits_apart_and_kill_removes_one_worktree() {
+        let (address, _seen) = crate::llm::fake::serve(vec![
+            (200, text_reply("done")),
+            (200, tool_reply("run", json!({"command": "cat hello.txt"}))),
+            (200, text_reply("PASS: hello.txt is in the worktree")),
+        ]);
+        let (mut ctx, dir) = ctx();
+        fake_models(&mut ctx, &address);
+        let p = profile(&ctx, "solo").unwrap();
+        let one = new_cluster(&ctx, &p, "one", "edit hello.txt", None, Vec::new(), 0).unwrap();
+        let two = new_cluster(&ctx, &p, "two", "edit hello.txt", None, Vec::new(), 0).unwrap();
+        assert_ne!(one.worktree, two.worktree);
+        assert_eq!(one.cwd, one.worktree);
+        assert!(one.worktree.starts_with(&format!("{}/.penelope/worktrees/", one.project)), "{}", one.worktree);
+        assert!(one.branch.starts_with("agent/") && branch_exists(&dir, &one.branch));
+        fs::write(Path::new(&one.worktree).join("hello.txt"), "edit one\n").unwrap();
+        fs::write(Path::new(&two.worktree).join("hello.txt"), "edit two\n").unwrap();
+        assert_eq!(fs::read_to_string(dir.join("hello.txt")).unwrap(), "base\n");
+
+        let said = kill(&ctx, &one.id);
+        assert!(said.contains("will stop") && said.contains("removed"), "{}", said);
+        assert!(!Path::new(&one.worktree).exists());
+        assert!(!branch_exists(&dir, &one.branch));
+        assert!(Path::new(&two.worktree).is_dir(), "the other worktree stays");
+
+        let out = run_cluster(&ctx, &two.id).unwrap();
+        assert!(out.contains("done"), "{}", status_text(&ctx, Some(&two.id)));
+        assert_eq!(fs::read_to_string(dir.join("hello.txt")).unwrap(), "edit two\n");
+        assert!(Path::new(&two.worktree).is_dir(), "the worktree stays for inspection");
+        assert!(branch_exists(&dir, &two.branch));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_tool_call_without_cwd_from_an_api_part_writes_in_its_worktree() {
+        let (address, seen) = crate::llm::fake::serve(vec![
+            (200, tool_reply("write", json!({"path": "part.txt", "text": "made by the part\n"}))),
+            (200, text_reply("wrote part.txt")),
+            (200, tool_reply("run", json!({"command": "cat hello.txt"}))),
+            (200, text_reply("PASS: the part wrote its file")),
+        ]);
+        let (mut ctx, dir) = ctx();
+        fake_models(&mut ctx, &address);
+        let p = profile(&ctx, "solo").unwrap();
+        let c = new_cluster(&ctx, &p, "cwd", "write part.txt", None, Vec::new(), 0).unwrap();
+        assert!(!dir.join("part.txt").exists());
+        let out = run_cluster(&ctx, &c.id).unwrap();
+        assert!(out.contains("done"), "{}", out);
+        let body = seen.lock().unwrap()[1].body.to_string();
+        assert!(body.contains(&c.worktree), "the write went to the worktree, not the live tree: {}", body);
+        assert_eq!(fs::read_to_string(dir.join("part.txt")).unwrap(), "made by the part\n");
+        assert_eq!(fs::read_to_string(Path::new(&c.worktree).join("part.txt")).unwrap(), "made by the part\n");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_worktree_profile_is_refused_in_a_folder_without_git() {
+        let dir = std::env::temp_dir().join(format!("penelope-clusters-nogit-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let ctx = crate::config::load(&dir.join(".penelope"));
+        let p = profile(&ctx, "coding").unwrap();
+        let err = new_cluster(&ctx, &p, "write", "edit a file", None, Vec::new(), 0).unwrap_err();
+        assert!(err.contains("git worktree") && err.contains("no git project"), "{}", err);
+        let research = profile(&ctx, "research").unwrap();
+        let c = new_cluster(&ctx, &research, "look", "read only", None, Vec::new(), 0).unwrap();
+        assert!(c.worktree.is_empty() && c.cwd.is_empty() && c.branch.is_empty());
         let _ = fs::remove_dir_all(&dir);
     }
 }

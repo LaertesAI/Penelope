@@ -7,6 +7,26 @@ Obsidian brain, cost in euro, ScreenCodec and Penelope's own cursor, plugin inst
 the commands and views that make these reachable.  
 **Tests:** 165 passed, 0 failed. No test needs a key. The live runs against OpenCode Go are written down below and used no test fixture.
 
+## DeepSeek phase 1 (branch `feat/phase1-worktree-evidence`)
+
+### 1.1 One git worktree per cluster
+
+A profile now carries `worktree`. It defaults to true when the profile has a worker part; the built-in `research` and
+`live-test` profiles set it to false explicitly. `new_cluster()` creates a worktree and a branch `agent/<cluster id>`
+under `<project>/.penelope/worktrees/` and stores `project`, `worktree`, `branch` and `cwd` in the cluster JSON. A
+worktree profile in a folder without git is refused before anything runs, so a coding part cannot fall back to the
+live tree.
+
+API parts get the cluster cwd injected into every tool call that takes a `cwd` and did not name one. The Claude CLI
+part starts with `current_dir` set to the worktree. `run_cluster()` applies the worktree patch with `git apply` only
+after the validator answered PASS; a rejected patch is reported as a merge conflict, the cluster ends `blocked`, and
+the worktree stays. `kill()` removes the worktree and its branch; a running cluster repeats the cleanup when it sees
+the kill flag.
+
+Measured: `cd cli && cargo test` → `168 passed; 0 failed` (2026-11-25). The new tests cover two clusters that edit
+`hello.txt` in separate worktrees with one killed, a tool call without `cwd` that writes in its worktree, and a
+worktree profile refused in a non-git folder.
+
 This is a working increment, not a claim that every limit is gone. The last section names what is still open and how
 each claim can be checked on this machine.
 

@@ -40,17 +40,25 @@ fn path_of(project: &Path, name: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+/// Makes a worktree and its branch under the project. The caller keeps the branch name for the merge and the cleanup.
+pub fn create(project: &Path, name: &str) -> Result<(PathBuf, String), String> {
+    let name = safe_name(name);
+    if name.is_empty() { return Err("give a worktree a name".to_string()); }
+    let path = worktrees(project).join(&name);
+    if path.exists() { return Err(format!("{} already exists", path.display())); }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("cannot make {}: {}", parent.display(), e))?;
+    }
+    let branch = format!("agent/{}", name);
+    git(project, &["worktree", "add", "-b", &branch, &path.to_string_lossy()])?;
+    Ok((path, branch))
+}
+
 pub fn new(ctx: &Ctx, cwd: &str, name: &str) -> String {
     let _ = ctx;
     let project = match project(cwd) { Ok(p) => p, Err(e) => return format!("NOT created. {}", e) };
-    let name = safe_name(name);
-    if name.is_empty() { return "NOT created. give a worktree a name".to_string(); }
-    let path = worktrees(&project).join(&name);
-    if path.exists() { return format!("NOT created. {} already exists.", path.display()); }
-    if let Some(parent) = path.parent() { let _ = std::fs::create_dir_all(parent); }
-    let branch = format!("agent/{}", name);
-    match git(&project, &["worktree", "add", "-b", &branch, &path.to_string_lossy()]) {
-        Ok(_) => format!("worktree {} on branch {} at {}", name, branch, path.display()),
+    match create(&project, name) {
+        Ok((path, branch)) => format!("worktree {} on branch {} at {}", safe_name(name), branch, path.display()),
         Err(e) => format!("NOT created. {}", e),
     }
 }
@@ -94,30 +102,41 @@ pub fn diff(ctx: &Ctx, cwd: &str, name: &str, stat: bool) -> String {
             patch(&path).map(|p| format!("{} bytes of diff", p.len())).unwrap_or_else(|e| e)
         });
     }
-    match patch(&path) {
+    match patch_of(&project, name) {
         Ok(bytes) if bytes.is_empty() => "the worktree has no change".to_string(),
         Ok(bytes) => String::from_utf8_lossy(&bytes).to_string(),
         Err(e) => e,
     }
 }
 
+/// The patch of one worktree against HEAD, without touching the live tree.
+pub fn patch_of(project: &Path, name: &str) -> Result<Vec<u8>, String> {
+    let path = path_of(project, name)?;
+    patch(&path)
+}
+
+/// Applies a patch to the live tree. A conflict is returned as an error and is never solved here.
+pub fn apply_bytes(project: &Path, bytes: &[u8]) -> Result<(), String> {
+    let mut child = Command::new("git").arg("-C").arg(project).args(["apply", "--binary"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()
+        .map_err(|e| format!("git could not start: {}", e))?;
+    use std::io::Write;
+    if let Some(mut stdin) = child.stdin.take() {
+        if stdin.write_all(bytes).is_err() { return Err("the diff could not be written to git apply".to_string()); }
+    }
+    match child.wait_with_output() {
+        Ok(o) if o.status.success() => Ok(()),
+        Ok(o) => Err(format!("git apply said: {}", String::from_utf8_lossy(&o.stderr).trim().chars().take(300).collect::<String>())),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 pub fn apply(ctx: &Ctx, cwd: &str, name: &str) -> String {
     let _ = ctx;
     let project = match project(cwd) { Ok(p) => p, Err(e) => return e };
-    let path = match path_of(&project, name) { Ok(p) => p, Err(e) => return e };
-    let bytes = match patch(&path) { Ok(b) => b, Err(e) => return e };
+    let bytes = match patch_of(&project, name) { Ok(b) => b, Err(e) => return e };
     if bytes.is_empty() { return "nothing to apply: the worktree has no change".to_string(); }
-    let mut child = match Command::new("git").arg("-C").arg(&project).args(["apply", "--binary"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
-        Ok(c) => c,
-        Err(e) => return format!("NOT applied. git could not start: {}", e),
-    };
-    use std::io::Write;
-    if let Some(mut stdin) = child.stdin.take() {
-        if stdin.write_all(&bytes).is_err() { return "NOT applied. the diff could not be written".to_string(); }
-    }
-    match child.wait_with_output() {
-        Ok(o) if o.status.success() => format!("applied {} bytes from {} to {}. The worktree stays for inspection.", bytes.len(), name, project.display()),
-        Ok(o) => format!("NOT applied. git apply said: {}", String::from_utf8_lossy(&o.stderr).trim().chars().take(300).collect::<String>()),
+    match apply_bytes(&project, &bytes) {
+        Ok(()) => format!("applied {} bytes from {} to {}. The worktree stays for inspection.", bytes.len(), name, project.display()),
         Err(e) => format!("NOT applied. {}", e),
     }
 }
@@ -134,6 +153,23 @@ pub fn remove(ctx: &Ctx, cwd: &str, name: &str, force: bool) -> String {
         Ok(_) => format!("worktree {} removed", name),
         Err(e) => format!("NOT removed. {}", e),
     }
+}
+
+/// Removes the worktree and the branch that belongs to it. A dirty worktree is discarded: this is an explicit kill.
+pub fn remove_with_branch(project: &Path, name: &str) -> Result<String, String> {
+    let name = safe_name(name);
+    if name.is_empty() { return Err("give a worktree a name".to_string()); }
+    let path = worktrees(project).join(&name);
+    if path.exists() {
+        git(project, &["worktree", "remove", "--force", &path.to_string_lossy()])?;
+    }
+    let branch = format!("agent/{}", name);
+    match git(project, &["branch", "-D", &branch]) {
+        Ok(_) => {}
+        Err(e) if e.to_lowercase().contains("not found") => {}
+        Err(e) => return Err(e),
+    }
+    Ok(format!("worktree {} and branch {} removed", name, branch))
 }
 
 #[cfg(test)]
