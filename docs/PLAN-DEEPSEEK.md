@@ -1,7 +1,7 @@
 # Plan for the coding agent: everything that is still missing in Penelope
 
 Written on 2026-11-25 from a talk with the owner and from a read of the code at commit `10bac25`
-(version 0.11.0, 240 tests, 53 files in `cli/src/`). The reader is a coding agent such as DeepSeek in OpenCode.
+(version 0.11.0, 250 tests, 53 files in `cli/src/`). The reader is a coding agent such as DeepSeek in OpenCode.
 Bug numbers such as B33 point into `docs/FEATURES-BUGS.md`. Block numbers point into `docs/CLUSTER-IDEAS.md`.
 
 ## How to work
@@ -135,13 +135,15 @@ These packages decide whether the idea can be shown. Do them in this order.
 
 ## Phase 2: memory and learning without training
 
-### 2.1 Notes with links and a status (block 7)
+### 2.1 Notes with links and a status (block 7) — done
+- Result: `3de11f3`, PR #10. `<cluster>/notes/NAME.md` with source/date/status, 2-hop selection, stale never in prompts, validator confirms/stales. Open: notes are per cluster id, no cross-run carry-over.
 - State: `brain.rs` writes an Obsidian vault with parent and child links. `notes.rs` (unwired) reads a status.
 - Build: a cluster note carries source, date and status `confirmed`, `open` or `stale`. The validator sets
   `confirmed`. A part loads only the notes at most 2 links away from its task and never a stale one.
 - Done when: the prompt of a part in a test holds 3 of 10 notes and no stale note.
 
-### 2.2 Score per part and advice for the profile (block 8)
+### 2.2 Score per part and advice for the profile (block 8) — done
+- Result: `709477e`, PR #10. `validate()` records accepted/rejected per part/task type in `.penelope/clusters/scores.json`; `penelope cluster advise [NAME]` with ≥5 results and ≥60% rejected. Open: cluster-wide verdict attribution; no score reset.
 - Build: `validate()` records accept or reject per part and task type with `advise::record` in
   `.penelope/clusters/scores.json`. `penelope cluster advise NAME` prints the suggestions.
 - Done when: 4 rejections of 5 for one part print one suggestion that names the part.

@@ -1,7 +1,7 @@
 # Penelope 0.12 — gap audit and plan
 
 **Date:** 2026-11-25
-**Baseline:** working tree of 0.11.0 + 0.12 work, 240 tests, 46 tools, 50 Rust files
+**Baseline:** working tree of 0.11.0 + 0.12 work, 250 tests, 46 tools, 50 Rust files
 **Method:** code and docs audit, `cargo test`, `penelope doctor`, live `auth verify`, live TUI/plain chat, live plugin
 and MCP administration, live HTTP calls against `penelope serve`
 **Scope:** what is genuinely missing after the 0.11.0 second pass, in the order that reduces risk for a daily user
@@ -16,7 +16,7 @@ These are not road-map rows. They were exercised on this PC.
 | Area | Evidence | Confidence |
 |---|---|---|
 | Normal use | `penelope ask` → `ok`; `chat --plain` completed a turn; TUI started in tmux at 120×40 and quit with code 0 | high for Linux/claude-cli |
-| Tool layer | 46 tools, one spec table, role and schema gate, `cargo test` 240 passed | high |
+| Tool layer | 46 tools, one spec table, role and schema gate, `cargo test` 250 passed | high |
 | Interface | crisp start screen, F5/F6, provider list, role models, exact names, effort, OpenCode list, monthly budget, checkpoints, sandbox, allowlist, `ask --json` | high for the tested paths |
 | Search | 8 live hits from Startpage + DuckDuckGo + Bing; cache, canonical URLs, health file, reranker client | medium: keyless engines rate-limit |
 | Reading | static HTML to Markdown, local PDF through `pdftotext`, optional reader API | medium: no OCR, no JavaScript renderer of its own |
