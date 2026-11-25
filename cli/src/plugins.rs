@@ -287,14 +287,25 @@ fn tool_server(name: &str) -> String {
 pub fn allowed(ctx: &Ctx) -> Vec<String> {
     let reg = load(ctx);
     let mut out = Vec::new();
-    for p in reg["plugins"].as_array().unwrap().iter().filter(|p| p["allow"].as_bool().unwrap_or(false)) {
-        for (k, _) in p["mcpServers"].as_object().unwrap() {
-            out.push(format!("mcp__{}__*", tool_server(k)));
+    for p in reg["plugins"].as_array().unwrap() {
+        let default = p["allow"].as_bool().unwrap_or(false);
+        for (k, s) in p["mcpServers"].as_object().unwrap() {
+            if default {
+                out.push(format!("mcp__{}__*", tool_server(k)));
+            } else {
+                for tool in explicitly_allowed(s) {
+                    out.push(format!("mcp__{}__{}", tool_server(k), tool));
+                }
+            }
         }
     }
     for (k, s) in mcp_load(ctx)["servers"].as_object().cloned().unwrap_or_default() {
         if s["allow"].as_bool().unwrap_or(false) {
             out.push(format!("mcp__{}__*", tool_server(&k)));
+        } else {
+            for tool in explicitly_allowed(&s) {
+                out.push(format!("mcp__{}__{}", tool_server(&k), tool));
+            }
         }
     }
     out
@@ -606,6 +617,100 @@ pub fn skill_body(ctx: &Ctx, name: &str) -> String {
     format!("no skill named {}", name)
 }
 
+/// True when one tool of a server may run. `default` is the old switch of the plugin or of the server: it holds for
+/// every tool that has no rule of its own. A name in `deny_tools`/`denyTools` or a false entry in `tools` wins; a name
+/// in `allow_tools`/`allowTools` or a true entry allows that tool even when the default is false.
+pub fn tool_allowed(server: &Value, default: bool, tool: &str) -> bool {
+    let tool = tool.trim();
+    if tool.is_empty() {
+        return false;
+    }
+    let listed = |keys: &[&str]| keys.iter().any(|key| {
+        server.get(*key).and_then(Value::as_array).map(|list| list.iter().any(|v| v.as_str() == Some(tool))).unwrap_or(false)
+    });
+    if listed(&["deny_tools", "denyTools", "denied_tools", "deniedTools"]) {
+        return false;
+    }
+    if listed(&["allow_tools", "allowTools", "allowed_tools", "allowedTools"]) {
+        return true;
+    }
+    for key in ["tools", "tool_rules", "toolRules"] {
+        if let Some(rule) = server.get(key).and_then(|rules| rules.get(tool)) {
+            if let Some(value) = tool_rule_value(rule) {
+                return value;
+            }
+        }
+    }
+    default
+}
+
+/// The tools a server with the default `false` opens by name. It feeds the allow list of the claude command, so a
+/// single named allow works on both paths.
+pub(crate) fn explicitly_allowed(server: &Value) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for key in ["allow_tools", "allowTools", "allowed_tools", "allowedTools"] {
+        if let Some(list) = server.get(key).and_then(Value::as_array) {
+            names.extend(list.iter().filter_map(|v| v.as_str()).map(str::to_string));
+        }
+    }
+    for key in ["tools", "tool_rules", "toolRules"] {
+        if let Some(map) = server.get(key).and_then(Value::as_object) {
+            for (name, rule) in map {
+                if tool_rule_value(rule) == Some(true) {
+                    names.push(name.clone());
+                }
+            }
+        }
+    }
+    names.sort();
+    names.dedup();
+    names.retain(|name| tool_allowed(server, false, name));
+    names
+}
+
+fn tool_rule_value(rule: &Value) -> Option<bool> {
+    if let Some(value) = rule.as_bool() {
+        return Some(value);
+    }
+    if let Some(value) = rule.get("allow").and_then(Value::as_bool) {
+        return Some(value);
+    }
+    if let Some(text) = rule.as_str() {
+        return match text.trim().to_lowercase().as_str() {
+            "allow" | "allowed" | "true" | "yes" | "on" => Some(true),
+            "deny" | "denied" | "false" | "no" | "off" => Some(false),
+            _ => None,
+        };
+    }
+    None
+}
+
+fn remove_tool_name(server: &mut Value, key: &str, tool: &str) {
+    if let Some(list) = server.get_mut(key).and_then(Value::as_array_mut) {
+        list.retain(|v| v.as_str() != Some(tool));
+    }
+}
+
+fn set_tool_rule(server: &mut Value, tool: &str, allow: bool) {
+    if !server.is_object() {
+        *server = json!({});
+    }
+    for key in ["deny_tools", "denyTools", "denied_tools", "deniedTools"] {
+        if allow {
+            remove_tool_name(server, key, tool);
+        }
+    }
+    for key in ["allow_tools", "allowTools", "allowed_tools", "allowedTools"] {
+        if !allow {
+            remove_tool_name(server, key, tool);
+        }
+    }
+    if !server["tools"].is_object() {
+        server["tools"] = json!({});
+    }
+    server["tools"][tool] = json!(allow);
+}
+
 /// One MCP server by name, with whether a plugin that holds it is allowed. The name is the prefixed one in
 /// `plugins.json`, for example `demo-echo`.
 pub fn server_entry(ctx: &Ctx, name: &str) -> Option<(Value, bool)> {
@@ -680,6 +785,43 @@ pub fn mcp_set_allow(ctx: &Ctx, name: &str, allow: bool) -> String {
     }
 }
 
+/// Allows or denies one tool of a standalone or plugin server. The old `allow` switch of the server stays the default
+/// for every other tool. The rule is kept with the server, so a standalone server keeps it in `mcp.json` and a plugin
+/// server keeps it in `plugins.json` until the plugin is added again.
+pub fn mcp_set_tool_allow(ctx: &Ctx, name: &str, tool: &str, allow: bool) -> String {
+    let tool = tool.trim();
+    if tool.is_empty() {
+        return "NOT changed. Give the name of the tool.".to_string();
+    }
+    let state = if allow { "allowed" } else { "denied" };
+    let mut standalone = mcp_load(ctx);
+    if let Some(server) = standalone["servers"].get_mut(name) {
+        set_tool_rule(server, tool, allow);
+        return match mcp_save(ctx, &standalone) {
+            Ok(_) => format!("MCP server {}: tool {} {}", name, tool, state),
+            Err(e) => format!("NOT changed. {}", e),
+        };
+    }
+    let mut reg = load(ctx);
+    let mut found = false;
+    if let Some(list) = reg["plugins"].as_array_mut() {
+        for p in list {
+            if let Some(server) = p["mcpServers"].get_mut(name) {
+                set_tool_rule(server, tool, allow);
+                found = true;
+                break;
+            }
+        }
+    }
+    if !found {
+        return format!("no MCP server named {}. penelope mcp list shows the names.", name);
+    }
+    match fs::write(registry(ctx), serde_json::to_string_pretty(&reg).unwrap()) {
+        Ok(_) => format!("MCP server {}: tool {} {}", name, tool, state),
+        Err(e) => format!("NOT changed. cannot write {}: {}", registry(ctx).display(), e),
+    }
+}
+
 /// The MCP servers of all plugins, for the configuration of the main model.
 pub fn servers(ctx: &Ctx) -> Value {
     let reg = load(ctx);
@@ -716,6 +858,52 @@ mod tests {
         assert_eq!(allowed(&ctx), vec!["mcp__demo_notes-db__*", "mcp__demo_notes-web_search__*"]);
         assert!(add(&ctx, &plugin.to_string_lossy()).ends_with("tools allowed") && list(&ctx).contains("· tools allowed"));
         assert!(set_allow(&ctx, "demo.notes", false).contains("denied") && allowed(&ctx).is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_tool_rule_overrides_the_switch_of_its_server() {
+        let server = json!({"allow": true, "deny_tools": ["danger"], "tools": {"quiet": false, "read": {"allow": true}}});
+        assert!(tool_allowed(&server, true, "other"));
+        assert!(!tool_allowed(&server, true, "danger"));
+        assert!(!tool_allowed(&server, true, "quiet"));
+        assert!(tool_allowed(&server, true, "read"));
+        let closed = json!({"allow": false, "allow_tools": ["read"]});
+        assert!(tool_allowed(&closed, false, "read"));
+        assert!(!tool_allowed(&closed, false, "write"));
+        let named = json!({"allow": true, "tools": {"read": "deny", "write": "allow"}});
+        assert!(!tool_allowed(&named, true, "read"));
+        assert!(tool_allowed(&named, true, "write"));
+        assert!(!tool_allowed(&server, true, ""));
+        let named_only = json!({"allow": false, "allow_tools": ["read"], "tools": {"write": true, "shut": false}});
+        assert_eq!(explicitly_allowed(&named_only), vec!["read".to_string(), "write".to_string()]);
+    }
+
+    #[test]
+    fn a_tool_of_a_standalone_and_a_plugin_server_can_be_denied() {
+        let dir = std::env::temp_dir().join(format!("penelope-plugins-tools-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let plugin = dir.join("demo");
+        fs::create_dir_all(plugin.join(".claude-plugin")).unwrap();
+        fs::write(plugin.join(".claude-plugin/plugin.json"), r#"{"name": "demo.notes"}"#).unwrap();
+        fs::write(plugin.join(".mcp.json"), r#"{"mcpServers": {"echo": {"command": "true"}}}"#).unwrap();
+        let ctx = crate::config::load(&dir.join(".penelope"));
+        assert!(add(&ctx, &plugin.to_string_lossy()).contains("demo.notes"));
+        set_allow(&ctx, "demo.notes", true);
+        let (server, allow) = server_entry(&ctx, "demo.notes-echo").unwrap();
+        assert!(tool_allowed(&server, allow, "echo"));
+        assert!(mcp_set_tool_allow(&ctx, "demo.notes-echo", "echo", false).contains("denied"));
+        let (server, allow) = server_entry(&ctx, "demo.notes-echo").unwrap();
+        assert!(!tool_allowed(&server, allow, "echo") && tool_allowed(&server, allow, "other"));
+        assert!(mcp_set_tool_allow(&ctx, "missing", "echo", false).starts_with("no MCP server"));
+        assert!(mcp_add(&ctx, "solo", "true", &[], true).contains("added"));
+        assert!(mcp_set_tool_allow(&ctx, "solo", "run", false).contains("denied"));
+        let (server, allow) = server_entry(&ctx, "solo").unwrap();
+        assert!(!tool_allowed(&server, allow, "run"));
+        assert!(mcp_set_tool_allow(&ctx, "solo", "run", true).contains("allowed"));
+        let (server, allow) = server_entry(&ctx, "solo").unwrap();
+        assert!(tool_allowed(&server, allow, "run"));
+        assert!(mcp_set_tool_allow(&ctx, "solo", "", true).starts_with("NOT changed"));
         let _ = fs::remove_dir_all(&dir);
     }
 

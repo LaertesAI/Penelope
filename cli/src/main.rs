@@ -136,6 +136,10 @@ penelope mcp add NAME COMMAND [ARGS...] [--allow]
                               register a standalone MCP server
 penelope mcp remove NAME      remove a standalone MCP server
 penelope mcp allow|deny NAME  put its tools on or off the allow list
+penelope mcp allow-tool SERVER TOOL
+                              allow one tool of a server while the server keeps its default
+penelope mcp deny-tool SERVER TOOL
+                              deny one tool of an allowed server
 penelope mcp call SERVER TOOL JSON
                               call one tool of an MCP server
 penelope serve [--bind HOST:PORT] [--allow-remote] [--print-config]
@@ -465,6 +469,12 @@ fn main() {
         "mcp" if args.get(1).map(String::as_str) == Some("deny") && args.len() >= 3 => {
             println!("{}", plugins::mcp_set_allow(&ctx, &args[2], false));
         }
+        "mcp" if args.get(1).map(String::as_str) == Some("allow-tool") && args.len() >= 4 => {
+            println!("{}", plugins::mcp_set_tool_allow(&ctx, &args[2], &args[3], true));
+        }
+        "mcp" if args.get(1).map(String::as_str) == Some("deny-tool") && args.len() >= 4 => {
+            println!("{}", plugins::mcp_set_tool_allow(&ctx, &args[2], &args[3], false));
+        }
         "mcp" if args.get(1).map(String::as_str) == Some("call") && args.len() >= 4 => {
             let payload: serde_json::Value = args.get(4).and_then(|j| serde_json::from_str(j).ok()).unwrap_or_else(|| serde_json::json!({}));
             match mcpclient::call(&ctx, &args[2], &args[3], &payload) {
@@ -621,6 +631,8 @@ fn main() {
             std::process::exit(2);
         }
     }
+    // A server that lives between calls gets a clean stop when Penelope leaves.
+    mcpclient::shutdown();
 }
 
 /// Captures the real screen, clicks the first element whose text holds `find`, captures again. One process, so the

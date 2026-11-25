@@ -1127,3 +1127,33 @@ Docs and evidence: this devlog, `docs/Penelope 0.11.0 Devlog.pdf`, `docs/screens
 
 The version badge, the test count and the tool count in `README.md` are static. They come from `Cargo.toml`,
 `cargo test` and `spec::TOOLS`.
+
+## Package 3.1 — one MCP process between two calls (branch `feat/mcp-state`)
+
+**State:** `cargo test` in `cli/` shows 174 passed, 0 failed. Nine of them are in `mcpclient::tests`; the two old
+format tests still run unchanged.
+
+**What runs:** `mcpclient.rs` keeps one process per server and `.penelope` root in a process-wide pool. The first call
+does the handshake; later `probe` and `call` reuse the same stdin/stdout. A transport error, a timeout or a changed
+`command`/`args`/`env`/`cwd` drops the process and the next call starts clean. `shutdown()` is called when `main`
+returns, closes stdin and gives a server 800 ms before it is killed. A server object may set `"timeout": SECONDS`
+(defaults: 20 s initialize, 30 s list, 120 s call).
+
+**Config:** `env` and `cwd` are read from the same server object in `mcp.json`, a plugin's `.mcp.json` and the plugin
+manifest. `env` accepts `{"NAME": "VALUE"}` and `["NAME=VALUE"]`. The old `"allow"` switch is still the default for
+every tool. Per tool: `"tools": {"danger": false, "read": {"allow": true}}`, `"allow_tools": ["read"]` and
+`"deny_tools": ["danger"]`; a deny rule wins. `penelope mcp allow-tool SERVER TOOL` and `deny-tool` write the rule
+(standalone to `mcp.json`, plugin servers to `plugins.json`). The allow list of the claude command gets named tool
+rules when a server's default is false.
+
+**Results:** text blocks are joined as before. An image or audio block is decoded from base64, written below
+`.penelope/mcp/images` or `.penelope/mcp/media`, and shown as `[image image/png · N bytes · saved at PATH]`. An
+embedded resource text is passed as text; a resource blob is written below `.penelope/mcp/resources` and shown with
+its URI, type and size. Base64 never reaches the prompt. `structuredContent` is used only when no content block
+produced text.
+
+**Open:** a tool denied per tool is enforced by `mcp_call` and the named allow list, but a server whose default is
+true still reaches the native claude MCP client with `mcp__SERVER__*`; Claude has no deny list in Penelope's command
+line yet. A relative `cwd` is read from the folder Penelope was started in, not from the plugin folder. Server-initiated
+requests on stdout are ignored (only answers with the id of our call are read). No process is kept across two Penelope
+invocations; the lifetime is one session.
