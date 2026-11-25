@@ -1,7 +1,7 @@
 # Plan for the coding agent: everything that is still missing in Penelope
 
 Written on 2026-11-25 from a talk with the owner and from a read of the code at commit `10bac25`
-(version 0.11.0, 250 tests, 53 files in `cli/src/`). The reader is a coding agent such as DeepSeek in OpenCode.
+(version 0.11.0, 259 tests, 54 files in `cli/src/`). The reader is a coding agent such as DeepSeek in OpenCode.
 Bug numbers such as B33 point into `docs/FEATURES-BUGS.md`. Block numbers point into `docs/CLUSTER-IDEAS.md`.
 
 ## How to work
@@ -195,7 +195,8 @@ These packages decide whether the idea can be shown. Do them in this order.
   `/mod new "use this picture as background"` lets the model write the mod. `/mod list`, `/mod on`, `/mod off`.
 - Done when: a mod written by the model changes the background picture, and `/mod off` brings the old one back.
 
-### 4.3 Factories (B17)
+### 4.3 Factories (B17) — done
+- Result: `67bc71a`, PR #11. `.penelope/factories.json`, profile every/at/purpose, `/factory new|list|install|run|stop`, systemd/launchd/Task Scheduler renderers, `--dry`, `--yes`. 251 unit + 8 integration. Open: no real timer enabled; launchd/Task Scheduler text-only; no cross-process registry lock; no rename/delete; timer env must carry keys.
 - State: missing. `jobs.rs` runs background shell jobs without a timer.
 - Build: a factory is a cluster profile with `every: "3h"` or a time of day, and one purpose. It runs through the
   scheduler of the operating system (systemd timer, launchd, Task Scheduler), so it works while Penelope is closed.
