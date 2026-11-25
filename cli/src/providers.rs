@@ -195,29 +195,27 @@ pub fn key_state(key_env: &str, optional: bool) -> &'static str {
 
 /// The table as text: one row per provider with the state of its key.
 pub fn list(ctx: &Ctx) -> String {
-    let mut out = format!("{:<13} {:<10} {:<17} {:<19} {}\n", "name", "kind", "key", "variable", "address");
+    let mut out = format!("{} providers\n\n", TABLE.len());
     for p in TABLE {
-        out.push_str(&format!("{:<13} {:<10} {:<17} {:<19} {}\n", p.name, p.kind, state_of(p),
-                              if p.key_env.is_empty() { "-" } else { p.key_env }, if p.base.is_empty() { "-" } else { p.base }));
-        out.push_str(&format!("{:<13} example model {} · {}\n", "", p.model, p.note));
+        out.push_str(&format!("{:<14} {:<10} {}\n", p.name, p.kind, state_of(p)));
+        out.push_str(&format!("  key     {}\n", if p.key_env.is_empty() { "none needed".to_string() } else { p.key_env.to_string() }));
+        out.push_str(&format!("  address {}\n", if p.base.is_empty() { "the claude command".to_string() } else { p.base.to_string() }));
+        out.push_str(&format!("  example {} · {}\n", p.model, p.note));
     }
     out.push_str("\nIn use here:\n");
     for role in ["main", "weak", "scout"] {
         let m = &ctx.cfg[role];
-        if m["model"].is_string() {
-            out.push_str(&format!("  {:<9} {} on {}\n", role, m["model"].as_str().unwrap_or("?"), of(m).map(|p| p.name).unwrap_or("an address outside the table")));
-        }
+        out.push_str(&format!("  {:<6} {} · {} · {}\n", role, m["model"].as_str().unwrap_or("?"),
+                              m["kind"].as_str().unwrap_or("?"), m["effort"].as_str().unwrap_or("no effort")));
     }
-    for (role, what) in crate::route::ROLES {
+    for (role, _) in crate::route::ROLES.iter().filter(|(r, _)| !matches!(*r, "lead" | "scout" | "condenser" | "judge" | "worker" | "tool" | "router" | "filter")) {
         let m = &ctx.cfg["roles"][role];
         if m["model"].is_string() {
-            out.push_str(&format!("  {:<9} {} on {} · {}\n", role, m["model"].as_str().unwrap_or("?"), of(m).map(|p| p.name).unwrap_or("an address outside the table"), what));
-        } else if matches!(*role, "router" | "filter") {
-            out.push_str(&format!("  {:<9} fixed rules · {}\n", role, what));
+            out.push_str(&format!("  {:<6} {} · {} · {}\n", role, m["model"].as_str().unwrap_or("?"),
+                                  m["kind"].as_str().unwrap_or("?"), m["effort"].as_str().unwrap_or("no effort")));
         }
     }
-    out.push_str("\npenelope provider use NAME [--role main|weak|scout] [--model MODEL] [--workspace ID] [--base-url URL]\n\
-A key is read from its environment variable when a request starts. No command prints or stores it.\n");
+    out.push_str("\n/model chooses a model. /providers connects a provider. /model → r sets the model of a role.\n");
     out
 }
 

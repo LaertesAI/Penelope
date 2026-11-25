@@ -24,8 +24,7 @@ characters, two pixels per character cell.
 |---|---|---|
 | `weave_22x22.rgb` | 22 by 22 | side panel |
 | `thread_22x22.gray` | 22 by 22 | mask of the loose thread, coloured by the mood |
-| `mark_24x24.rgb` | 24 by 24 | start screen |
-| `word_80x16.rgb` | 80 by 16 | the name on the start screen |
+| `mark_40x40.rgb` | 40 by 40 | the mark on the start screen |
 
 Colours of the interface: ink `#15131C`, night `#1E1B28`, raised `#2B2739`, paper `#F6F3EC`, clay `#E8825A`,
 sea `#5FB3E4`, ash `#B5B1C2`, dim `#7C778C`, red `#FF6B6B`. Clay is the terracotta of the mark, made lighter for dark grounds.

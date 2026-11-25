@@ -255,8 +255,16 @@ fn home(f: &mut Frame, app: &App, area: Rect) {
         format!("◆ {} plugins", app.side.plugins),
     ];
     let stats_h = 3u16;
-    let stack = 4 + stats_h + 4 + 2;
+    let show_mark = area.height >= 38;
+    let mark_h = if show_mark { art::mark().rows() + 1 } else { 0 };
+    let stack = 4 + stats_h + 4 + 2 + mark_h;
     let mut y = area.y + area.height.saturating_sub(stack) / 2;
+    if show_mark {
+        let mark = art::mark();
+        let mx = x + w.saturating_sub(mark.w as u16) / 2;
+        mark.draw(f.buffer_mut(), mx, y, area);
+        y += mark_h;
+    }
     put(f, area, x + w.saturating_sub(width(title) as u16) / 2, y, title, bold(PAPER));
     y += 1;
     let rule = "─".repeat(19);
@@ -555,7 +563,7 @@ fn target_value<'a>(app: &'a App, target: &str) -> &'a serde_json::Value {
 fn providers_dialog(f: &mut Frame, app: &App, area: Rect, sel: usize, target: &str, scroll: usize) {
     let list = &crate::providers::TABLE;
     let rows = (area.height.saturating_sub(9) as usize).clamp(4, 24).min(list.len().max(1));
-    let inner = dialog(f, area, "Models and providers", 92, rows as u16 + 8);
+    let inner = dialog(f, area, "Providers · connections", 96, rows as u16 + 8);
     let tab = |active: bool| if active { on(INK, CLAY).add_modifier(Modifier::BOLD) } else { on(ASH, RAISED) };
     if target == "main" || target == "weak" {
         put(f, inner, inner.x, inner.y, " main model ", tab(target == "main"));
@@ -571,21 +579,21 @@ fn providers_dialog(f: &mut Frame, app: &App, area: Rect, sel: usize, target: &s
         let bg = if chosen { NIGHT } else { RAISED };
         fill(f, Rect::new(inner.x.saturating_sub(1), y, inner.width + 2, 1), bg);
         put(f, inner, inner.x, y, if current == Some(p.name) { "●" } else { "○" }, fg(if current == Some(p.name) { SEA } else { DIM }));
-        put(f, inner, inner.x + 2, y, &clip(p.label, 26), on(if p.kind == "laertes" { GOLD } else { PAPER }, bg).add_modifier(if chosen { Modifier::BOLD } else { Modifier::empty() }));
-        put(f, inner, inner.x + 30, y, &clip(p.kind, 10), on(DIM, bg));
+        put(f, inner, inner.x + 2, y, &clip(p.label, 28), on(if p.kind == "laertes" { GOLD } else { PAPER }, bg).add_modifier(if chosen { Modifier::BOLD } else { Modifier::empty() }));
+        put(f, inner, inner.x + 32, y, &clip(p.kind, 10), on(DIM, bg));
         let (state, colour) = provider_state(p, &app.side.claude);
-        put(f, inner, inner.x + 42, y, state, on(colour, bg));
-        put(f, inner, inner.x + 58, y, &clip(p.model, 24), on(DIM, bg));
+        put(f, inner, inner.x + 44, y, &clip(state, 14), on(colour, bg));
+        put(f, inner, inner.x + 60, y, &clip(if p.key_env.is_empty() { "-" } else { p.key_env }, 28), on(DIM, bg));
     }
     let p = &list[sel.min(list.len().saturating_sub(1))];
-    let base = if p.base.is_empty() { "-" } else { p.base };
+    let base = if p.base.is_empty() { "no address, the claude command" } else { p.base };
     let detail = format!("{} · example {} · {}", base, p.model, p.note);
     put(f, inner, inner.x, inner.bottom().saturating_sub(2), &clip(&detail, inner.width as usize), on(DIM, RAISED));
-    let hint = if p.kind == "claude-cli" { "enter signs in through the official claude page" }
+    let hint = if p.kind == "claude-cli" { "enter signs in with the official claude command" }
         else if p.kind == "laertes" { "this family is in training" }
         else { "enter opens the masked API-key window" };
-    put(f, inner, inner.x, inner.bottom().saturating_sub(1), hint, on(CLAY, RAISED));
-    put(f, inner, inner.right().saturating_sub(48), inner.bottom().saturating_sub(1), "tab main/weak · r roles · m models · esc", on(DIM, RAISED));
+    put(f, inner, inner.x, inner.bottom().saturating_sub(1), &clip(hint, inner.width.saturating_sub(20) as usize), on(CLAY, RAISED));
+    put(f, inner, inner.right().saturating_sub(19), inner.bottom().saturating_sub(1), "tab main/weak · esc", on(DIM, RAISED));
 }
 
 fn roles_dialog(f: &mut Frame, app: &App, area: Rect, sel: usize) {
@@ -610,7 +618,7 @@ fn roles_dialog(f: &mut Frame, app: &App, area: Rect, sel: usize) {
 fn plugins_dialog(f: &mut Frame, app: &App, area: Rect, sel: usize, scroll: usize, filter: &str, mode: u8) {
     let entries = &app.plugin_rows;
     let matches = app.plugin_matches(filter, mode);
-    let inner = dialog(f, area, "Plugins", 104, 31);
+    let inner = dialog(f, area, "Plugins", 110, 31);
     let commands: usize = entries.iter().map(|e| e.commands.len()).sum();
     let skills: usize = entries.iter().map(|e| e.skills.len()).sum();
     let servers: usize = entries.iter().map(|e| e.servers.len()).sum();
@@ -629,7 +637,7 @@ fn plugins_dialog(f: &mut Frame, app: &App, area: Rect, sel: usize, scroll: usiz
         put(f, inner, inner.x, inner.bottom().saturating_sub(1), "esc closes", on(DIM, RAISED));
         return;
     }
-    let list_w = 46u16.min(inner.width.saturating_sub(20));
+    let list_w = 56u16.min(inner.width.saturating_sub(18));
     let rows = (inner.height as usize).saturating_sub(7).min(matches.len().max(1)).max(1);
     let first = scroll.min(matches.len().saturating_sub(rows));
     if matches.is_empty() {
@@ -642,9 +650,9 @@ fn plugins_dialog(f: &mut Frame, app: &App, area: Rect, sel: usize, scroll: usiz
         let bg = if chosen { NIGHT } else { RAISED };
         fill(f, Rect::new(inner.x.saturating_sub(1), y, inner.width + 2, 1), bg);
         put(f, inner, inner.x, y, if entry.allow { "●" } else { "○" }, on(if entry.allow { SEA } else { CLAY }, bg));
-        put(f, inner, inner.x + 2, y, &clip(&entry.name, 22), on(PAPER, bg).add_modifier(if chosen { Modifier::BOLD } else { Modifier::empty() }));
-        let counts = format!("{} cmd · {} skill · {} mcp", entry.commands.len(), entry.skills.len(), entry.servers.len());
-        put(f, inner, inner.x + 26, y, &clip(&counts, list_w.saturating_sub(28) as usize), on(DIM, bg));
+        put(f, inner, inner.x + 2, y, &clip(&entry.name, 28), on(PAPER, bg).add_modifier(if chosen { Modifier::BOLD } else { Modifier::empty() }));
+        let counts = format!("{}c {}s {}m", entry.commands.len(), entry.skills.len(), entry.servers.len());
+        put(f, inner, inner.x + 32, y, &clip(&counts, list_w.saturating_sub(34) as usize), on(DIM, bg));
     }
     let Some(entry) = matches.get(sel.min(matches.len().saturating_sub(1))).and_then(|i| entries.get(*i)) else { return; };
     let x = inner.x + list_w + 2;
@@ -681,7 +689,7 @@ fn plugins_dialog(f: &mut Frame, app: &App, area: Rect, sel: usize, scroll: usiz
         for name in entry.servers.iter().take(4) { line(&mut y, name, ASH); }
     }
     put(f, inner, inner.x, inner.bottom().saturating_sub(1),
-        "↑↓ choose · type filters · tab all/commands/MCP · enter commands · A allow · U update · X twice removes · esc", on(CLAY, RAISED));
+        "↑↓ · type filters · tab view · enter commands · A allow · U update · XX remove · esc", on(CLAY, RAISED));
 }
 
 fn plugin_commands_dialog(f: &mut Frame, app: &App, area: Rect, plugin: &str, sel: usize, scroll: usize) {
@@ -765,7 +773,7 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
         }
         Overlay::Models { sel, target } => {
             let choices = app.model_choices(target);
-            let inner = dialog(f, area, &format!("{} · exact models", target_label(target)), 72, choices.len().min(20) as u16 + 10);
+            let inner = dialog(f, area, &format!("Models · {}", target_label(target)), 84, choices.len().min(20) as u16 + 10);
             let current = target_value(app, target)["model"].as_str().unwrap_or("?").to_string();
             let current_levels = app.model_efforts(target, &current);
             let current_effort = if current_levels.is_empty() { "no effort".to_string() }
@@ -781,16 +789,17 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
                 let bg = if chosen { NIGHT } else { RAISED };
                 fill(f, Rect::new(inner.x.saturating_sub(1), y, inner.width + 2, 1), bg);
                 put(f, inner, inner.x, y, if *name == current { "●" } else { "○" }, on(if *name == current { SEA } else { DIM }, bg));
-                put(f, inner, inner.x + 2, y, &clip(name, 42), on(PAPER, bg));
+                put(f, inner, inner.x + 2, y, &clip(name, 46), on(PAPER, bg));
                 let effort = app.model_efforts(target, name).join(" ");
-                put(f, inner, inner.x + 40, y, &clip(if effort.is_empty() { "no effort" } else { &effort }, 28), on(DIM, bg));
+                put(f, inner, inner.x + 50, y, &clip(if effort.is_empty() { "no effort" } else { &effort }, 28), on(DIM, bg));
             }
             let selected = choices.get(*sel).cloned().unwrap_or_default();
             let selected_label = app.model_cache.get(&provider).and_then(|list| list.iter().find(|m| m.id == selected)).map(|m| m.label.clone())
                 .or_else(|| crate::providers::models(&provider).iter().find(|m| m.id == selected).map(|m| m.label.to_string()))
                 .unwrap_or_else(|| selected.clone());
-            let note = format!("{} · current {} / effort {} · e changes effort", selected_label, current, current_effort);
-            put(f, inner, inner.x, inner.bottom().saturating_sub(1), &clip(&note, inner.width as usize), on(CLAY, RAISED));
+            let note = format!("{} · current {} / effort {}", selected_label, current, current_effort);
+            put(f, inner, inner.x, inner.bottom().saturating_sub(2), &clip(&note, inner.width as usize), on(CLAY, RAISED));
+            put(f, inner, inner.x, inner.bottom().saturating_sub(1), "↑↓ · tab main/weak · r roles · e effort · enter chooses · esc", on(DIM, RAISED));
         }
         Overlay::Pager { title, lines, scroll } => {
             let widest = lines.iter().map(|l| width(l)).max().unwrap_or(20) as u16;
@@ -832,7 +841,7 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
         Overlay::Sessions { sel } => {
             let all = crate::sessions::all(&app.ctx);
             let inner = dialog(f, area, "Sessions", 92, all.len().min(16) as u16 + 7);
-            put(f, inner, inner.x, inner.y, "enter opens a session · the newest is on top", on(ASH, RAISED));
+            put(f, inner, inner.x, inner.y, "enter opens · entf deletes · the newest is on top", on(ASH, RAISED));
             let rows = inner.height.saturating_sub(2) as usize;
             let first = (sel + 1).saturating_sub(rows);
             for (i, e) in all.iter().rev().skip(first).take(rows).enumerate() {

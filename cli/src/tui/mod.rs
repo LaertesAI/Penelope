@@ -86,8 +86,7 @@ pub struct Cmd {
 
 pub const COMMANDS: &[Cmd] = &[
     Cmd { name: "/new", help: "start a new session", key: "ctrl+n", takes_text: false },
-    Cmd { name: "/models", help: "choose the main and the weaker model", key: "ctrl+o", takes_text: false },
-    Cmd { name: "/model", help: "same as /models: choose a model", key: "", takes_text: false },
+    Cmd { name: "/model", help: "choose the model of the main or the weaker setting", key: "ctrl+o", takes_text: false },
     Cmd { name: "/mode", help: "auto, manual, safe, review, privacy or power", key: "", takes_text: false },
     Cmd { name: "/sessions", help: "list the stored sessions and open one", key: "f2", takes_text: false },
     Cmd { name: "/setup", help: "answer the setup questions again", key: "", takes_text: false },
@@ -97,7 +96,7 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd { name: "/update", help: "check for a newer Penelope", key: "", takes_text: false },
     Cmd { name: "/audit", help: "look for key and plain-http leaks in .penelope", key: "", takes_text: false },
     Cmd { name: "/input", help: "native pointer helper: status, install, enable", key: "", takes_text: false },
-    Cmd { name: "/providers", help: "the provider table and which keys are set", key: "", takes_text: false },
+    Cmd { name: "/providers", help: "connect a provider: login or API key", key: "", takes_text: false },
     Cmd { name: "/undo", help: "take back the last change to a file", key: "", takes_text: false },
     Cmd { name: "/jobs", help: "list the background jobs", key: "", takes_text: false },
     Cmd { name: "/scout", help: "who searches: auto, web, offer or off (no word: the next one)", key: "", takes_text: false },
@@ -434,17 +433,16 @@ impl App {
     /// The model names the picker offers: the provider's own list first, then the static catalog, then the current name.
     pub fn model_choices(&self, target: &str) -> Vec<String> {
         let provider = self.provider_name(target);
-        if let Some(list) = self.model_cache.get(&provider) {
-            if !list.is_empty() {
-                return list.iter().map(|m| m.id.clone()).collect();
-            }
+        let current = self.model_value(target)["model"].as_str().unwrap_or("").to_string();
+        let mut out = if let Some(list) = self.model_cache.get(&provider) {
+            list.iter().map(|m| m.id.clone()).collect::<Vec<_>>()
+        } else {
+            crate::providers::models(&provider).iter().map(|m| m.id.to_string()).collect::<Vec<_>>()
+        };
+        if !current.is_empty() && !out.iter().any(|m| *m == current) {
+            out.insert(0, current);
         }
-        let list = crate::providers::models(&provider);
-        if !list.is_empty() {
-            return list.iter().map(|m| m.id.to_string()).collect();
-        }
-        let current = self.model_value(target)["model"].as_str().unwrap_or("");
-        if current.is_empty() { Vec::new() } else { vec![current.to_string()] }
+        out
     }
 
     /// The effort levels of one model. The provider's answer wins over the static rules.
@@ -540,9 +538,9 @@ impl App {
     fn show_tip(&mut self) {
         const TIPS: &[&str] = &[
             "F5 starts a new session; F6 twice deletes the current one.",
-            "/models → r sets one model per role: tool calls, processing, research, coding.",
-            "/models → m shows exact model names; e changes the effort level.",
-            "/models → tab switches the main and the weaker model.",
+            "/model chooses the model; r sets one model per role; e changes the effort.",
+            "/providers connects a provider: Claude login or a masked API key.",
+            "/model → tab switches the main and the weaker model.",
             "/rules session TEXT keeps a rule in this project; /rules global TEXT keeps it for every project.",
             "Ctrl+O opens the provider list from anywhere; Esc closes a dialog.",
         ];
@@ -630,6 +628,35 @@ impl App {
             self.cursor += 1;
         }
         self.slash_sel = 0;
+    }
+
+    /// A paste goes into the field that is open. An API key must never land in the prompt by accident.
+    fn paste(&mut self, text: &str) {
+        let clean: String = text.replace("\r\n", "\n").replace('\r', "\n");
+        let mut prompt = false;
+        match &mut self.overlay {
+            Overlay::ApiKey { input, cursor, error, .. } => {
+                for c in clean.chars().filter(|c| !c.is_whitespace() && !c.is_control()) {
+                    input.insert(*cursor, c);
+                    *cursor += 1;
+                }
+                error.clear();
+            }
+            Overlay::Palette { query, sel } => {
+                query.push_str(&clean.replace(['\n', '\r'], " "));
+                *sel = 0;
+            }
+            Overlay::Plugins { filter, sel, scroll, .. } => {
+                filter.push_str(&clean.replace(['\n', '\r'], " "));
+                *sel = 0;
+                *scroll = 0;
+            }
+            Overlay::None => prompt = true,
+            _ => {}
+        }
+        if prompt {
+            self.insert(&clean);
+        }
     }
 
     fn save_checkpoint(&self) {
@@ -993,7 +1020,14 @@ impl App {
                 self.intro = Instant::now();
                 self.delete_armed = None;
             }
-            "/models" | "/model" => self.overlay = Overlay::Providers { sel: 0, target: "main".into(), scroll: 0 },
+            "/models" => self.toast("/model chooses a model; /providers connects a provider".to_string()),
+            "/model" => {
+                let target = "main".to_string();
+                self.load_models(&target);
+                let current = self.model_value(&target)["model"].as_str().unwrap_or("").to_string();
+                let at = self.model_choices(&target).iter().position(|m| *m == current).unwrap_or(0);
+                self.overlay = Overlay::Models { sel: at, target };
+            }
             "/mode" if !rest.is_empty() => {
                 match crate::mode::apply(&mut self.ctx, rest) {
                     Ok(text) => {
@@ -1054,7 +1088,8 @@ impl App {
                     _ => "off: the main model does every search itself",
                 }.to_string(), art::SEA);
             }
-            "/providers" => self.pager("Providers", crate::providers::list(&self.ctx)),
+            "/providers" if rest == "table" => self.pager("Providers", crate::providers::list(&self.ctx)),
+            "/providers" => self.overlay = Overlay::Providers { sel: 0, target: "main".into(), scroll: 0 },
             "/undo" => {
                 let report = crate::files::undo(&self.ctx);
                 self.note("↺", "undo", report, art::SEA);
@@ -1528,6 +1563,7 @@ impl App {
         let mut plugin_update: Option<String> = None;
         let mut plugin_remove: Option<String> = None;
         let mut plugin_use: Option<(String, String)> = None;
+        let mut delete_session: Option<String> = None;
         if !matches!(key.code, KeyCode::Char('X')) { self.plugin_armed = None; }
         let plugin_filtered = if let Overlay::Plugins { filter, mode, .. } = &self.overlay { self.plugin_matches(filter, *mode) } else { Vec::new() };
         match &mut self.overlay {
@@ -1563,8 +1599,6 @@ impl App {
                     *scroll = 0;
                 }
                 KeyCode::Enter => provider = Some((*sel, target.clone())),
-                KeyCode::Char('m') => models_open = Some(target.clone()),
-                KeyCode::Char('r') => roles_open = true,
                 _ => {}
             },
             Overlay::Roles { sel } => match key.code {
@@ -1599,8 +1633,10 @@ impl App {
                 KeyCode::Down => *sel += 1,
                 KeyCode::PageUp => *sel = sel.saturating_sub(10),
                 KeyCode::PageDown => *sel += 10,
+                KeyCode::Tab => models_open = Some(if target == "main" { "weak".to_string() } else { "main".to_string() }),
                 KeyCode::Enter => pick = Some((*sel, target.clone())),
                 KeyCode::Char('e') => effort = Some(target.clone()),
+                KeyCode::Char('r') => roles_open = true,
                 _ => {}
             },
             Overlay::Pager { scroll, lines, .. } => match key.code {
@@ -1624,6 +1660,9 @@ impl App {
                 KeyCode::Esc | KeyCode::Char('q') => close = true,
                 KeyCode::Up => *sel = sel.saturating_sub(1),
                 KeyCode::Down => *sel = (*sel + 1).min(self.tabs.len().saturating_sub(1)),
+                KeyCode::Delete => {
+                    if let Some((id, _)) = self.tabs.get(self.tabs.len().saturating_sub(1 + *sel)) { delete_session = Some(id.clone()); }
+                }
                 KeyCode::Enter => {
                     open = Some(self.tabs.len().saturating_sub(1 + *sel));        // the list shows the newest first
                     close = true;
@@ -1807,6 +1846,31 @@ impl App {
                 self.set_model(&target, &model);
             }
             close = true;
+        }
+        if let Some(id) = delete_session {
+            if crate::sessions::delete(&self.ctx, &id) {
+                if self.session_id.as_deref() == Some(id.as_str()) {
+                    self.items.clear();
+                    self.chat = Some(Chat::new());
+                    self.session_id = None;
+                    self.tokens = (0, 0);
+                    self.turns = 0;
+                    self.tool_calls = 0;
+                    self.trail.clear();
+                    self.learned.clear();
+                    self.scroll = 0;
+                }
+                self.refresh_tabs();
+                if self.tabs.is_empty() {
+                    close = true;
+                } else if let Overlay::Sessions { sel } = &mut self.overlay {
+                    *sel = (*sel).min(self.tabs.len().saturating_sub(1));
+                }
+                self.refresh_side();
+                self.toast(format!("session {} deleted", id));
+            } else {
+                self.toast("the session was already gone".to_string());
+            }
         }
         if let Some((id, text)) = said {
             self.answer_text(&id, &text);
@@ -2021,7 +2085,7 @@ pub fn run(ctx: Ctx, resume: Option<serde_json::Value>) -> Result<(), String> {
                 loop {
                     match event::read().map_err(|e| e.to_string())? {
                         Event::Key(k) if k.kind != KeyEventKind::Release => app.key(k),
-                        Event::Paste(s) => app.insert(&s.replace("\r\n", "\n").replace('\r', "\n")),
+                        Event::Paste(s) => app.paste(&s),
                         Event::Mouse(m) => match m.kind {
                             MouseEventKind::ScrollUp => app.scroll += 3,
                             MouseEventKind::ScrollDown => app.scroll = app.scroll.saturating_sub(3),
@@ -2112,6 +2176,13 @@ mod tests {
         a.tx.send(Msg::Turn(TurnEvent::Delta("Next".into()))).unwrap();
         a.drain();
         assert!(matches!(a.items.as_slice(), [Item::Reply(t), Item::Reply(n)] if t == "Two files: a and b." && n == "Next"));
+    }
+
+    #[test]
+    fn home_shows_the_mark_and_the_wordmark() {
+        let mut a = app();
+        let text = screen(&mut a, 120, 40);
+        assert!(text.contains("P E N E L O P E") && text.contains('▀'), "{}", text);
     }
 
     #[test]
@@ -2231,9 +2302,22 @@ mod tests {
     }
 
     #[test]
+    fn model_and_providers_are_two_separate_screens() {
+        let mut a = app();
+        a.command("/model");
+        assert!(matches!(a.overlay, Overlay::Models { .. }));
+        a.command("/providers");
+        assert!(matches!(a.overlay, Overlay::Providers { .. }));
+        a.command("/models");
+        assert!(matches!(a.overlay, Overlay::Providers { .. }));        // the old command only points at the two new ones
+        let text = screen(&mut a, 120, 40);
+        assert!(text.contains("Providers · connections"), "{}", text);
+    }
+
+    #[test]
     fn the_provider_list_opens_a_masked_key_window_and_a_claude_login() {
         let mut a = app();
-        a.command("/models");
+        a.command("/providers");
         assert!(matches!(a.overlay, Overlay::Providers { .. }));
         let at = crate::providers::TABLE.iter().position(|p| p.name == "anthropic").unwrap();
         a.overlay = Overlay::Providers { sel: at, target: "main".into(), scroll: 0 };
@@ -2244,7 +2328,8 @@ mod tests {
             }
             _ => panic!("the API provider must open the key window"),
         }
-        type_text(&mut a, "sk-abcdefghijklmnop");
+        a.paste("sk-abcdefghijklmnop");
+        assert!(a.input_text().is_empty());                  // the paste must not land in the prompt
         let shown = screen(&mut a, 120, 40);
         assert!(shown.contains("sk-a") && !shown.contains("sk-abcdefghijklmnop"), "{}", shown);
         press(&mut a, KeyCode::Esc);
@@ -2252,6 +2337,21 @@ mod tests {
         press(&mut a, KeyCode::Enter);
         assert_eq!(a.login.as_deref(), Some("claude"));
         assert!(matches!(a.overlay, Overlay::None));
+    }
+
+    #[test]
+    fn delete_removes_the_selected_session_from_the_list() {
+        let mut a = app();
+        fs::write(a.ctx.root.join("sessions.json"), serde_json::json!([
+            {"id": "one", "title": "first", "started": 1, "last": 2, "turns": 1},
+            {"id": "two", "title": "second", "started": 3, "last": 4, "turns": 2}
+        ]).to_string()).unwrap();
+        a.refresh_tabs();
+        a.overlay = Overlay::Sessions { sel: 0 };
+        press(&mut a, KeyCode::Delete);
+        assert_eq!(a.tabs.len(), 1);
+        assert!(a.tabs.iter().all(|(id, _)| id == "one"));
+        assert!(crate::sessions::all(&a.ctx).iter().all(|s| s["id"] == "one"));
     }
 
     #[test]
@@ -2297,7 +2397,7 @@ mod tests {
         a.command("/plugins");
         assert!(matches!(a.overlay, Overlay::Plugins { .. }));
         let text = screen(&mut a, 120, 40);
-        assert!(text.contains("Plugins") && text.contains("plug") && text.contains("1 cmd"), "{}", text);
+        assert!(text.contains("Plugins") && text.contains("plug") && text.contains("1c"), "{}", text);
         assert_eq!((a.plugin_matches("", 0).len(), a.plugin_matches("", 1).len(), a.plugin_matches("fix", 0).len()), (1, 1, 1));
         press(&mut a, KeyCode::Char('f'));
         assert!(matches!(&a.overlay, Overlay::Plugins { filter, .. } if filter == "f"));
@@ -2326,7 +2426,7 @@ mod tests {
         a.model_cache.insert("opencode".to_string(), vec![
             crate::providers::ModelInfo { id: "from-provider".into(), label: "From Provider".into(), efforts: vec!["low".into(), "high".into()] },
         ]);
-        assert_eq!(a.model_choices("main"), vec!["from-provider".to_string()]);
+        assert_eq!(a.model_choices("main"), vec!["deepseek-v4.1-flash".to_string(), "from-provider".to_string()]);
         assert_eq!(a.model_efforts("main", "from-provider"), vec!["low".to_string(), "high".to_string()]);
         a.overlay = Overlay::Models { sel: 0, target: "main".into() };
         press(&mut a, KeyCode::Char('e'));
@@ -2354,7 +2454,7 @@ mod tests {
     #[test]
     fn roles_have_models_and_opencode_and_claude_names_are_exact() {
         let mut a = app();
-        a.command("/models");
+        a.command("/model");
         press(&mut a, KeyCode::Char('r'));
         assert!(matches!(a.overlay, Overlay::Roles { .. }));
         press(&mut a, KeyCode::Enter);

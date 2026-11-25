@@ -112,6 +112,12 @@ impl Mood {
     }
 }
 
+/// The full mark from `brand/term-mark.svg`, 40 by 40 pixels, 40 columns and 20 rows. The start screen uses it; the
+/// side panel keeps the smaller woven square with the mood thread.
+pub fn mark() -> Bitmap {
+    Bitmap::from_rgb(40, 40, include_bytes!("../../art/mark_40x40.rgb"))
+}
+
 /// The woven square, 22 columns and 11 rows. The loose thread at the lower right takes the colour of the mood.
 /// `blink` dims the thread for one frame while Penelope is awake.
 pub fn head(mood: Mood, blink: bool) -> Bitmap {
