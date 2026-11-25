@@ -1,7 +1,7 @@
 # Plan for the coding agent: everything that is still missing in Penelope
 
 Written on 2026-11-25 from a talk with the owner and from a read of the code at commit `10bac25`
-(version 0.11.0, 259 tests, 54 files in `cli/src/`). The reader is a coding agent such as DeepSeek in OpenCode.
+(version 0.11.0, 288 tests, 55 files in `cli/src/`). The reader is a coding agent such as DeepSeek in OpenCode.
 Bug numbers such as B33 point into `docs/FEATURES-BUGS.md`. Block numbers point into `docs/CLUSTER-IDEAS.md`.
 
 ## How to work
@@ -162,7 +162,8 @@ These packages decide whether the idea can be shown. Do them in this order.
   content in results.
 - Done when: two calls to one server reach the same process, shown by a counter tool in a test.
 
-### 3.2 The brief
+### 3.2 The brief — safe core done
+- Result: `eacb283`, PR #12. Extension, short form to typed items, SHA-256, inline/upload limits, path/host confinement, brief_id, client packs only for announced tools, server brief_check/brief_put. 280 unit + 8 integration. Not reached: full 22-check prototype, pagecheck/page_fix/fix-by-brief-id, ScreenCodec round-trip, TTL/persistence, brief.roots only adds folders.
 - State: a design, a prototype in Python and a paper exist in the research repository:
   `prototypes/11_mcp_auftrag` and `reports/Paper 7 Auftrag statt Aufruf.md`. Measured there for 3 pages: 3 calls and
   645 tokens with a brief, 18 calls and 1,225 tokens with handle tools, 15 calls and 13,383 tokens with classic tools.
