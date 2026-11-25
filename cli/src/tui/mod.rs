@@ -2,14 +2,14 @@
 //!
 //! One thread draws and reads keys. A turn of the main model runs in a second thread and reports through a channel.
 
-mod art;
-mod picture;
+pub(crate) mod art;
+pub(crate) mod picture;
 mod text;
 mod view;
 
 use crate::backend::{Chat, Event as TurnEvent};
 use crate::config::Ctx;
-use crate::{plugins, tools};
+use crate::{mods, plugins, tools};
 use art::Mood;
 use ratatui::crossterm::event::{self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event, KeyCode,
                                 KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind};
@@ -135,6 +135,7 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd { name: "/auto", help: "switch auto-learning on or off", key: "", takes_text: false },
     Cmd { name: "/learn", help: "the lessons and the feedback of this folder", key: "", takes_text: false },
     Cmd { name: "/skills", help: "the skills Penelope wrote for this project", key: "", takes_text: false },
+    Cmd { name: "/mod", help: "mods: list, new TEXT, on NAME, off, remove NAME", key: "", takes_text: true },
     Cmd { name: "/doctor", help: "check the programs and models Penelope needs", key: "", takes_text: false },
     Cmd { name: "/copy", help: "copy the last answer to the clipboard", key: "", takes_text: false },
     Cmd { name: "/shot", help: "save the screen as a picture under .penelope/screens", key: "f12", takes_text: false },
@@ -202,6 +203,17 @@ pub struct App {
     pub page: usize,
     pub sidebar: bool,
     pub tick: u64,
+    /// The colours of the interface. A mod lays its theme over the default palette.
+    pub palette: art::Palette,
+    /// The safe subset of a mod's layout: side, top (no side panel) or compact (a narrow side panel).
+    pub layout: mods::Layout,
+    /// The keys of the main actions. A mod may move one, never esc, ctrl+c, f5 or f6.
+    pub keys: mods::Keys,
+    /// The folder name of the active mod.
+    pub mod_name: Option<String>,
+    /// What to restore on `/mod off`: palette, layout, keys and the side panel as they were before the mod.
+    mod_restore: Option<(art::Palette, mods::Layout, mods::Keys, bool)>,
+    mod_startup: Option<String>,
     last_key: Instant,
     flash: Option<(Mood, Instant)>,
     /// A short message under the input box and the time it appeared.
@@ -296,6 +308,7 @@ impl App {
         let mut app = App {
             ctx, items: Vec::new(), input: Vec::new(), cursor: 0, history, hist_at: None, overlay: Overlay::None, slash_sel: 0,
             busy: None, learning: false, streaming: false, scroll: 0, page: 10, sidebar: true, tick: 0, last_key: Instant::now(), flash: None, toast: None,
+            palette: art::Palette::DEFAULT, layout: mods::Layout::Side, keys: mods::Keys::default(), mod_name: None, mod_restore: None, mod_startup: None,
             chat: Some(Chat::new()), cancel: Arc::new(AtomicBool::new(false)), pid: Arc::new(AtomicU32::new(0)), tx, rx,
             tokens: (0, 0), turns: 0, tool_calls: 0, trail: Vec::new(), learned: Vec::new(), side: Side::default(),
             approve_dir, allow_all: false, seen: HashSet::new(), shot: false, quit: false, session_id: None, tabs: Vec::new(), setup: false,
@@ -304,6 +317,7 @@ impl App {
         };
         app.refresh_tabs();
         app.refresh_side();
+        app.load_saved_mod();
         app
     }
 
@@ -386,6 +400,88 @@ impl App {
         self.side.cost = crate::cost::budget_summary(&self.ctx);
         self.side.cursor = crate::cursor::backend(&self.ctx).1;
         self.side.claude = crate::auth::claude_status();
+    }
+
+    /// Reads the mod that was active when Penelope last closed and brings it back. A manifest that broke in the
+    /// meantime is refused once with a line; the next start opens with the default look.
+    fn load_saved_mod(&mut self) {
+        let Some(name) = mods::active(&self.ctx) else { return };
+        match self.apply_mod(&name) {
+            Ok((_, warnings)) => {
+                if let Some(text) = self.mod_startup.take() {
+                    self.note("◆", "mod", text, art::SEA);
+                }
+                if let Some(warning) = warnings.into_iter().next() {
+                    self.toast(warning);
+                }
+            }
+            Err(error) => {
+                let _ = mods::set_active(&self.ctx, None);
+                self.toast(format!("the saved mod {} was refused: {}", name, error));
+            }
+        }
+    }
+
+    /// Turns one mod on. Everything is checked before the first change, so a broken manifest leaves the old look
+    /// intact. Only one mod is active: another one first restores the look from before the running mod.
+    pub fn apply_mod(&mut self, name: &str) -> Result<(String, Vec<String>), String> {
+        let module = mods::open(&self.ctx, name)?;
+        let palette = art::Palette::DEFAULT.with(&module.theme)?;
+        let keys = mods::Keys::default().with(&module.keys)?;
+        mods::set_active(&self.ctx, Some(&module.folder))?;
+        if self.mod_name.is_some() {
+            self.restore_previous();
+        }
+        let previous = (self.palette, self.layout, self.keys.clone(), self.sidebar);
+        self.palette = palette;
+        self.layout = module.layout;
+        self.keys = keys;
+        self.sidebar = module.layout.shows_sidebar();
+        self.mod_restore = Some(previous);
+        self.mod_name = Some(module.folder.clone());
+        self.mod_startup = Some(module.startup.clone()).filter(|s| !s.is_empty());
+
+        let mut warnings = module.warnings.clone();
+        match &module.picture {
+            Some(path) if path.is_file() => {
+                if let Err(error) = picture::set_path(path) {
+                    warnings.push(error);
+                    picture::use_default();
+                }
+            }
+            Some(_) => picture::use_default(),
+            None => picture::use_default(),
+        }
+        if module.picture.is_some() && !picture::on() {
+            warnings.push("this terminal cannot show pictures; the default picture is not drawn".to_string());
+        }
+        let message = format!("mod {} on · layout {} · {} colour{} · {} key{}", module.folder, module.layout.name(),
+                              module.theme.len(), if module.theme.len() == 1 { "" } else { "s" },
+                              module.keys.len(), if module.keys.len() == 1 { "" } else { "s" });
+        Ok((message, warnings))
+    }
+
+    /// `/mod off`: the palette, picture, layout, keys and side panel from before the mod come back.
+    pub fn mod_off(&mut self) -> String {
+        if self.mod_name.is_none() && mods::active(&self.ctx).is_none() {
+            return "no mod is active".to_string();
+        }
+        let name = self.mod_name.clone().or_else(|| mods::active(&self.ctx)).unwrap_or_default();
+        self.restore_previous();
+        let _ = mods::set_active(&self.ctx, None);
+        format!("mod {} off · the previous theme, picture, layout and keys are back", name)
+    }
+
+    fn restore_previous(&mut self) {
+        let (palette, layout, keys, sidebar) = self.mod_restore.take()
+            .unwrap_or((art::Palette::DEFAULT, mods::Layout::Side, mods::Keys::default(), true));
+        self.palette = palette;
+        self.layout = layout;
+        self.keys = keys;
+        self.sidebar = sidebar;
+        picture::use_default();
+        self.mod_name = None;
+        self.mod_startup = None;
     }
 
     pub fn mood(&self) -> Mood {
@@ -1387,6 +1483,47 @@ impl App {
                 };
                 self.pager("Skills of this project", body);
             }
+            "/mod" => {
+                let (verb, arg) = rest.split_once(char::is_whitespace).map(|(a, b)| (a, b.trim())).unwrap_or((rest, ""));
+                match verb {
+                    "" | "list" => self.pager("Mods", mods::report(&self.ctx)),
+                    "new" if !arg.is_empty() => {
+                        let (name, prompt) = mods::new_request(&self.ctx, arg);
+                        self.note("◆", "mod", format!("the model writes the mod under .penelope/mods/{}. /mod on {} applies it when it is done.", name, name), art::SEA);
+                        self.start_turn(prompt);
+                    }
+                    "new" => self.toast("/mod new \"what the mod should change\"".to_string()),
+                    "on" if !arg.is_empty() => match self.apply_mod(arg) {
+                        Ok((message, warnings)) => {
+                            self.toast(message);
+                            for warning in warnings {
+                                self.note("◆", "mod", warning, art::ASH);
+                            }
+                            if let Some(text) = self.mod_startup.clone() {
+                                self.note("◆", "mod", text, art::SEA);
+                            }
+                        }
+                        Err(error) => self.items.push(Item::Error(format!("mod {} was not turned on: {}", arg, error))),
+                    },
+                    "on" => self.toast("/mod on NAME; /mod list shows the names".to_string()),
+                    "off" => {
+                        let report = self.mod_off();
+                        self.note("◆", "mod", report, art::SEA);
+                    }
+                    "remove" if !arg.is_empty() => {
+                        if self.mod_name.as_deref() == Some(arg) {
+                            let report = self.mod_off();
+                            self.note("◆", "mod", report, art::SEA);
+                        }
+                        match mods::remove(&self.ctx, arg) {
+                            Ok(report) => self.toast(report),
+                            Err(error) => self.items.push(Item::Error(error)),
+                        }
+                    }
+                    "remove" => self.toast("/mod remove NAME".to_string()),
+                    other => self.toast(format!("/mod {} is none of list, new TEXT, on NAME, off, remove NAME", other)),
+                }
+            }
             "/forget" if !rest.is_empty() => {
                 let report = tools::memory_forget(&self.ctx, rest, "auto");
                 self.note("↺", "unravel", report, art::SEA);
@@ -1488,6 +1625,21 @@ impl App {
         } else {
             self.set_input("");
             self.command(cmd.name);
+        }
+    }
+
+    /// One action a mod may put on another key. The fixed keys esc, ctrl+c, f5 and f6 never reach here.
+    fn run_action(&mut self, action: mods::Action) {
+        match action {
+            mods::Action::Sidebar => self.sidebar = !self.sidebar,
+            mods::Action::Palette => self.overlay = Overlay::Palette { query: String::new(), sel: 0 },
+            mods::Action::Providers => self.overlay = Overlay::Providers { sel: 0, target: "main".into(), scroll: 0 },
+            mods::Action::NewSession => self.command("/new"),
+            mods::Action::Sessions => self.command("/sessions"),
+            mods::Action::Help => self.command("/help"),
+            mods::Action::TabPrev => self.step_tab(-1),
+            mods::Action::TabNext => self.step_tab(1),
+            mods::Action::CopyLast => self.copy_last(),
         }
     }
 
@@ -1909,6 +2061,17 @@ impl App {
             self.overlay_key(key);
             return;
         }
+        // The keys of the main actions come from the active mod. A key the mod moved away from its default does
+        // nothing instead of its old job; esc, ctrl+c, f5 and f6 are not part of this table.
+        if let Some(name) = mods::key_name(&key) {
+            if let Some(action) = self.keys.action_for(&name) {
+                self.run_action(action);
+                return;
+            }
+            if self.keys.is_displaced_default(&name) {
+                return;
+            }
+        }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let slash = self.slash_matches();
@@ -1921,18 +2084,8 @@ impl App {
                 }
             }
             KeyCode::Char('d') if ctrl && self.input.is_empty() => self.quit = true,
-            KeyCode::Char('p') if ctrl => self.overlay = Overlay::Palette { query: String::new(), sel: 0 },
-            KeyCode::Char('o') if ctrl => self.overlay = Overlay::Providers { sel: 0, target: "main".into(), scroll: 0 },
-            KeyCode::Char('n') if ctrl => self.command("/new"),
-            KeyCode::Char('b') if ctrl => self.sidebar = !self.sidebar,
             KeyCode::F(5) => self.command("/new"),
             KeyCode::F(6) => self.arm_delete_session(),
-            KeyCode::F(1) => self.command("/help"),
-            KeyCode::F(2) => self.command("/sessions"),
-            KeyCode::F(3) => self.step_tab(-1),
-            KeyCode::F(4) => self.step_tab(1),
-            KeyCode::Left if alt => self.step_tab(-1),
-            KeyCode::Right if alt => self.step_tab(1),
             KeyCode::Char(c) if alt && c.is_ascii_digit() && c != '0' => self.open_tab(c as usize - '1' as usize),
             KeyCode::Esc => {
                 if self.busy.is_some() {
@@ -2022,6 +2175,7 @@ fn help_text() -> String {
         out.push_str(&format!("{:<10} {:<8} {}\n", c.name, c.key, c.help));
     }
     out.push_str("\nA command outside the safe list waits for an answer: y runs it once, a allows every command in this session, n refuses.\n");
+    out.push_str("A mod may move the keys of the main actions (never esc, ctrl+c, f5 or f6): /mod list shows the mods, /mod on NAME applies one.\n");
     out
 }
 
@@ -2499,5 +2653,147 @@ mod tests {
         let frame = t.draw(|f| view::draw(f, &mut a)).unwrap();
         let svg = art::buffer_svg(frame.buffer);
         assert!(svg.starts_with("<svg") && svg.contains(">A</text>") && svg.ends_with("</svg>\n"));
+    }
+
+    fn put_mod(a: &App, folder: &str, manifest: serde_json::Value) {
+        let dir = mods::mods_dir(&a.ctx).join(folder);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(mods::MANIFEST), manifest.to_string()).unwrap();
+    }
+
+    #[test]
+    fn a_mod_changes_theme_layout_and_keys_and_off_restores_them() {
+        let mut a = app();
+        a.items.push(Item::User("hello".into()));
+        a.items.push(Item::Reply("a reply".into()));
+        assert!(screen(&mut a, 120, 40).contains("MEMORY"));
+        put_mod(&a, "evening", serde_json::json!({
+            "name": "Evening", "theme": {"ink": "#010203", "clay": "#AABBCC"},
+            "layout": "top", "keys": {"sidebar": "ctrl+y"}
+        }));
+        a.command("/mod on evening");
+        assert_eq!(a.palette.ink, (1, 2, 3));
+        assert_eq!(a.palette.clay, (0xAA, 0xBB, 0xCC));
+        assert_eq!(a.layout, mods::Layout::Top);
+        assert!(!a.sidebar && !a.layout.shows_sidebar());
+        assert_eq!(a.keys.action_for("ctrl+y"), Some(mods::Action::Sidebar));
+        assert_eq!(a.mod_name.as_deref(), Some("evening"));
+        let themed = screen(&mut a, 120, 40);
+        assert!(!themed.contains("MEMORY") && themed.contains("a reply"), "{}", themed);
+
+        // the palette reaches the buffer: the ground is drawn in the ink of the mod
+        let mut t = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        let frame = t.draw(|f| view::draw(f, &mut a)).unwrap();
+        assert_eq!(frame.buffer[(0, 0)].bg, art::col((1, 2, 3)));
+
+        // the moved key works and the old default is silent
+        a.key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL));
+        assert!(a.sidebar);
+        a.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+        assert!(a.sidebar, "ctrl+b was moved away and must not toggle the panel");
+
+        a.command("/mod off");
+        assert_eq!(a.palette, art::Palette::DEFAULT);
+        assert_eq!(a.layout, mods::Layout::Side);
+        assert!(a.sidebar);
+        assert_eq!(a.keys.action_for("ctrl+b"), Some(mods::Action::Sidebar));
+        assert_eq!(a.keys.action_for("ctrl+y"), None);
+        assert!(a.mod_name.is_none());
+        assert!(screen(&mut a, 120, 40).contains("MEMORY"));
+    }
+
+    #[test]
+    fn a_broken_manifest_is_refused_and_leaves_the_running_mod_alone() {
+        let mut a = app();
+        put_mod(&a, "good", serde_json::json!({"name": "Good", "theme": {"sea": "#123456"}, "layout": "compact"}));
+        a.command("/mod on good");
+        assert_eq!(a.palette.sea, (0x12, 0x34, 0x56));
+        put_mod(&a, "broken", serde_json::json!({"name": "Broken", "layout": "wide"}));
+        a.command("/mod on broken");
+        let error = a.items.iter().rev().find_map(|i| if let Item::Error(t) = i { Some(t.clone()) } else { None }).unwrap_or_default();
+        assert!(error.contains("broken") && error.contains("not side, top or compact"), "{}", error);
+        assert_eq!(a.mod_name.as_deref(), Some("good"));
+        assert_eq!(a.palette.sea, (0x12, 0x34, 0x56));
+        assert_eq!(a.layout, mods::Layout::Compact);
+        // an unreadable manifest is a line, not a crash
+        let dir = mods::mods_dir(&a.ctx).join("garbage");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(mods::MANIFEST), "{nope").unwrap();
+        a.command("/mod on garbage");
+        let error = a.items.iter().rev().find_map(|i| if let Item::Error(t) = i { Some(t.clone()) } else { None }).unwrap_or_default();
+        assert!(error.contains("not valid JSON"), "{}", error);
+        assert_eq!(a.mod_name.as_deref(), Some("good"));
+    }
+
+    #[test]
+    fn a_mod_written_by_the_model_changes_the_picture_and_off_brings_the_default_back() {
+        let mut a = app();
+        let (name, prompt) = mods::new_request(&a.ctx, "use this picture as background");
+        assert!(prompt.contains(".penelope-mod.json") && prompt.contains("picture"), "{}", prompt);
+        let dir = mods::mods_dir(&a.ctx).join(&name);
+        fs::write(dir.join("picture.png"), b"\x89PNG\r\n\x1a\nfake model picture").unwrap();
+        fs::write(dir.join(mods::MANIFEST), serde_json::json!({
+            "name": name, "picture": "picture.png", "layout": "side"
+        }).to_string()).unwrap();
+        picture::use_default();
+        a.command(&format!("/mod on {}", name));
+        assert_eq!(a.mod_name.as_deref(), Some(name.as_str()));
+        assert!(picture::custom());
+        assert_eq!(mods::active(&a.ctx).as_deref(), Some(name.as_str()));
+        a.command("/mod off");
+        assert!(!picture::custom());
+        assert!(a.mod_name.is_none());
+        assert_eq!(mods::active(&a.ctx), None);
+    }
+
+    #[test]
+    fn a_missing_picture_falls_back_to_the_default_with_a_line() {
+        let mut a = app();
+        put_mod(&a, "lost", serde_json::json!({"name": "Lost", "picture": "not-here.png"}));
+        picture::use_default();
+        a.command("/mod on lost");
+        assert_eq!(a.mod_name.as_deref(), Some("lost"));
+        assert!(!picture::custom());
+        let line = a.items.iter().find_map(|i| if let Item::Note { text, .. } = i { Some(text.clone()) } else { None }).unwrap_or_default();
+        assert!(line.contains("missing") && line.contains("default picture"), "{}", line);
+    }
+
+    #[test]
+    fn a_saved_mod_comes_back_at_the_next_start() {
+        let mut a = app();
+        put_mod(&a, "saved", serde_json::json!({"name": "Saved", "theme": {"gold": "#010101"}, "layout": "top"}));
+        a.command("/mod on saved");
+        let root = a.ctx.root.clone();
+        drop(a);
+        let mut b = App::new(crate::config::load(&root));
+        assert_eq!(b.mod_name.as_deref(), Some("saved"));
+        assert_eq!(b.palette.gold, (1, 1, 1));
+        assert_eq!(b.layout, mods::Layout::Top);
+        b.command("/mod off");
+        assert_eq!(b.palette, art::Palette::DEFAULT);
+    }
+
+    #[test]
+    fn mod_list_and_help_show_the_mod_command() {
+        let mut a = app();
+        put_mod(&a, "listed", serde_json::json!({"name": "Listed", "description": "a test mod", "layout": "compact"}));
+        a.command("/mod list");
+        match &a.overlay {
+            Overlay::Pager { title, lines, .. } => {
+                assert_eq!(title, "Mods");
+                let text = lines.join("\n");
+                assert!(text.contains("listed") && text.contains("a test mod") && text.contains("compact"), "{}", text);
+            }
+            _ => panic!("mods must open the pager"),
+        }
+        a.command("/help");
+        match &a.overlay {
+            Overlay::Pager { lines, .. } => {
+                let text = lines.join("\n");
+                assert!(text.contains("/mod") && text.contains("mods: list"), "{}", text);
+            }
+            _ => panic!("help must open the pager"),
+        }
+        assert!(COMMANDS.iter().any(|c| c.name == "/mod"));
     }
 }
