@@ -135,6 +135,7 @@ fn call_raw_inner(ctx: &Ctx, name: &str, a: &Value) -> Result<String, String> {
             let profile = a["profile"].as_str().filter(|p| !p.trim().is_empty());
             Ok(crate::clusters::start(ctx, &s("goal"), profile, a["parallel"].as_bool().unwrap_or(true)))
         }
+        "cluster_spawn" => crate::clusters::spawn(ctx, &s("profile"), a["name"].as_str().filter(|n| !n.trim().is_empty()), &s("task")),
         "cluster_status" => Ok(crate::clusters::status_text(ctx, a["id"].as_str())),
         "cluster_kill" => Ok(crate::clusters::kill(ctx, &s("id"))),
         "cluster_dump" => Ok(crate::clusters::dump(ctx, &s("id"))),

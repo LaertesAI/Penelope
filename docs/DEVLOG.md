@@ -154,6 +154,31 @@ test parses `needs`, refuses an unknown part and refuses a cycle.
 Open: a wave is filled before it starts and not refilled while it runs, so one slow part can leave a slot idle until
 the wave ends. Parallel parts see the memory as it was before the wave, not the sections written by their neighbours.
 
+### 1.6 Subclusters while running, with limits
+
+A cluster part now has the tool `cluster_spawn(profile, task, name?)` (worker and lead; a scout and a judge cannot
+spawn). The tool resolves the part's own cluster from a thread-local slot, or from `PENELOPE_CLUSTER` in the MCP
+server of a Claude CLI part, so a child started from a running part is a real cluster with a parent. Only a part
+inside a running cluster may spawn; outside a cluster the tool refuses and names `cluster_start`.
+
+The root profile owns the limits of the whole tree. `spawn_create` walks the `parent` chain to the root, refuses when
+`parent.depth + 1 > max_depth` (for example `depth 3 of 3`), and counts the parts of every cluster in the tree
+against the root `max_models`; a refused spawn creates nothing on disk. The check and the child creation run under
+`SPAWN_LOCK`, so two parallel parts cannot pass the same limit together. A child stores `parent`, `depth` and its
+profile; after it runs, its report line is appended to the parent's `memory.md` and `children.jsonl`, and a `CHILD`
+line goes into the parent's `reports.jsonl`. The orchestrator sees the tree through `cluster list`/`cluster_status`.
+
+Measured: `cd cli && cargo test` → `208 passed; 0 failed` (2026-11-25). New tests: a part at depth 3 of 3 gets
+`NOT spawned ... max_depth 3` and no child file; a part at depth 1 spawns a child at depth 2 that runs to `done`,
+with the child id and `report: S:done` in the parent memory and `children.jsonl`; a tree with `max_models: 3` allows
+two one-part children at 2 of 3 and 3 of 3 and refuses the fourth part with `max_models ... 3 of 3`.
+
+Open: the child runs inside the tool call, so the parent part waits for it (no background queue and no refill of the
+parent's slot). A writing child gets its own worktree from the live project, not from the parent's worktree; a child
+patch can therefore conflict with the parent patch when both touch the same file, and the existing merge-conflict
+path reports it rather than resolving it. The child does not inherit the parent's euro baseline; it enforces the
+session budget from its own start.
+
 This is a working increment, not a claim that every limit is gone. The last section names what is still open and how
 each claim can be checked on this machine.
 

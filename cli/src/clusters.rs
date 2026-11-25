@@ -11,6 +11,7 @@
 
 use crate::config::Ctx;
 use serde_json::{json, Value};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
@@ -33,6 +34,31 @@ static MEMORY_LOCK: Mutex<()> = Mutex::new(());
 static CANCELS: Mutex<Vec<(String, Arc<AtomicBool>)>> = Mutex::new(Vec::new());
 /// The live child of every Claude CLI part, by `cluster id/part name`. A kill signals the whole tree.
 static CHILDREN: Mutex<Vec<(String, u32)>> = Mutex::new(Vec::new());
+/// Two parts may ask to spawn at the same moment. The tree limit is checked and the child created under one lock.
+static SPAWN_LOCK: Mutex<()> = Mutex::new(());
+
+thread_local! {
+    /// The cluster whose part is running on this thread. A tool call resolves it here; the MCP server of a Claude part
+    /// finds the same id in `PENELOPE_CLUSTER`.
+    static ACTIVE_CLUSTER: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// Runs a block of work as a part of one cluster. Nested clusters restore the parent id when they return.
+pub fn with_cluster<T>(id: &str, f: impl FnOnce() -> T) -> T {
+    let before = ACTIVE_CLUSTER.with(|c| c.replace(Some(id.to_string())));
+    let out = f();
+    ACTIVE_CLUSTER.with(|c| *c.borrow_mut() = before);
+    out
+}
+
+/// The cluster of the running part, or `None` outside a cluster. A Claude CLI part reaches this through its MCP server.
+pub fn current_cluster() -> Option<String> {
+    if let Some(id) = ACTIVE_CLUSTER.with(|c| c.borrow().clone()) {
+        if !id.trim().is_empty() { return Some(id); }
+    }
+    std::env::var("PENELOPE_CLUSTER").ok().filter(|id| !id.trim().is_empty())
+}
+
 
 pub const BUILTIN_PROFILES: &[&str] = &["coding", "backend", "frontend", "live-test", "research", "solo"];
 
@@ -867,7 +893,7 @@ fn run_model(ctx: &Ctx, c: &Cluster, part: &Part, system: &str, task: &str, max_
             }
             None
         };
-        let out = crate::agents::with_mcp_scope(&part.mcp, || crate::route::with_role(&role, || {
+        let out = crate::agents::with_mcp_scope(&part.mcp, || crate::route::with_role(&role, || with_cluster(&c.id, || {
             crate::llm::run_loop_with(&model, system, &mut history, &tools, max_steps, Some(cancel), &mut usage, &mut tick,
                 &mut |call| {
                     // A part works in its cluster folder. A tool call without a cwd gets the worktree, never the live tree.
@@ -879,7 +905,7 @@ fn run_model(ctx: &Ctx, c: &Cluster, part: &Part, system: &str, task: &str, max_
                     checks.push(Check { name: call.name.clone(), target: check_target(&call.name, &args), ok: check_ok(&call.name, &text, ok) });
                     (text, ok)
                 }, &mut |_| {})
-        }));
+        })));
         crate::cost::record(ctx, &format!("cluster:{}", c.name), &model_name, usage.tokens_in, usage.tokens_out);
         if let Some(cause) = watch.lock().unwrap_or_else(|e| e.into_inner()).cause() {
             return Err(format!("STUCK: {}", cause));
@@ -894,7 +920,7 @@ fn run_model(ctx: &Ctx, c: &Cluster, part: &Part, system: &str, task: &str, max_
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let log = cluster_dir(ctx, &c.id).join(format!("tools-{}.jsonl", safe(&part.name)));
     let _ = fs::remove_file(&log);
-    let mut env = json!({"PENELOPE_ROLE": part.role});
+    let mut env = json!({"PENELOPE_ROLE": part.role, "PENELOPE_CLUSTER": c.id});
     let task_cwd = crate::eval::task_cwd();
     if !task_cwd.is_empty() {
         env["PENELOPE_TASK_CWD"] = json!(task_cwd);
@@ -1410,6 +1436,124 @@ fn new_cluster(ctx: &Ctx, profile: &Profile, name: &str, task: &str, parent: Opt
     save(ctx, &c)?;
     let _ = fs::write(memory_path(ctx, &id), format!("# Cluster {} · {}\n\nTask: {}\n\n", name, profile.name, task));
     Ok(c)
+}
+
+/// Follows `parent` links up to the cluster of the whole tree. The root profile owns `max_depth` and `max_models`.
+fn root_of(ctx: &Ctx, c: &Cluster) -> Result<Cluster, String> {
+    let mut current = c.clone();
+    for _ in 0..32 {
+        let Some(parent) = current.parent.clone() else { return Ok(current); };
+        current = load(ctx, &parent)?;
+    }
+    Err(format!("cluster {} has a parent chain deeper than 32", c.id))
+}
+
+/// Parts of every cluster in one tree, including clusters that already finished. A spawned child stays part of the
+/// tree, so the root profile's `max_models` cannot be exceeded by a series of small spawns.
+fn tree_models(ctx: &Ctx, root_id: &str) -> usize {
+    let all = list(ctx);
+    let mut ids = vec![root_id.to_string()];
+    let mut i = 0;
+    while i < ids.len() {
+        let current = ids[i].clone();
+        for c in &all {
+            if c.parent.as_deref() == Some(current.as_str()) && !ids.contains(&c.id) {
+                ids.push(c.id.clone());
+            }
+        }
+        i += 1;
+    }
+    let mut total = 0;
+    let mut found_root = false;
+    for c in &all {
+        if ids.contains(&c.id) {
+            total += c.total;
+            if c.id == root_id { found_root = true; }
+        }
+    }
+    if !found_root {
+        if let Ok(root) = load(ctx, root_id) { total += root.total; }
+    }
+    total
+}
+
+fn part_count(p: &Profile) -> usize {
+    p.workers.len() + p.validator.iter().count()
+}
+
+/// Checks the limits of the whole tree and creates a child without running it. `spawn_inner` runs it; the tests use
+/// this half to prove a refusal without a model call.
+fn spawn_create(ctx: &Ctx, parent_id: &str, profile_name: &str, name: Option<&str>, task: &str) -> Result<Cluster, String> {
+    let parent = load(ctx, parent_id)?;
+    let root = root_of(ctx, &parent)?;
+    let root_profile = profile(ctx, &root.profile)?;
+    let next_depth = parent.depth + 1;
+    if next_depth > root_profile.max_depth {
+        return Err(format!("NOT spawned. A part at depth {} of {} cannot start a subcluster: the root profile {} allows max_depth {}. \
+The child would be at depth {}.", parent.depth, root_profile.max_depth, root_profile.name, root_profile.max_depth, next_depth));
+    }
+    if task.trim().is_empty() {
+        return Err("NOT spawned. The subcluster task is empty, so the child would not know what to do.".to_string());
+    }
+    let child_profile = profile(ctx, profile_name)?;
+    let name = name.map(str::trim).filter(|n| !n.is_empty()).unwrap_or(&child_profile.name).to_string();
+    let need = part_count(&child_profile);
+    let _guard = SPAWN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let used = tree_models(ctx, &root.id);
+    if used + need > root_profile.max_models {
+        return Err(format!("NOT spawned. max_models: the tree of root {} already uses {} of {} parts, and profile {} needs {} more. \
+Raise max_models of {} or reuse the clusters that are already in the tree.", root.id, used, root_profile.max_models,
+                            child_profile.name, need, root_profile.name));
+    }
+    new_cluster(ctx, &child_profile, &name, task.trim(), Some(&parent.id), Vec::new(), next_depth)
+}
+
+/// Writes one child report line into the parent's memory, children log and report stream. The orchestrator reads the
+/// tree through the parent; the child never reports past it.
+fn record_child(ctx: &Ctx, parent: &Cluster, child: &Cluster) -> String {
+    let report = fs::read_to_string(cluster_dir(ctx, &child.id).join("report.txt")).unwrap_or_default();
+    let line = report.lines().next().unwrap_or("").trim().to_string();
+    let entry = format!("\n## child {} · {}\n\nid: {} · parent: {} · depth: {}\nstate: {} · P:{}/{}\nreport: {}\n",
+                        child.name, child.profile, child.id, parent.id, child.depth, child.state, child.done, child.total,
+                        if line.is_empty() { "(no report)" } else { &line });
+    append_memory(ctx, parent, &entry);
+    let dir = cluster_dir(ctx, &parent.id);
+    let _ = fs::create_dir_all(&dir);
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(dir.join("children.jsonl")) {
+        let _ = writeln!(file, "{}", json!({"id": child.id, "name": child.name, "profile": child.profile,
+                                            "parent": parent.id, "depth": child.depth, "state": child.state,
+                                            "report": line}));
+    }
+    let _guard = REPORT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(dir.join("reports.jsonl")) {
+        let _ = writeln!(file, "{} CHILD {} {}", now(), child.id, line);
+    }
+    line
+}
+
+/// Creates a subcluster of the running cluster, runs it, and gives its report line to the parent. The tool calls this
+/// with the id of the part's own cluster; a part outside a cluster gets a refusal.
+fn spawn_inner(ctx: &Ctx, parent_id: &str, profile_name: &str, name: Option<&str>, task: &str) -> Result<String, String> {
+    let parent = load(ctx, parent_id)?;
+    let child = spawn_create(ctx, parent_id, profile_name, name, task)?;
+    let run = run_cluster_inner(ctx, &child.id, None);
+    let finished = load(ctx, &child.id).unwrap_or_else(|_| child.clone());
+    let line = record_child(ctx, &parent, &finished);
+    match run {
+        Ok(_) => Ok(format!("cluster {} spawned as {} · parent {} · depth {} · state {}\nreport: {}",
+                            child.name, child.id, parent.id, child.depth, finished.state,
+                            if line.is_empty() { "(no report)" } else { &line })),
+        Err(e) => Err(format!("cluster {} was created as {} at depth {} but did not finish: {}",
+                              child.name, child.id, child.depth, e)),
+    }
+}
+
+/// The tool `cluster_spawn`: only a part of a running cluster may start a subcluster.
+pub fn spawn(ctx: &Ctx, profile_name: &str, name: Option<&str>, task: &str) -> Result<String, String> {
+    let parent = current_cluster().ok_or_else(|| {
+        "NOT spawned. cluster_spawn belongs to a part inside a running cluster. Use cluster_start for a new orchestration.".to_string()
+    })?;
+    spawn_inner(ctx, &parent, profile_name, name, task)
 }
 
 #[derive(Clone, Debug)]
@@ -2204,6 +2348,85 @@ mod tests {
         assert!(err.contains("no worker part"), "{}", err);
         assert!(!profile_dir(&ctx).join("broken.json").is_file());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_part_at_the_depth_limit_is_refused_and_a_shallow_part_spawns_a_subcluster() {
+        let (mut ctx, dir) = ctx();
+        let probe = dir.join("hello.txt").to_string_lossy().to_string();
+        let (address, _seen) = crate::llm::fake::serve(vec![
+            (200, text_reply("the leaf answer")),
+            (200, tool_reply("read", json!({"path": probe}))),
+            (200, text_reply("PASS: the leaf answer is in the memory")),
+        ]);
+        fake_models(&mut ctx, &address);
+        write_profile(&ctx, "tree", json!({
+            "name": "tree",
+            "workers": [{"name": "root-part", "role": "scout", "model": "main"}],
+            "validator": {"name": "root-check", "role": "judge", "model": "judge"},
+            "max_models": 12, "max_depth": 3, "report_every": 0, "retries": 0, "worktree": false
+        }));
+        write_profile(&ctx, "leaf", json!({
+            "name": "leaf",
+            "workers": [{"name": "leaf-part", "role": "scout", "model": "main"}],
+            "validator": {"name": "leaf-check", "role": "judge", "model": "judge"},
+            "max_models": 2, "max_depth": 1, "report_every": 0, "retries": 0, "worktree": false
+        }));
+        let p = profile(&ctx, "tree").unwrap();
+        let root = new_cluster(&ctx, &p, "root", "root task", None, Vec::new(), 0).unwrap();
+        let one = new_cluster(&ctx, &p, "one", "depth one", Some(&root.id), Vec::new(), 1).unwrap();
+        let two = new_cluster(&ctx, &p, "two", "depth two", Some(&one.id), Vec::new(), 2).unwrap();
+        let three = new_cluster(&ctx, &p, "three", "depth three", Some(&two.id), Vec::new(), 3).unwrap();
+        assert_eq!(three.depth, 3);
+
+        let refused = with_cluster(&three.id, || spawn(&ctx, "leaf", Some("too-deep"), "go deeper")).unwrap_err();
+        assert!(refused.contains("depth 3 of 3") && refused.contains("max_depth"), "{}", refused);
+        assert!(list(&ctx).iter().all(|c| c.name != "too-deep"), "no child may be created");
+
+        let said = with_cluster(&one.id, || spawn(&ctx, "leaf", Some("leaf1"), "answer the parent")).unwrap();
+        assert!(said.contains("leaf1") && said.contains("state done"), "{}", said);
+        let child = list(&ctx).into_iter().find(|c| c.name == "leaf1").expect("the child is in the tree");
+        assert_eq!((child.parent.as_deref(), child.depth, child.state.as_str()), (Some(one.id.as_str()), 2, "done"));
+        let parent_memory = fs::read_to_string(memory_path(&ctx, &one.id)).unwrap();
+        assert!(parent_memory.contains("## child leaf1") && parent_memory.contains("depth: 2")
+                && parent_memory.contains("report: S:done"), "{}", parent_memory);
+        let children = fs::read_to_string(cluster_dir(&ctx, &one.id).join("children.jsonl")).unwrap();
+        assert!(children.contains(&child.id) && children.contains("\"depth\":2"), "{}", children);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_root_max_models_stops_a_spawn_that_would_grow_the_tree_too_far() {
+        let (ctx, dir) = ctx();
+        write_profile(&ctx, "root3", json!({
+            "name": "root3",
+            "workers": [{"name": "root-part", "role": "scout", "model": "main"}],
+            "max_models": 3, "max_depth": 3, "report_every": 0, "worktree": false
+        }));
+        write_profile(&ctx, "kid", json!({
+            "name": "kid",
+            "workers": [{"name": "kid-part", "role": "scout", "model": "main"}],
+            "max_models": 1, "max_depth": 1, "report_every": 0, "worktree": false
+        }));
+        let p = profile(&ctx, "root3").unwrap();
+        let root = new_cluster(&ctx, &p, "root3", "root task", None, Vec::new(), 0).unwrap();
+        assert_eq!(part_count(&p), 1);
+        spawn_create(&ctx, &root.id, "kid", Some("kid-a"), "first").expect("one of three is below the limit");
+        spawn_create(&ctx, &root.id, "kid", Some("kid-b"), "second").expect("three of three is exactly the limit");
+        let refused = spawn_create(&ctx, &root.id, "kid", Some("kid-c"), "third").unwrap_err();
+        assert!(refused.contains("max_models") && refused.contains("3 of 3"), "{}", refused);
+        assert!(list(&ctx).iter().all(|c| c.name != "kid-c"), "the refused child is not on disk");
+        assert_eq!(tree_models(&ctx, &root.id), 3);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_cluster_spawn_tool_is_open_to_the_worker_and_the_lead() {
+        assert!(crate::route::may_call("worker", "cluster_spawn"));
+        assert!(crate::route::may_call("lead", "cluster_spawn"));
+        assert!(!crate::route::may_call("judge", "cluster_spawn"));
+        assert!(!crate::route::may_call("scout", "cluster_spawn"));
+        assert!(crate::spec::get("cluster_spawn").is_some());
     }
 
     fn timed_parts(max_parallel: u64) -> Duration {
