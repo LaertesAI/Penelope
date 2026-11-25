@@ -9,6 +9,7 @@ against stand-in servers only.
 
 ```bash
 penelope providers                                  # the table, with "key set" or "no key" per entry
+penelope models [PROVIDER]                          # the chat models the provider reports, with effort levels
 penelope provider use groq                          # main model on Groq with the example model
 penelope provider use anthropic --role weak --model claude-haiku-5-5
 penelope provider use alibaba-intl --workspace llm-xxx --model qwen-plus
@@ -18,6 +19,23 @@ export GROQ_API_KEY=...                             # the key lives in the envir
 
 `penelope setup` offers the same 35 entries and one more answer `custom` for any other address.
 The full screen interface shows the same table with the command `/providers`. `penelope doctor` prints one line per model in use.
+
+## Model lists from the provider
+
+The model screen and `penelope models` ask the provider instead of relying only on the static catalog:
+
+- OpenAI-compatible addresses: `GET BASE/models`, with `Authorization: Bearer KEY` when a key is set. OpenCode Go's
+  endpoint is public; the other entries need their key.
+- Anthropic: `GET BASE/v1/models`, with `x-api-key` and `anthropic-version`.
+- `claude-cli`: there is no list endpoint behind the subscription command, so the three built-in aliases (`sonnet`,
+  `opus`, `haiku`) stay static.
+- The answer is cached at `.penelope/models/<provider>.json`. The picker shows the cache at once and refreshes it in
+  the background; when the provider does not answer, the cache or the static catalog stays in place and the screen
+  names the source.
+- The parser keeps chat models and drops embeddings, speech and image models. It takes `name`/`display_name` as the
+  label and `capabilities.reasoning.effort` or `efforts` as the effort column when the provider sends one. Otherwise
+  the per-family rules in `providers::efforts` decide, and a model with no known field shows `no effort` and receives
+  no parameter.
 
 ## Kinds
 

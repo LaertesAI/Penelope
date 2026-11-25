@@ -5,7 +5,7 @@
 **Scope:** one contract layer for every tool, models in every role, agents written with `$`, shared memory and an
 Obsidian brain, cost in euro, ScreenCodec and Penelope's own cursor, plugin install and import, a startup weave, and
 the commands and views that make these reachable.  
-**Tests:** 124 passed, 0 failed. No test needs a key. The live runs against OpenCode Go are written down below and used no test fixture.
+**Tests:** 126 passed, 0 failed. No test needs a key. The live runs against OpenCode Go are written down below and used no test fixture.
 
 This is a working increment, not a claim that every limit is gone. The last section names what is still open and how
 each claim can be checked on this machine.
@@ -797,6 +797,20 @@ the transcript every four turns and points at F5/F6, the role models, exact name
   `masked_request`, `masked_answer`, `result`, `error`) for CI and editors.
 - The `pr_create` tool opens a pull request with `gh` after a question. It never pushes.
 
+### The model list comes from the provider
+
+The exact-name picker used a static catalog. It now asks the provider: GET `/models` for an OpenAI-compatible address,
+GET `/v1/models` with `x-api-key` and `anthropic-version` for Anthropic, with the same key rules as a chat request. The
+answer is cached in `.penelope/models/<provider>.json`, shown at once on the next open, and refreshed in a background
+thread while the picker is already usable. A provider that does not answer leaves the cache or the built-in catalog in
+place and the screen says where the list came from.
+
+The parser reads `data` and `models`, drops embeddings, speech and image models, and takes the label and the effort
+column from the item when the provider sends one. OpenCode Go sends
+`capabilities.reasoning.effort`, so `muse-spark-1.2-contributor` and `beam-free` appear from the live answer even
+though they were not in the static catalog. The Claude command has no list endpoint; its three subscription aliases
+stay built in. `penelope models [PROVIDER]` prints the same answer for a terminal or a script.
+
 ### Plugin commands and the command screen
 
 The first plugin pass registered skills and MCP servers only. Commands in `commands/*.md` were invisible, so a plugin
@@ -859,7 +873,7 @@ New CLI commands: `tools`, `tool list`, `tool call NAME JSON`, `route`, `agents`
 
 ## Tests and evidence
 
-`cargo test` in `cli/`: **124 passed, 0 failed**. The new tests, all without a real provider:
+`cargo test` in `cli/`: **126 passed, 0 failed**. The new tests, all without a real provider:
 
 | Test | What it proves |
 |---|---|
@@ -933,6 +947,8 @@ New CLI commands: `tools`, `tool list`, `tool call NAME JSON`, `route`, `agents`
 | `plugins::commands_are_registered_shown_and_expanded_with_their_arguments` | `$ARGUMENTS`, `$1`, command list |
 | `tui::the_plugins_screen_lists_a_plugin_and_inserts_its_command` | filter, tab, command insert |
 | `search::the_fanout_switch_is_written_and_the_health_line_names_every_engine` | fanout setting and health line |
+| `providers::the_provider_list_wins_over_the_static_catalog_and_is_cached` | `/models` parsing, effort column, cache, Anthropic header |
+| `tui::the_picker_uses_the_provider_list_and_its_effort_column` | picker and `e` use the fetched list |
 | `search::ranking_deduplicates_and_prefers_a_diverse_list` | one result per URL, one host does not fill the list |
 | `search::parses_the_three_keyed_shapes` | Tavily, Exa and Firecrawl response shapes |
 | `scrape::an_article_becomes_markdown_and_the_noise_is_gone` | main article, JSON-LD, table, code, boilerplate |
@@ -998,7 +1014,7 @@ body.
 
 ```bash
 cd cli
-cargo test                     # 124 tests, no model, no key
+cargo test                     # 126 tests, no model, no key
 
 ./target/release/penelope tools
 ./target/release/penelope serve --print-config
