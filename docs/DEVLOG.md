@@ -27,6 +27,25 @@ Measured: `cd cli && cargo test` → `168 passed; 0 failed` (2026-11-25). The ne
 `hello.txt` in separate worktrees with one killed, a tool call without `cwd` that writes in its worktree, and a
 worktree profile refused in a non-git folder.
 
+### 1.2 Evidence field `V:`
+
+`clusters::report` now builds every line with `proof::render`, so the fields S, P, T, F, E keep their order and their
+escape rules, and `V:` is added when the cluster has evidence. `validate()` records every tool call of the validator
+(API tool loops directly; Claude CLI parts through the `PENELOPE_TOOL_LOG` written by `mcp::call_raw`) and fills `V:`
+with the first successful command check, for example `cat hello.txt ok`. A command counts as passed only with
+`exit code 0`; a refused or failed check is written as `failed`.
+
+A PASS counts only when at least one check ran and passed. A validator that said PASS without a tool call makes the
+cluster `failed`; `run_cluster` also calls `proof::accept` before it writes `S:done`, so a done line without a
+non-empty V cannot leave the cluster. The validator prompt now requires at least one check.
+
+Measured: `cd cli && cargo test` → `172 passed; 0 failed` (2026-11-25). New tests: the solo fixture ends with
+`S:done` and `V:cat hello.txt ok`; a PASS without a check ends `failed`; `proof::accept` rejects a written done line
+without V; a Claude tool log becomes `cargo test ok` and `cat missing.txt failed`.
+
+Open: a live Claude validator was not run in this session (no Claude login in the test environment). The tool-log
+path is covered by a unit test of `checks_from_log`, not by a real `claude` call.
+
 This is a working increment, not a claim that every limit is gone. The last section names what is still open and how
 each claim can be checked on this machine.
 

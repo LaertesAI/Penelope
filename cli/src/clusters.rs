@@ -77,6 +77,8 @@ pub struct Cluster {
     pub output: String,
     pub error: String,
     pub memory: String,
+    /// The check the validator ran and its result, for `V:` in the report.
+    pub evidence: String,
     /// The git root of the project, when this cluster has a worktree.
     pub project: String,
     /// The worktree of this cluster; empty for a research or live-test cluster.
@@ -314,6 +316,7 @@ fn save(ctx: &Ctx, c: &Cluster) -> Result<(), String> {
         "id": c.id, "name": c.name, "profile": c.profile, "task": c.task, "parent": c.parent, "after": c.after,
         "depth": c.depth, "state": c.state, "done": c.done, "total": c.total, "started": c.started, "updated": c.updated,
         "output": c.output, "error": c.error, "memory": c.memory, "parts": parts,
+        "evidence": c.evidence,
         "project": c.project, "worktree": c.worktree, "branch": c.branch, "cwd": c.cwd
     });
     let path = cluster_file(ctx, &c.id);
@@ -346,6 +349,7 @@ fn cluster_from(v: &Value) -> Cluster {
         output: v["output"].as_str().unwrap_or("").to_string(),
         error: v["error"].as_str().unwrap_or("").to_string(),
         memory: v["memory"].as_str().unwrap_or("").to_string(),
+        evidence: v["evidence"].as_str().unwrap_or("").to_string(),
         project: v["project"].as_str().unwrap_or("").to_string(),
         worktree: v["worktree"].as_str().unwrap_or("").to_string(),
         branch: v["branch"].as_str().unwrap_or("").to_string(),
@@ -381,9 +385,16 @@ pub fn working(ctx: &Ctx) -> usize {
 
 fn report(ctx: &Ctx, c: &Cluster, focus: &str, error: &str) -> String {
     let elapsed = now().saturating_sub(c.started);
-    let clean_error = error.replace(['\n', '|'], " ");
-    let line = format!("S:{}|P:{}/{}|T:{}s|F:{}|E:{}\n", c.state, c.done, c.total, elapsed,
-                       if focus.is_empty() { "-" } else { focus }, if clean_error.is_empty() { "-" } else { &clean_error });
+    // proof::render keeps the fields and the escape rules. V is added only when the validator ran a check.
+    let r = crate::proof::Report {
+        s: c.state.clone(),
+        p: format!("{}/{}", c.done, c.total),
+        t: format!("{}s", elapsed),
+        f: if focus.is_empty() { "-".to_string() } else { focus.to_string() },
+        e: if error.is_empty() { "-".to_string() } else { error.to_string() },
+        v: if c.evidence.trim().is_empty() { None } else { Some(c.evidence.clone()) },
+    };
+    let line = format!("{}\n", crate::proof::render(&r));
     let _ = fs::create_dir_all(cluster_dir(ctx, &c.id));
     let _ = fs::write(cluster_dir(ctx, &c.id).join("report.txt"), &line);
     line
@@ -409,9 +420,69 @@ fn budget_spent(ctx: &Ctx, before: f64) -> f64 {
     (crate::cost::total_eur(ctx) - before).max(0.0)
 }
 
+#[derive(Clone, Debug)]
+struct Check {
+    name: String,
+    target: String,
+    ok: bool,
+}
+
 #[derive(Default)]
 struct Done {
     text: String,
+    checks: Vec<Check>,
+}
+
+/// What a tool call checked: the command of `run`, otherwise the path, folder or text of the call.
+fn check_target(name: &str, args: &Value) -> String {
+    match name {
+        "run" => args["command"].as_str().unwrap_or("").trim().to_string(),
+        _ => ["path", "dir", "text", "query"].iter().find_map(|k| args[*k].as_str()).unwrap_or("").trim().to_string(),
+    }
+}
+
+/// `tools::run` returns `exit code N` as its first line. A check is ok only when that code is zero.
+fn check_ok(name: &str, text: &str, dispatched: bool) -> bool {
+    if !dispatched { return false; }
+    let start = text.trim_start();
+    if start.starts_with("NOT ") || start.starts_with("cannot ") || start.starts_with("the command could not start") {
+        return false;
+    }
+    if name == "run" {
+        if let Some(code) = start.lines().next().and_then(|l| l.strip_prefix("exit code ")) {
+            return code.trim().parse::<i64>().map(|c| c == 0).unwrap_or(true);
+        }
+    }
+    true
+}
+
+/// One line of evidence: the first successful check, or the first check when all failed. The expected form for a
+/// command check is `cat hello.txt ok`.
+fn evidence_of(checks: &[Check]) -> String {
+    let chosen = checks.iter().find(|c| c.ok && c.name == "run")
+        .or_else(|| checks.iter().find(|c| c.ok))
+        .or_else(|| checks.first());
+    let Some(c) = chosen else { return String::new(); };
+    let status = if c.ok { "ok" } else { "failed" };
+    if c.target.is_empty() {
+        format!("{} {}", c.name, status)
+    } else if c.name == "run" {
+        format!("{} {}", c.target, status)
+    } else {
+        format!("{} {} {}", c.name, c.target, status)
+    }
+}
+
+/// Reads the tool log of a Claude CLI part. Every line is one call that reached `mcp::call_raw`.
+fn checks_from_log(path: &Path) -> Vec<Check> {
+    let Ok(text) = fs::read_to_string(path) else { return Vec::new(); };
+    text.lines().filter_map(|line| serde_json::from_str::<Value>(line).ok()).filter_map(|v| {
+        let name = v["name"].as_str()?;
+        let args = v["args"].clone();
+        let result = v["result"].as_str().unwrap_or("");
+        Some(Check { name: name.to_string(), target: check_target(name, &args),
+                     ok: check_ok(name, result, v["ok"].as_bool().unwrap_or(false)) })
+    }).collect()
 }
 
 /// Fills the cwd of a tool call that takes one and did not name it. A call for a tool without cwd stays as it is.
@@ -439,23 +510,30 @@ fn run_model(ctx: &Ctx, c: &Cluster, part: &Part, system: &str, task: &str, max_
         let mut usage = crate::llm::Usage::default();
         let role = part.role.clone();
         let cluster_cwd = c.cwd.clone();
+        let mut checks: Vec<Check> = Vec::new();
         let out = crate::agents::with_mcp_scope(&part.mcp, || crate::route::with_role(&role, || {
             crate::llm::run_loop(&model, system, &mut history, &tools, max_steps, None, &mut usage,
                 &mut |call| {
                     // A part works in its cluster folder. A tool call without a cwd gets the worktree, never the live tree.
                     let args = args_with_cwd(&call.name, &call.args, &cluster_cwd);
-                    crate::tools::dispatch_retry(ctx, &role, &call.name, &args)
+                    let (text, ok) = crate::tools::dispatch_retry(ctx, &role, &call.name, &args);
+                    checks.push(Check { name: call.name.clone(), target: check_target(&call.name, &args), ok: check_ok(&call.name, &text, ok) });
+                    (text, ok)
                 }, &mut |_| {})
         }))?;
         crate::cost::record(ctx, &format!("cluster:{}", c.name), model["model"].as_str().unwrap_or(""), usage.tokens_in, usage.tokens_out);
-        return Ok(Done { text: out });
+        return Ok(Done { text: out, checks });
     }
     if kind != "claude-cli" {
         return Err(format!("the cluster cannot call the model kind {}", kind));
     }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let log = cluster_dir(ctx, &c.id).join(format!("tools-{}.jsonl", safe(&part.name)));
+    let _ = fs::remove_file(&log);
     let mut env = json!({"PENELOPE_ROLE": part.role});
     if let Ok(dir) = std::env::var("PENELOPE_APPROVE_DIR") { env["PENELOPE_APPROVE_DIR"] = json!(dir); }
+    // The validator's MCP server writes every tool call to this file; the cluster reads it after the command ends.
+    env["PENELOPE_TOOL_LOG"] = json!(log.to_string_lossy());
     let cfg = json!({"mcpServers": {"penelope": {"command": exe.to_string_lossy(), "args": ["mcp", "--root", ctx.root.to_string_lossy()], "env": env}}}).to_string();
     let allowed: Vec<String> = crate::route::allowed_for(&part.role).iter().map(|t| format!("mcp__penelope__{}", t)).collect();
     let mut cmd = Command::new("claude");
@@ -474,7 +552,9 @@ fn run_model(ctx: &Ctx, c: &Cluster, part: &Part, system: &str, task: &str, max_
     let tokens_in = v["usage"]["input_tokens"].as_u64().unwrap_or(0) + v["usage"]["cache_creation_input_tokens"].as_u64().unwrap_or(0);
     let tokens_out = v["usage"]["output_tokens"].as_u64().unwrap_or(0);
     crate::cost::record(ctx, &format!("cluster:{}", c.name), model["model"].as_str().unwrap_or(""), tokens_in, tokens_out);
-    Ok(Done { text: v["result"].as_str().unwrap_or("").trim().to_string() })
+    let checks = checks_from_log(&log);
+    let _ = fs::remove_file(&log);
+    Ok(Done { text: v["result"].as_str().unwrap_or("").trim().to_string(), checks })
 }
 
 fn worker_system(c: &Cluster, p: &Part, model: &Value, feedback: &str) -> String {
@@ -488,8 +568,9 @@ Do not start separate agents. If a tool refuses, say so. The validator may send 
 
 fn validator_system(c: &Cluster, p: &Part, model: &Value) -> String {
     format!("You are the validator part of the Penelope cluster {} (slot {}). This is not a subagent. Check the cluster task \\
-against the one memory file and the project's checks. Answer on the first line PASS or FAIL: one short reason. If you can, \\
-run the check and copy the result. Model: {}.", c.name, p.slot, part_model_name(p, model))
+against the one memory file and the project's checks. You must run at least one check with your tools (run, read, grep, \\
+tree, outline, json_query or git_diff) before you answer; a PASS without a tool call is no evidence and the cluster fails. \\
+Answer on the first line PASS or FAIL: one short reason, then the check and its result. Model: {}.", c.name, p.slot, part_model_name(p, model))
 }
 
 fn validator_prompt(c: &Cluster, memory: &str) -> String {
@@ -500,6 +581,7 @@ Otherwise FAIL with the smallest exact correction.", c.task, memory.chars().take
 fn run_workers(ctx: &Ctx, c: &mut Cluster, profile: &Profile, feedback: &str, before: f64) -> Result<bool, String> {
     let mut all_ok = true;
     c.error.clear();
+    c.evidence.clear();
     for (i, part) in profile.workers.iter().enumerate() {
         if kill_requested(ctx, &c.id) { return Err("killed".to_string()); }
         if profile.budget_eur > 0.0 && budget_spent(ctx, before) >= profile.budget_eur {
@@ -558,7 +640,7 @@ fn validate(ctx: &Ctx, c: &mut Cluster, profile: &Profile, before: f64) -> Resul
     }
     let model = match model_for_part(ctx, part) {
         Ok(m) => m,
-        Err(e) => { c.error = e; return Ok(false); }
+        Err(e) => { c.error = e; c.evidence.clear(); return Ok(false); }
     };
     c.state = "validating".to_string();
     c.updated = now();
@@ -568,22 +650,36 @@ fn validate(ctx: &Ctx, c: &mut Cluster, profile: &Profile, before: f64) -> Resul
     report(ctx, c, "validator", "");
     let memory = fs::read_to_string(memory_path(ctx, &c.id)).unwrap_or_default();
     let out = run_model(ctx, c, part, &validator_system(c, part, &model), &validator_prompt(c, &memory), 4);
-    let text = match out {
-        Ok(d) => d.text,
+    let done = match out {
+        Ok(d) => d,
         Err(e) => {
             c.error = format!("validator: {}", e);
+            c.evidence.clear();
             if let Some(p) = c.parts.get_mut(idx) { p.state = "failed".to_string(); p.error = e.clone(); }
             memory_line(ctx, c, part, &model, &format!("NOT checked: {}", e), "failed");
             save(ctx, c)?;
             return Ok(false);
         }
     };
-    memory_line(ctx, c, part, &model, &text, "validated");
-    let ok = text.trim_start().to_uppercase().starts_with("PASS");
+    let evidence = evidence_of(&done.checks);
+    let checked = done.checks.iter().any(|c| c.ok);
+    let text = done.text;
+    c.evidence = evidence.clone();
+    let note = if evidence.is_empty() { text.clone() } else { format!("{}\n\nevidence: {}", text, evidence) };
+    memory_line(ctx, c, part, &model, &note, "validated");
+    let said_pass = text.trim_start().to_uppercase().starts_with("PASS");
+    // A PASS counts only when the validator really ran a check that passed. `done` without V is not accepted later.
+    let ok = said_pass && checked;
     if let Some(p) = c.parts.get_mut(idx) { p.state = if ok { "done" } else { "failed" }.to_string(); p.output = text.clone(); p.error = if ok { String::new() } else { text.clone() }; }
     if ok {
         c.done = (c.done + 1).min(c.total);
         c.error.clear();
+    } else if said_pass {
+        c.error = if done.checks.is_empty() {
+            "the validator said PASS but ran no check: no V field, the cluster fails".to_string()
+        } else {
+            format!("the validator said PASS but its check failed: {}", evidence)
+        };
     } else {
         c.error = text.lines().next().unwrap_or("validator said FAIL").chars().take(300).collect();
     }
@@ -644,6 +740,7 @@ pub fn run_cluster(ctx: &Ctx, id: &str) -> Result<String, String> {
     c.done = 0;
     c.total = profile.workers.len() + profile.validator.iter().count();
     c.error.clear();
+    c.evidence.clear();
     c.updated = now();
     save(ctx, &c)?;
     let _ = fs::write(memory_path(ctx, &c.id), format!("# Cluster {} · {}\n\nTask: {}\nProfile: {} · max {} parts, depth {}\n",
@@ -702,6 +799,18 @@ pub fn run_cluster(ctx: &Ctx, id: &str) -> Result<String, String> {
             append_memory(ctx, &c, &format!("\n## merge\n\nworktree {} applied to {}\n", c.worktree, c.project));
         }
     }
+    if ok {
+        // The orchestrator accepts only a done line with a non-empty V. The check is the same proof::accept used by tests.
+        let done = crate::proof::Report {
+            s: "done".to_string(), p: format!("{}/{}", c.done, c.total), t: format!("{}s", now().saturating_sub(c.started)),
+            f: "-".to_string(), e: "-".to_string(),
+            v: if c.evidence.trim().is_empty() { None } else { Some(c.evidence.clone()) },
+        };
+        if let Err(e) = crate::proof::accept(&done) {
+            ok = false;
+            c.error = e;
+        }
+    }
     c.state = if ok { "done" } else if blocked { "blocked" } else { "failed" }.to_string();
     if !ok && c.error.is_empty() {
         c.error = if workers_ok { "the validator did not pass the cluster".to_string() } else { "at least one part failed".to_string() };
@@ -739,7 +848,7 @@ fn new_cluster(ctx: &Ctx, profile: &Profile, name: &str, task: &str, parent: Opt
     let c = Cluster { id: id.clone(), name: name.to_string(), profile: profile.name.clone(), task: task.to_string(),
                       parent: parent.map(str::to_string), after, depth, state: "queued".to_string(), done: 0,
                       total: parts.len(), started: now(), updated: now(), output: String::new(), error: String::new(),
-                      memory: memory_path(ctx, &id).to_string_lossy().to_string(),
+                      memory: memory_path(ctx, &id).to_string_lossy().to_string(), evidence: String::new(),
                       project, worktree, branch, cwd, parts };
     save(ctx, &c)?;
     let _ = fs::write(memory_path(ctx, &id), format!("# Cluster {} · {}\n\nTask: {}\n\n", name, profile.name, task));
@@ -1145,6 +1254,108 @@ mod tests {
         let research = profile(&ctx, "research").unwrap();
         let c = new_cluster(&ctx, &research, "look", "read only", None, Vec::new(), 0).unwrap();
         assert!(c.worktree.is_empty() && c.cwd.is_empty() && c.branch.is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_merge_conflict_is_reported_and_the_live_file_is_untouched() {
+        let (address, _seen) = crate::llm::fake::serve(vec![
+            (200, text_reply("done")),
+            (200, tool_reply("run", json!({"command": "cat hello.txt"}))),
+            (200, text_reply("PASS: the worktree holds the edit")),
+        ]);
+        let (mut ctx, dir) = ctx();
+        fake_models(&mut ctx, &address);
+        let p = profile(&ctx, "solo").unwrap();
+        let c = new_cluster(&ctx, &p, "conflict", "edit hello.txt", None, Vec::new(), 0).unwrap();
+        fs::write(Path::new(&c.worktree).join("hello.txt"), "cluster edit\n").unwrap();
+        fs::write(dir.join("hello.txt"), "live edit\n").unwrap();
+        let out = run_cluster(&ctx, &c.id).unwrap();
+        assert!(out.contains("blocked"), "{}", out);
+        let c = load(&ctx, &c.id).unwrap();
+        assert!(c.error.contains("merge conflict"), "{}", c.error);
+        assert_eq!(fs::read_to_string(dir.join("hello.txt")).unwrap(), "live edit\n");
+        assert!(Path::new(&c.worktree).join("hello.txt").is_file(), "the worktree stays for inspection");
+        assert!(branch_exists(&dir, &c.branch));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_validator_that_runs_no_check_fails_the_cluster() {
+        let (address, _seen) = crate::llm::fake::serve(vec![
+            (200, text_reply("done")),
+            (200, text_reply("PASS: everything looks good")),
+            (200, text_reply("done")),
+            (200, text_reply("PASS: everything looks good")),
+        ]);
+        let (mut ctx, dir) = ctx();
+        fake_models(&mut ctx, &address);
+        let p = profile(&ctx, "solo").unwrap();
+        let c = new_cluster(&ctx, &p, "nocheck", "do the task", None, Vec::new(), 0).unwrap();
+        let out = run_cluster(&ctx, &c.id).unwrap();
+        assert!(out.contains("failed"), "{}", out);
+        let c = load(&ctx, &c.id).unwrap();
+        assert_eq!((c.state.as_str(), c.evidence.as_str()), ("failed", ""));
+        assert!(c.error.contains("ran no check"), "{}", c.error);
+        let line = fs::read_to_string(cluster_dir(&ctx, &c.id).join("report.txt")).unwrap();
+        let r = crate::proof::parse(&line).unwrap();
+        assert_eq!(r.s, "failed");
+        assert!(crate::proof::accept(&r).is_ok());
+
+        // A done line without V is refused by the same gate the orchestrator uses.
+        let mut done = c.clone();
+        done.state = "done".to_string();
+        done.evidence.clear();
+        report(&ctx, &done, "-", "-");
+        let line = fs::read_to_string(cluster_dir(&ctx, &c.id).join("report.txt")).unwrap();
+        let r = crate::proof::parse(&line).unwrap();
+        assert!(crate::proof::accept(&r).is_err(), "{}", line);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_solo_fixture_ends_with_the_check_and_its_result() {
+        let (address, _seen) = crate::llm::fake::serve(vec![
+            (200, tool_reply("write", json!({"path": "hello.txt", "text": "hello\n"}))),
+            (200, text_reply("created hello.txt")),
+            (200, tool_reply("run", json!({"command": "cat hello.txt"}))),
+            (200, text_reply("PASS: hello.txt holds the expected line")),
+        ]);
+        let (mut ctx, dir) = ctx();
+        fake_models(&mut ctx, &address);
+        let p = profile(&ctx, "solo").unwrap();
+        let c = new_cluster(&ctx, &p, "solo-fixture", "write hello.txt", None, Vec::new(), 0).unwrap();
+        let out = run_cluster(&ctx, &c.id).unwrap();
+        assert!(out.contains("done"), "{}", out);
+        let c = load(&ctx, &c.id).unwrap();
+        assert_eq!((c.state.as_str(), c.evidence.as_str()), ("done", "cat hello.txt ok"));
+        assert_eq!(fs::read_to_string(dir.join("hello.txt")).unwrap(), "hello\n");
+        let line = fs::read_to_string(cluster_dir(&ctx, &c.id).join("report.txt")).unwrap();
+        let r = crate::proof::parse(&line).unwrap();
+        assert_eq!(r.s, "done");
+        assert_eq!(r.v.as_deref(), Some("cat hello.txt ok"));
+        assert!(crate::proof::accept(&r).is_ok());
+        let memory = fs::read_to_string(memory_path(&ctx, &c.id)).unwrap();
+        assert!(memory.contains("evidence: cat hello.txt ok"), "{}", memory);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_tool_log_becomes_the_evidence_line() {
+        let dir = std::env::temp_dir().join(format!("penelope-cluster-log-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("tools.jsonl");
+        fs::write(&path, [
+            json!({"name": "read", "args": {"path": "memory.md"}, "ok": true, "result": "1  task"}).to_string(),
+            json!({"name": "run", "args": {"command": "cargo test"}, "ok": true, "result": "exit code 0\n41 passed"}).to_string(),
+        ].join("\n")).unwrap();
+        let checks = checks_from_log(&path);
+        assert_eq!(checks.len(), 2);
+        assert_eq!(evidence_of(&checks), "cargo test ok");
+        fs::write(&path, json!({"name": "run", "args": {"command": "cat missing.txt"}, "ok": true, "result": "exit code 1\nno such file"}).to_string()).unwrap();
+        assert_eq!(evidence_of(&checks_from_log(&path)), "cat missing.txt failed");
+        assert!(!checks_from_log(&path)[0].ok);
         let _ = fs::remove_dir_all(&dir);
     }
 }

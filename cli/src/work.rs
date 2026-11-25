@@ -162,6 +162,9 @@ pub fn remove_with_branch(project: &Path, name: &str) -> Result<String, String> 
     let path = worktrees(project).join(&name);
     if path.exists() {
         git(project, &["worktree", "remove", "--force", &path.to_string_lossy()])?;
+    } else {
+        // A worktree removed outside git leaves an entry behind that blocks the branch deletion.
+        let _ = git(project, &["worktree", "prune"]);
     }
     let branch = format!("agent/{}", name);
     match git(project, &["branch", "-D", &branch]) {
