@@ -45,6 +45,8 @@ pub struct Part {
     /// A model setting, a role name (`main`, `weak`, `scout`, `judge`, `worker`, ...), or empty for the role's model.
     pub model: Value,
     pub mcp: Vec<String>,
+    /// Names of worker parts that must finish before this part starts. Empty means it may start at once.
+    pub depends_on: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -54,6 +56,8 @@ pub struct Profile {
     pub validator: Option<Part>,
     pub max_models: usize,
     pub max_depth: usize,
+    /// Worker parts that may run at the same time. Writes to the memory file stay serialized.
+    pub max_parallel: usize,
     pub budget_eur: f64,
     pub max_steps: usize,
     pub retries: usize,
@@ -187,6 +191,10 @@ fn part(value: &Value, fallback: &str) -> Part {
         task: value["task"].as_str().unwrap_or("").trim().to_string(),
         model,
         mcp: value["mcp"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default(),
+        depends_on: ["needs", "after"].iter()
+            .find_map(|key| value[*key].as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.trim().to_string())).filter(|s| !s.is_empty()).collect())
+            .unwrap_or_default(),
     }
 }
 
@@ -212,7 +220,28 @@ fn parse_profile(value: &Value, fallback_name: &str) -> Result<Profile, String> 
     let max_models = value["max_models"].as_u64().unwrap_or(8) as usize;
     let count = list.len() + validator.iter().count();
     if max_models == 0 || count > max_models { return Err(format!("profile {}: {} parts, max_models is {}", name, count, max_models)); }
+    // A part may name other worker parts it waits for. Unknown names and cycles are refused before anything runs.
+    let names: Vec<&str> = list.iter().map(|p| p.name.as_str()).collect();
+    for p in &list {
+        for need in &p.depends_on {
+            if !names.contains(&need.as_str()) {
+                return Err(format!("profile {}: part {} needs unknown part {}", name, p.name, need));
+            }
+            if need == &p.name {
+                return Err(format!("profile {}: part {} needs itself", name, p.name));
+            }
+        }
+    }
+    let mut remaining: Vec<&str> = names.clone();
+    while !remaining.is_empty() {
+        let ready: Vec<&str> = remaining.iter().copied().filter(|part| {
+            list.iter().find(|p| p.name == *part).map(|p| p.depends_on.iter().all(|need| !remaining.contains(&need.as_str()))).unwrap_or(false)
+        }).collect();
+        if ready.is_empty() { return Err(format!("profile {}: the parts need each other in a cycle", name)); }
+        remaining.retain(|part| !ready.contains(part));
+    }
     let max_depth = value["max_depth"].as_u64().unwrap_or(2).min(3) as usize;
+    let max_parallel = value["max_parallel"].as_u64().unwrap_or(1).clamp(1, 8) as usize;
     let budget_eur = value["budget_eur"].as_f64().unwrap_or(0.0).max(0.0);
     let max_steps = value["max_steps"].as_u64().unwrap_or(12).clamp(1, 30) as usize;
     let retries = value["retries"].as_u64().unwrap_or(1).min(3) as usize;
@@ -221,7 +250,7 @@ fn parse_profile(value: &Value, fallback_name: &str) -> Result<Profile, String> 
     // A profile with a worker part writes, so it gets a worktree unless it says otherwise. A research or live-test
     // profile has no writer and can be set to false explicitly.
     let worktree = value["worktree"].as_bool().unwrap_or_else(|| list.iter().any(|p| p.role == "worker"));
-    Ok(Profile { name, workers: list, validator, max_models, max_depth, budget_eur, max_steps, retries, report_every, stuck_after, worktree })
+    Ok(Profile { name, workers: list, validator, max_models, max_depth, max_parallel, budget_eur, max_steps, retries, report_every, stuck_after, worktree })
 }
 
 fn builtin(name: &str) -> Option<Profile> {
@@ -318,8 +347,8 @@ pub fn profiles_text(ctx: &Ctx) -> String {
             Ok(p) => {
                 let parts: Vec<String> = p.workers.iter().map(|w| format!("{} ({})", w.name, w.role))
                     .chain(p.validator.iter().map(|v| format!("{} (validator)", v.name))).collect();
-                out.push_str(&format!("{:<12} {} · max {} parts, depth {}, {} retries, report every {}s, stuck after {}{}\n  {}\n", name, parts.join(", "),
-                                      p.max_models, p.max_depth, p.retries, p.report_every, p.stuck_after,
+                out.push_str(&format!("{:<12} {} · max {} parts, depth {}, {} parallel, {} retries, report every {}s, stuck after {}{}\n  {}\n", name, parts.join(", "),
+                                      p.max_models, p.max_depth, p.max_parallel, p.retries, p.report_every, p.stuck_after,
                                       if p.worktree { " · worktree" } else { "" },
                                       if p.budget_eur > 0.0 { format!("{:.2} EUR budget", p.budget_eur) } else { "no euro limit".to_string() }));
             }
@@ -953,12 +982,14 @@ fn validator_prompt(c: &Cluster, memory: &str) -> String {
 Otherwise FAIL with the smallest exact correction.", c.task, memory.chars().take(12_000).collect::<String>())
 }
 
-fn run_workers(ctx: &Ctx, c: &mut Cluster, profile: &Profile, feedback: &str, limits: Limits, cancel: &AtomicBool,
+fn run_workers(ctx: &Ctx, c: &mut Cluster, profile: &Profile, feedback: &str, limits: Limits, cancel: &Arc<AtomicBool>,
                watch: &Arc<Mutex<Watch>>, focus: &Arc<Mutex<String>>) -> Result<bool, String> {
     let mut all_ok = true;
     c.error.clear();
     c.evidence.clear();
-    for (i, part) in profile.workers.iter().enumerate() {
+    let mut pending: Vec<usize> = (0..profile.workers.len()).collect();
+    let mut finished: Vec<usize> = Vec::new();
+    while !pending.is_empty() {
         if kill_requested(ctx, &c.id) || cancel.load(Ordering::SeqCst) { return Err("killed".to_string()); }
         if let Some(cause) = watch.lock().unwrap_or_else(|e| e.into_inner()).cause() {
             return Err(format!("STUCK: {}", cause));
@@ -967,80 +998,144 @@ fn run_workers(ctx: &Ctx, c: &mut Cluster, profile: &Profile, feedback: &str, li
             c.error = stop;
             return Err(c.error.clone());
         }
-        let model = match model_for_part(ctx, part) {
-            Ok(m) => m,
-            Err(e) => {
-                c.parts[i].state = "failed".to_string();
-                c.parts[i].error = e.clone();
+        // A part is ready when every part it needs has finished. A failed dependency keeps its dependants closed.
+        let ready: Vec<usize> = pending.iter().copied().filter(|i| {
+            profile.workers[*i].depends_on.iter().all(|need| {
+                profile.workers.iter().position(|p| &p.name == need).map(|j| finished.contains(&j)).unwrap_or(false)
+            })
+        }).collect();
+        if ready.is_empty() {
+            for i in &pending {
+                c.parts[*i].state = "failed".to_string();
+                c.parts[*i].error = "a part it needs did not finish".to_string();
                 all_ok = false;
-                continue;
             }
-        };
-        c.parts[i].model = part_model_name(part, &model);
-        c.parts[i].state = "working".to_string();
-        *focus.lock().unwrap_or_else(|e| e.into_inner()) = part.name.clone();
+            c.error = "a part waits for a dependency that did not finish".to_string();
+            c.updated = now();
+            save(ctx, c)?;
+            report(ctx, c, "dependency", &c.error);
+            break;
+        }
+        let wave: Vec<usize> = ready.into_iter().take(profile.max_parallel.max(1)).collect();
+        let mut jobs: Vec<(usize, Part, Value, String, String)> = Vec::new();
+        for i in &wave {
+            let part = profile.workers[*i].clone();
+            let model = match model_for_part(ctx, &part) {
+                Ok(model) => model,
+                Err(e) => {
+                    c.parts[*i].state = "failed".to_string();
+                    c.parts[*i].error = e;
+                    all_ok = false;
+                    pending.retain(|index| index != i);
+                    continue;
+                }
+            };
+            c.parts[*i].model = part_model_name(&part, &model);
+            c.parts[*i].state = "working".to_string();
+            let system = worker_system(c, &part, &model, feedback);
+            let memory = fs::read_to_string(memory_path(ctx, &c.id)).unwrap_or_default();
+            let task = format!("Cluster task: {}\n\nYour part: {}\n\nCluster memory so far:\n{}\n\nDo your part and report the evidence.",
+                               c.task, if part.task.is_empty() { &c.task } else { &part.task }, memory.chars().take(10_000).collect::<String>());
+            jobs.push((*i, part, model, system, task));
+        }
+        for (i, _, _, _, _) in &jobs { pending.retain(|index| index != i); }
+        if jobs.is_empty() { continue; }
         c.done = c.done.min(c.total);
         c.updated = now();
         c.state = "working".to_string();
         save(ctx, c)?;
-        report(ctx, c, &part.name, "");
-        let system = worker_system(c, part, &model, feedback);
-        let memory = fs::read_to_string(memory_path(ctx, &c.id)).unwrap_or_default();
-        let task = format!("Cluster task: {}\n\nYour part: {}\n\nCluster memory so far:\n{}\n\nDo your part and report the evidence.",
-                           c.task, if part.task.is_empty() { &c.task } else { &part.task }, memory.chars().take(10_000).collect::<String>());
-        match run_model(ctx, c, part, &system, &task, profile.max_steps, cancel, limits, watch) {
-            Ok(done) => {
-                c.parts[i].state = "done".to_string();
-                c.parts[i].output = done.text.clone();
-                c.parts[i].error.clear();
-                c.output.push_str(&format!("\n--- {} ({}) ---\n{}\n", part.name, part.slot, done.text));
-                memory_line(ctx, c, part, &model, &done.text, "done");
-                c.done = (c.done + 1).min(c.total);
-                if let Some(stop) = limits.over(ctx) {
-                    // The answer is not merged: the call that crossed the limit is the last call of the cluster.
+        let wave_focus = if jobs.len() > 1 { "parallel".to_string() } else { jobs[0].1.name.clone() };
+        *focus.lock().unwrap_or_else(|e| e.into_inner()) = wave_focus.clone();
+        report(ctx, c, &wave_focus, "");
+        let mut handles = Vec::new();
+        for (i, part, model, system, task) in jobs {
+            let ctx = ctx.clone();
+            let snapshot = c.clone();
+            let cancel = cancel.clone();
+            let watch = watch.clone();
+            let steps = profile.max_steps;
+            handles.push(std::thread::spawn(move || {
+                let out = run_model(&ctx, &snapshot, &part, &system, &task, steps, &cancel, limits, &watch);
+                (i, part, model, out)
+            }));
+        }
+        let mut results = Vec::new();
+        for handle in handles {
+            match handle.join() {
+                Ok(result) => results.push(result),
+                Err(_) => return Err("a worker part panicked".to_string()),
+            }
+        }
+        for (i, part, model, out) in results {
+            // A cancel that came from the zombie watch belongs to `stuck`, not to `killed`.
+            let out = match out {
+                Err(e) if e == "stopped" => match watch.lock().unwrap_or_else(|e| e.into_inner()).cause() {
+                    Some(cause) => Err(format!("STUCK: {}", cause)),
+                    None => Err(e),
+                },
+                other => other,
+            };
+            match out {
+                Ok(done) => {
+                    c.parts[i].state = "done".to_string();
+                    c.parts[i].output = done.text.clone();
+                    c.parts[i].error.clear();
+                    c.output.push_str(&format!("\n--- {} ({}) ---\n{}\n", part.name, part.slot, done.text));
+                    memory_line(ctx, c, &part, &model, &done.text, "done");
+                    c.done = (c.done + 1).min(c.total);
+                    finished.push(i);
+                    if let Some(stop) = limits.over(ctx) {
+                        // The answer is not merged: the call that crossed the limit is the last call of the cluster.
+                        c.parts[i].state = "failed".to_string();
+                        c.parts[i].error = stop.clone();
+                        c.error = stop;
+                        c.updated = now();
+                        save(ctx, c)?;
+                        report(ctx, c, &part.name, &c.error);
+                        return Err(c.error.clone());
+                    }
+                }
+                Err(e) if e.starts_with("BUDGET: ") => {
                     c.parts[i].state = "failed".to_string();
-                    c.parts[i].error = stop.clone();
-                    c.error = stop;
+                    c.parts[i].error = e.clone();
+                    memory_line(ctx, c, &part, &model, &format!("NOT done: {}", e), "failed");
+                    c.error = e;
                     c.updated = now();
                     save(ctx, c)?;
                     report(ctx, c, &part.name, &c.error);
                     return Err(c.error.clone());
                 }
+                Err(e) if e.starts_with("STUCK: ") => {
+                    c.parts[i].state = "failed".to_string();
+                    c.parts[i].error = e.clone();
+                    memory_line(ctx, c, &part, &model, &format!("NOT done: {}", e), "failed");
+                    c.error = e;
+                    c.updated = now();
+                    save(ctx, c)?;
+                    report(ctx, c, &part.name, &c.error);
+                    return Err(c.error.clone());
+                }
+                Err(e) if e == "stopped" && (cancel.load(Ordering::SeqCst) || kill_requested(ctx, &c.id)) => {
+                    return Err("killed".to_string());
+                }
+                Err(e) => {
+                    c.parts[i].state = "failed".to_string();
+                    c.parts[i].error = e.clone();
+                    all_ok = false;
+                    memory_line(ctx, c, &part, &model, &format!("NOT done: {}", e), "failed");
+                    c.error = format!("{}: {}", part.name, e);
+                }
             }
-            Err(e) if e.starts_with("BUDGET: ") => {
-                c.parts[i].state = "failed".to_string();
-                c.parts[i].error = e.clone();
-                memory_line(ctx, c, part, &model, &format!("NOT done: {}", e), "failed");
-                c.error = e;
+            if let Some(cause) = watch.lock().unwrap_or_else(|e| e.into_inner()).cause() {
                 c.updated = now();
                 save(ctx, c)?;
                 report(ctx, c, &part.name, &c.error);
-                return Err(c.error.clone());
+                return Err(format!("STUCK: {}", cause));
             }
-            Err(e) if e.starts_with("STUCK: ") => {
-                c.parts[i].state = "failed".to_string();
-                c.parts[i].error = e.clone();
-                memory_line(ctx, c, part, &model, &format!("NOT done: {}", e), "failed");
-                c.error = e;
-                c.updated = now();
-                save(ctx, c)?;
-                report(ctx, c, &part.name, &c.error);
-                return Err(c.error.clone());
-            }
-            Err(e) if e == "stopped" && (cancel.load(Ordering::SeqCst) || kill_requested(ctx, &c.id)) => {
-                return Err("killed".to_string());
-            }
-            Err(e) => {
-                c.parts[i].state = "failed".to_string();
-                c.parts[i].error = e.clone();
-                all_ok = false;
-                memory_line(ctx, c, part, &model, &format!("NOT done: {}", e), "failed");
-                c.error = format!("{}: {}", part.name, e);
-            }
+            c.updated = now();
+            save(ctx, c)?;
+            report(ctx, c, &part.name, &c.error);
         }
-        c.updated = now();
-        save(ctx, c)?;
-        report(ctx, c, &part.name, &c.error);
     }
     Ok(all_ok)
 }
@@ -2104,6 +2199,82 @@ mod tests {
         let err = profile_upsert(&ctx, "broken", &json!({"workers": []})).unwrap_err();
         assert!(err.contains("no worker part"), "{}", err);
         assert!(!profile_dir(&ctx).join("broken.json").is_file());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn timed_parts(max_parallel: u64) -> Duration {
+        let (mut ctx, dir) = ctx();
+        let probe = dir.join("hello.txt").to_string_lossy().to_string();
+        let (address, _seen) = crate::llm::fake::serve_parallel(vec![
+            (200, text_reply("one done"), 1_000),
+            (200, text_reply("two done"), 1_000),
+            (200, text_reply("three done"), 1_000),
+            (200, tool_reply("read", json!({"path": probe})), 0),
+            (200, text_reply("PASS: all three parts are in the memory"), 0),
+        ]);
+        fake_models(&mut ctx, &address);
+        write_profile(&ctx, "wide", json!({
+            "name": "wide",
+            "workers": [
+                {"name": "one", "role": "scout", "model": "main"},
+                {"name": "two", "role": "scout", "model": "main"},
+                {"name": "three", "role": "scout", "model": "main"}
+            ],
+            "validator": {"name": "check", "role": "judge", "model": "judge"},
+            "max_parallel": max_parallel, "report_every": 0, "stuck_after": 3, "worktree": false
+        }));
+        let p = profile(&ctx, "wide").unwrap();
+        assert_eq!(p.max_parallel, max_parallel as usize);
+        let c = new_cluster(&ctx, &p, "wide", "do three parts", None, Vec::new(), 0).unwrap();
+        let started = std::time::Instant::now();
+        let out = run_cluster(&ctx, &c.id).unwrap();
+        let elapsed = started.elapsed();
+        assert!(out.contains("done"), "{}", out);
+        let memory = fs::read_to_string(memory_path(&ctx, &c.id)).unwrap();
+        for name in ["one", "two", "three"] {
+            assert!(memory.contains(&format!("## {}", name)), "memory misses {}: {}", name, memory);
+        }
+        let _ = fs::remove_dir_all(&dir);
+        elapsed
+    }
+
+    #[test]
+    fn three_parts_run_at_the_same_time_up_to_max_parallel() {
+        let parallel = timed_parts(3);
+        let sequential = timed_parts(1);
+        assert!(parallel < Duration::from_millis(2_500), "three parts in parallel took {:?}", parallel);
+        assert!(parallel + Duration::from_millis(1_200) < sequential,
+                "parallel {:?} must be clearly faster than sequential {:?}", parallel, sequential);
+    }
+
+    #[test]
+    fn part_dependencies_are_parsed_and_a_cycle_is_refused() {
+        let (ctx, dir) = ctx();
+        write_profile(&ctx, "chain", json!({
+            "name": "chain",
+            "workers": [
+                {"name": "first", "role": "scout", "model": "main"},
+                {"name": "second", "role": "scout", "model": "main", "needs": ["first"]}
+            ],
+            "max_parallel": 2, "worktree": false
+        }));
+        let p = profile(&ctx, "chain").unwrap();
+        assert_eq!(p.workers[1].depends_on, vec!["first".to_string()]);
+        write_profile(&ctx, "unknown-need", json!({
+            "name": "unknown-need",
+            "workers": [{"name": "one", "role": "scout", "model": "main", "needs": ["ghost"]}],
+            "worktree": false
+        }));
+        assert!(profile(&ctx, "unknown-need").unwrap_err().contains("unknown part"));
+        write_profile(&ctx, "cycle", json!({
+            "name": "cycle",
+            "workers": [
+                {"name": "a", "role": "scout", "model": "main", "needs": ["b"]},
+                {"name": "b", "role": "scout", "model": "main", "needs": ["a"]}
+            ],
+            "worktree": false
+        }));
+        assert!(profile(&ctx, "cycle").unwrap_err().contains("cycle"));
         let _ = fs::remove_dir_all(&dir);
     }
 

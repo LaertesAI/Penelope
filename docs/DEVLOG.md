@@ -91,6 +91,24 @@ respawn is refused; a profile written by the tool keeps `report_every: "2m"` as 
 Open: the zombie watch is a heuristic. A part that needs longer than `stuck_after × report_every` without a finished
 part is killed even if it is working; profiles that use long parts must raise `report_every` or `stuck_after`.
 
+### 1.5 Parts of one cluster in parallel
+
+A profile has `max_parallel` (default 1, clamped to 8). A part may name `needs: [other-part]`; a part without a
+dependency starts at once, and a dependent part waits until every named part finished. Unknown names and cycles are
+refused by `parse_profile`, so a broken plan never starts. `run_workers` runs a ready wave of up to `max_parallel`
+parts in threads and joins them; only the main thread applies results, writes `memory.md` (also behind
+`MEMORY_LOCK`) and writes the cluster JSON. The validator runs after the last worker wave. The cancel flag, the euro
+limits and the zombie watch are shared with every thread; a kill cancels all running parts, and each Claude child has
+its own process slot under `cluster id/part name`.
+
+Measured: `cd cli && cargo test` → `190 passed; 0 failed` (2026-11-25). New test: three parts against a fake server
+that sleeps one second per answer, with `max_parallel=3`, finish clearly faster than the same three parts at
+`max_parallel=1` (roughly 1 s against 3 s plus the validator), and the memory file holds all three sections. A second
+test parses `needs`, refuses an unknown part and refuses a cycle.
+
+Open: a wave is filled before it starts and not refilled while it runs, so one slow part can leave a slot idle until
+the wave ends. Parallel parts see the memory as it was before the wave, not the sections written by their neighbours.
+
 This is a working increment, not a claim that every limit is gone. The last section names what is still open and how
 each claim can be checked on this machine.
 
