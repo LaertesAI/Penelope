@@ -1,5 +1,7 @@
 //! penelope: the Laertes harness on the command line.
 
+#[allow(dead_code)]
+mod advise;
 mod agents;
 mod audit;
 mod auth;
