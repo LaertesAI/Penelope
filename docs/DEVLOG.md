@@ -217,9 +217,10 @@ rewritten task, so the worker prompt is not filled with both texts. A failed pro
 and no worker starts.
 
 The chain is explicit and bounded: a profile cannot name itself, a prompt profile cannot name its own `before`, and a
-prompt profile may not have a `worker` part or `worktree: true`, so it can only rewrite and cannot write. The prompt
-cluster is a child in the same tree and obeys the root `max_depth` and `max_models`; `max_models` counts its parts
-before it is created. The built-in `prompt` profile uses Aiolos (condenser) and Argos (judge) with `worktree: false`.
+prompt profile may not use a worker, lead or tool part, may only use condenser, scout or judge parts, and may not set
+`worktree: true`, so a before cluster cannot take a write role or open a worktree. The prompt cluster is a child in
+the same tree and obeys the root `max_depth` and `max_models`; `max_models` counts its parts before it is created.
+The built-in `prompt` profile uses Aiolos (condenser) and Argos (judge) with `worktree: false`.
 
 A worker part with `role: "human"` makes no model call. It asks a yes/no question through
 `tools::ask_person` when `PENELOPE_APPROVE_DIR` is set, and it always runs alone, never inside a parallel wave. A yes
@@ -239,6 +240,46 @@ human validator is refused.
 Open: a kill during the prompt cluster writes the kill file of the parent, but the already running prompt child is
 not signalled until it returns; the next check stops the parent before any worker. The prompt text is cut at 6,000
 characters with a visible note. `ask_person` keeps its existing 120-second timeout; a timeout counts as no.
+
+### 1.9 A cluster as a file, and the cost before the start
+
+A profile can now be a `.cluster` file under `.penelope/clusters/profiles/NAME.cluster` (or a direct path passed to
+`--profile`). The language is one `$name(...)` call:
+
+```
+$dev(parts=[researcher, coder*3, validator, tool], max_models=8, max_depth=3, budget_eur=2)
+```
+
+`parts` names built-in parts only: lead, researcher/scout, coder/worker, validator/judge, tool, tester, human and
+condenser. `coder*3` makes `coder`, `coder2`, `coder3`; a name may appear once, and there is exactly one validator
+(`validator` or `judge`, not both). The other keys are `before`, `max_models`, `max_depth`, `max_parallel`,
+`max_steps`, `retries`, `budget_eur`, `report_every`, `stuck_after` and `worktree`. Numbers are checked against the
+same ranges as JSON profiles; `report_every` accepts `30s`, `5m`, `1h`; `stuck_after` accepts `3` or `3 reports`.
+The parser builds the same JSON object that `parse_profile` already reads, so a cluster file and an equivalent JSON
+file produce the same `Profile` (tested with `$dev(...)` and its JSON twin). The character set is limited to letters,
+digits, whitespace and `$()[],.=*_-`; quotes, `;`, `/` and backticks are refused before any token is read. A file named
+`dev.cluster` must contain `$dev`; a mismatch is refused at load.
+
+`penelope cluster run --dry [GOAL] [--profile NAME]` loads the profile(s), prints each cluster, its parts, the role,
+slot and resolved model of every part, and an estimate of tokens and euro. The estimate is deliberately rough: per
+part `1,500 + 800 × steps` input tokens and `250 × steps` output tokens, with the step limit of the profile (4 for a
+validator), priced through `cost::euro_for`. A part with no price in `config.json` is marked; a human part is marked
+as no model call. With `--profile dev` and `before: "prompt"`, the prompt cluster is printed first. Without
+`--profile` the dry run prints every profile and says that a real run would ask the router, which is itself a model
+call; the dry run never calls it. No cluster file, worktree or `usage.json` is written.
+
+Measured: `cd cli && cargo test` → `236 passed; 0 failed` plus 2 eval integration tests and 2 new cluster CLI
+integration tests (2026-11-26). New tests: the example cluster file and its JSON twin are the same `Profile`; the
+same file loads through the profile folder and a direct path; unknown parts, `coder*0`, `coder*9`, a repeated name,
+two validators, an empty parts list, an unknown key, `; rm -rf /`, a bad depth and a duplicate key are refused with
+the exact word; a dry run prints rewriter and dev with all parts, `model test-cluster` and an estimate, calls no
+endpoint, writes no cluster state and exits 0 through the built binary; the help names `--dry` and `.cluster`.
+
+Open: the exact syntax of a cluster file is still the owner's decision (it is written down above and in
+`penelope cluster profiles`). A part in a file cannot carry its own task, model or tools; that needs a JSON profile.
+The estimate is a step-limit heuristic, not a measured token count, and it does not include the prompt cluster when
+it is reached through a profile that is not the selected one. `--dry` without `--profile` lists every profile rather
+than inventing an orchestrator plan, because the real plan needs a router call.
 
 ## Why this version exists
 
