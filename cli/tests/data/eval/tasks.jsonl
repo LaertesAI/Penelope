@@ -1,0 +1,1 @@
+{"id": "write-answer", "prompt": "Create answer.txt in the project with the single word hello on its own line. Do nothing else.", "setup": {"repo": "repo", "cwd": "", "copy": true}, "check": "grep -qx hello answer.txt", "check_timeout_seconds": 60, "max_steps": 6}

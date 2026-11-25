@@ -531,6 +531,10 @@ fn run_model(ctx: &Ctx, c: &Cluster, part: &Part, system: &str, task: &str, max_
     let log = cluster_dir(ctx, &c.id).join(format!("tools-{}.jsonl", safe(&part.name)));
     let _ = fs::remove_file(&log);
     let mut env = json!({"PENELOPE_ROLE": part.role});
+    let task_cwd = crate::eval::task_cwd();
+    if !task_cwd.is_empty() {
+        env["PENELOPE_TASK_CWD"] = json!(task_cwd);
+    }
     if let Ok(dir) = std::env::var("PENELOPE_APPROVE_DIR") { env["PENELOPE_APPROVE_DIR"] = json!(dir); }
     // The validator's MCP server writes every tool call to this file; the cluster reads it after the command ends.
     env["PENELOPE_TOOL_LOG"] = json!(log.to_string_lossy());

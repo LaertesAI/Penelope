@@ -15,6 +15,7 @@ mod cost;
 mod crew;
 mod cursor;
 mod forge;
+mod eval;
 mod files;
 mod input;
 mod jobs;
@@ -66,6 +67,10 @@ penelope auth                 the login status of Claude and the providers
 penelope auth verify [ROLE]   one real request per model setting (main, weak or scout)
 penelope update [--check]     check the update server, or install a newer signed build
 penelope audit                look for keys and plain-http leaks in the settings folder
+penelope eval TASKS.jsonl --setup large|large-subagents|cluster|all [--runs PATH]
+                              run the eval tasks, measure checks, tokens, euro and wall time; writes docs/RUNS.md
+penelope replay ID --model MODEL
+                              re-run the stored prompts of an eval run read-only; no file changed, no command or check run
 penelope input [install|enable|status]
                               a native Wayland pointer for ScreenCodec, without ydotool
 penelope cluster run GOAL [--profile NAME] [--sequential]
@@ -389,6 +394,48 @@ fn main() {
             _ => print!("{}", auth::status(&ctx)),
         },
         "audit" => print!("{}", audit::run(&ctx)),
+        "eval" => {
+            let mut file = None;
+            let mut setup = None;
+            let mut runs = None;
+            let mut i = 1;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--setup" => { setup = args.get(i + 1).cloned(); i += 2; }
+                    "--runs" => { runs = args.get(i + 1).cloned().or(runs); i += 2; }
+                    other => { file = Some(other.to_string()); i += 1; }
+                }
+            }
+            let (Some(file), Some(setup)) = (file, setup) else {
+                loom::warn("usage: penelope eval TASKS.jsonl --setup large|large-subagents|cluster|all [--runs PATH]");
+                std::process::exit(2);
+            };
+            // The project around .penelope keeps its runs in docs/RUNS.md even when the command is called from a subfolder.
+            let runs = runs.unwrap_or_else(|| {
+                let parent = ctx.root.parent().unwrap_or(std::path::Path::new("."));
+                if parent.join("docs").is_dir() {
+                    parent.join("docs").join("RUNS.md").to_string_lossy().to_string()
+                } else {
+                    "docs/RUNS.md".to_string()
+                }
+            });
+            match eval::eval(&ctx, &file, &setup, Some(std::path::Path::new(&runs))) {
+                Ok(text) => println!("{}", text),
+                Err(e) => { loom::warn(&e); std::process::exit(2); }
+            }
+        }
+        "replay" => {
+            let id = args.get(1).cloned().unwrap_or_default();
+            let model = args.iter().position(|a| a == "--model").and_then(|i| args.get(i + 1)).cloned().unwrap_or_default();
+            if id.is_empty() || id.starts_with('-') || model.is_empty() {
+                loom::warn("usage: penelope replay ID --model MODEL");
+                std::process::exit(2);
+            }
+            match eval::replay(&ctx, &id, &model) {
+                Ok(text) => println!("{}", text),
+                Err(e) => { loom::warn(&e); std::process::exit(2); }
+            }
+        }
         "input" => match args.get(1).map(String::as_str) {
             Some("install") => match input::install() {
                 Ok(text) => println!("{}", text),
@@ -938,4 +985,15 @@ pub fn doctor_text(ctx: &config::Ctx) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn help_names_the_eval_and_replay_commands() {
+        assert!(HELP.contains("penelope eval TASKS.jsonl --setup large|large-subagents|cluster|all"), "{}", HELP);
+        assert!(HELP.contains("penelope replay ID --model MODEL"), "{}", HELP);
+    }
 }

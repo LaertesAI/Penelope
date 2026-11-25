@@ -70,7 +70,12 @@ pub(crate) fn call_raw(ctx: &Ctx, name: &str, a: &Value) -> Result<String, Strin
 }
 
 fn call_raw_inner(ctx: &Ctx, name: &str, a: &Value) -> Result<String, String> {
-    let s = |k: &str| a[k].as_str().unwrap_or("").to_string();
+    // An eval task sets its scratch folder as the default cwd; a model that names no cwd still works there.
+    let task_cwd = crate::eval::task_cwd();
+    let s = |k: &str| {
+        let v = a[k].as_str().unwrap_or("");
+        if k == "cwd" && v.is_empty() { task_cwd.clone() } else { v.to_string() }
+    };
     let n = |k: &str| a[k].as_u64().unwrap_or(0) as usize;
     match name {
         "web_search" => {

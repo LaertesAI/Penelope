@@ -348,6 +348,10 @@ Report facts, paths and command output. Say plainly what failed. Tools are check
 fn claude_task(ctx: &Ctx, spec: &Spec, step: &Step, model: &Value, previous: &str) -> Result<Done, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let mut env = json!({"PENELOPE_ROLE": step.role});
+    let task_cwd = crate::eval::task_cwd();
+    if !task_cwd.is_empty() {
+        env["PENELOPE_TASK_CWD"] = json!(task_cwd);
+    }
     if let Ok(dir) = std::env::var("PENELOPE_APPROVE_DIR") {
         env["PENELOPE_APPROVE_DIR"] = json!(dir);
     }

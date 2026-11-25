@@ -177,3 +177,23 @@ installed by `penelope input install` and only enabled by a person. The Windows 
 The research answer cited the docs.rs page, a tutorial and a blog, named the missing alternatives (`join!`,
 `FuturesUnordered`) and listed the pages that were only snippets. The search cache lives under
 `.penelope/search/cache/`; `penelope audit` found no key in it.
+
+## Eval runner (2026-11-25)
+
+`penelope eval TASKS.jsonl --setup large|large-subagents|cluster|all` writes its measured table here. The schema, the
+three setups and the replay guarantee are in [`EVAL.md`](EVAL.md).
+
+**No real eval run is in this file yet.** The runner, the table and `penelope replay ID --model MODEL` were tested
+against the local fake endpoint of the test suite only. A fake-provider table is never written to this repository
+file. The first real row will name the task file, the models, the passed checks, the tokens, the euro and the wall
+time of each setup; it comes from `penelope eval`, not from a hand-written estimate.
+
+What is already fixed before a real run:
+
+- A task file holds `id`, `prompt`, `setup.repo` (with optional `cwd` and `copy`) and `check`.
+- `large` is the main model through `backend::Chat`; `large-subagents` is `agents::run` with one worker and one judge;
+  `cluster` is `clusters::orchestrate` with the weak model in the `eval-small` profile.
+- Passed means the task's check command exited 0 in the task folder.
+- Tokens and euro are the delta of `.penelope/usage.json` and `cost.rs` during the task. An unpriced model shows 0.0000
+  and is not guessed.
+- Replay offers only read-only tools and refuses `write`, `edit`, `run`, jobs, screen, MCP and clusters by name.

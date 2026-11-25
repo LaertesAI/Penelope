@@ -224,8 +224,12 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
         }
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
         let mut servers = json!({"penelope": {"command": exe.to_string_lossy(), "args": ["mcp", "--root", ctx.root.to_string_lossy()]}});
+        let task_cwd = crate::eval::task_cwd();
+        if !task_cwd.is_empty() {
+            servers["penelope"]["env"] = json!({"PENELOPE_TASK_CWD": task_cwd});   // an eval task: the MCP server uses this folder
+        }
         if let Ok(dir) = std::env::var("PENELOPE_APPROVE_DIR") {
-            servers["penelope"]["env"] = json!({"PENELOPE_APPROVE_DIR": dir});       // the interface answers questions about unsafe commands
+            servers["penelope"]["env"]["PENELOPE_APPROVE_DIR"] = json!(dir);       // the interface answers questions about unsafe commands
         }
         let mut allowed: Vec<String> = mcp::main_tools(ctx).iter().map(|t| format!("mcp__penelope__{}", t)).collect();
         for t in crate::forge::specs(ctx) {          // a tool Penelope wrote is offered to the claude command too
