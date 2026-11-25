@@ -102,7 +102,7 @@ penelope undo                 take back the last change that the tools write or 
 penelope allow [list|clear]   confirmed shell commands for this project (values are masked)
 penelope jobs                 list the background jobs of this folder
 penelope jobs stop N          end background job N
-penelope plugin add DIR       register a plugin folder in the format of Claude Code (skills and MCP servers)
+penelope plugin add DIR       register a plugin folder after a local check of its scripts (skills and MCP servers)
 penelope plugin list          show the registered plugins and whether the tools of their MCP servers are allowed
 penelope plugin allow NAME    put the tools of a plugin's MCP servers on the allow list of the main model
 penelope plugin deny NAME     take them off the allow list (the state of a new plugin)
@@ -134,7 +134,7 @@ penelope run-agent NAME --goal TEXT
 penelope orchestrate TEXT      run an agent from a $name(...) call or from a plain goal
 penelope brain [--write]       the memory map as a graph; --write makes an Obsidian vault
 penelope consolidate          take the lasting rules of the last session into the shared memory
-penelope plugin install LINK  clone a plugin from git and register it
+penelope plugin install LINK  clone a plugin from git, check its scripts and register it
 penelope plugin import        take over the plugins of other harnesses on this PC
 penelope mcp [--root DIR]     serve Penelope's tools as an MCP server on stdin and stdout
 penelope mcp add NAME COMMAND [ARGS...] [--allow]

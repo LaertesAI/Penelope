@@ -46,6 +46,51 @@ without V; a Claude tool log becomes `cargo test ok` and `cat missing.txt failed
 Open: a live Claude validator was not run in this session (no Claude login in the test environment). The tool-log
 path is covered by a unit test of `checks_from_log`, not by a real `claude` call.
 
+## DeepSeek phase 4.1 (branch `feat/plugin-install-check`)
+
+### A local check before a plugin is registered
+
+`plugins::check(dir)` reads only files that can execute: `.sh`, `.bash`, `.py`, `.js`, `.ts`, `.mjs`, `.cjs`,
+`Makefile`, `Dockerfile`, `package.json` and extensionless install scripts such as `install`, `preinstall`,
+`postinstall`, `setup` and `configure`. Prose is never read, so a `SKILL.md` or `README.md` that mentions
+`curl ... | sh` does not refuse the plugin.
+
+The patterns cover a download piped into an interpreter (`curl ... | sh`, `wget ... | bash`), `base64 -d ... | sh`,
+`eval $(curl ...)` and process substitution, `rm -rf /` (including `/*` and `--no-preserve-root`), reverse shells
+(`/dev/tcp/`, `/dev/udp/`, `nc/ncat/netcat -e|--exec`) and `package.json` hooks (`preinstall`, `install`,
+`postinstall`, `prepare`) that download and run code. The first match is reported with the pattern, the file and the
+line.
+
+The work is bounded: 512 KB per file, 2,000 files and 16 MB in total, eight folders deep. `.git`, `node_modules`,
+`target`, `dist` and symbolic links are skipped; binary files (a NUL byte in the first 4 KB) and files over the size
+cap are counted as skipped, not read.
+
+The check runs in `add`, local `install`, ZIP install (after unpacking, before registration; a refused ZIP folder is
+removed again), git clone and pull (a refused fresh clone is removed; a pulled folder stays on disk), and every
+plugin source of a marketplace. A clean report ends with `check: N script files checked, no suspicious pattern`. A
+refusal starts with `NOT registered.` or `NOT installed.` and names the pattern and `file:line`; the registry is not
+written.
+
+`plugins::summarize` can add one sentence from the weaker model, but only with `PENELOPE_PLUGIN_CHECK_SUMMARY=1` and
+only when the weak setting names a reachable model. A failed model call never changes the decision, and the check
+itself makes no model call.
+
+Measured: `cd cli && cargo test` → `190 passed; 0 failed` (2026-11-25). New tests: a `curl ... | sh` script is refused
+with `install.sh:3` and stays out of the registry; a clean plugin installs and reports two checked scripts; a
+`SKILL.md`, `README.md` and `docs/install.md` with the same text are not read; a 513 KB script and a binary `.js` are
+skipped; every required pattern is recognized and five safe lines are not; a `package.json` postinstall is refused at
+line 4; a ZIP, a marketplace and a git clone with a bad script are refused, and the clean marketplace plugin still
+registers.
+
+Manual: `penelope plugin add /tmp/.../bad` printed
+`NOT registered. The local install check found a download piped into a shell (curl|sh, wget|bash) at .../setup.sh:3`,
+and a clean plugin printed `check: 1 script file checked, no suspicious pattern`.
+
+Open: the check is a heuristic, not a sandbox. The language linters of the plan and a confirmation after the report
+are not built here. Patterns are line-based and can miss a command split across lines or obfuscated code; large and
+binary scripts are skipped rather than inspected. An `update` that finds a problem does not remove the old registry
+entry; it only refuses to re-register. The weak-model summary is off by default.
+
 This is a working increment, not a claim that every limit is gone. The last section names what is still open and how
 each claim can be checked on this machine.
 
