@@ -16,6 +16,7 @@ mod crew;
 mod cursor;
 mod forge;
 mod eval;
+mod factories;
 mod files;
 mod input;
 mod jobs;
@@ -86,6 +87,13 @@ penelope cluster respawn ID [EXTRA]
 penelope cluster advise [NAME]  one suggestion per part and task type the validator rejected often, worst first
 penelope cluster profile NAME [JSON]
                               create or change a profile under .penelope/clusters/profiles
+penelope factory new NAME --profile P (--every 3h | --at HH:MM) [--goal TEXT] [--dry] [--yes]
+                              copy a cluster profile into a factory and show its operating-system timer
+penelope factory list        the factories, schedules, runs and armed state
+penelope factory install NAME [--dry] [--yes]
+                              show the unit files; --yes writes them and enables the timer
+penelope factory run NAME    run one factory now, through `cluster run`, without the interface
+penelope factory stop NAME   stop the timer and remove its unit files; the profile stays
 penelope models [PROVIDER]   the chat models the provider reports, with its effort levels
 penelope provider use NAME [--role main|weak|scout] [--model MODEL] [--workspace ID] [--base-url URL]
                               write one model setting from the table to config.json
@@ -352,6 +360,10 @@ fn main() {
                 }
             }
         }
+        "factory" => match factories::cli(&ctx, &args[1..]) {
+            Ok(text) => print!("{}", text),
+            Err(e) => { loom::warn(&e); std::process::exit(2); }
+        },
         "agents" => print!("{}", agents::list(&ctx)),
         "skills" => print!("{}", skills_list(&ctx)),
         "run-agent" => {
@@ -1042,5 +1054,7 @@ mod tests {
         assert!(HELP.contains("--dry prints parts, model and an estimate, starts nothing"), "{}", HELP);
         assert!(HELP.contains("penelope cluster advise [NAME]"), "{}", HELP);
         assert!(HELP.contains("(built-in, .json or .cluster)"), "{}", HELP);
+        assert!(HELP.contains("penelope factory new NAME --profile P (--every 3h | --at HH:MM)"), "{}", HELP);
+        assert!(HELP.contains("penelope factory list") && HELP.contains("penelope factory run NAME") && HELP.contains("penelope factory stop NAME"), "{}", HELP);
     }
 }

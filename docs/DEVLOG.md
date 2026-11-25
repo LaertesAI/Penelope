@@ -1506,3 +1506,50 @@ runs `penelope cluster advise` against a written table and checks the empty case
 Open: a validator verdict belongs to the whole cluster, so every worker of a rejected attempt gets the rejection; there
 is no per-part cause yet. The table is project-wide and has no reset command. `advise` does not change a part
 automatically; routing by the table is still block 10.
+
+## DeepSeek phase 4.3 (branch `feat/factories`)
+
+### Factories: a cluster profile on the timer of the operating system
+
+A factory is a cluster profile with one schedule and one purpose. `--profile P` is copied into
+`.penelope/clusters/profiles/NAME.json`; the copy carries `every` (a duration such as `3h`) or `at` (`HH:MM`) and the
+`purpose`. The registry `.penelope/factories.json` holds the name, base profile, goal, schedule, armed state, run count
+and the last result. A profile now parses and prints `every`, `at` and `purpose`; the two schedule fields are exclusive
+and are validated before a timer is written.
+
+Commands: `penelope factory new NAME --profile P (--every 3h | --at HH:MM) [--goal TEXT] [--dry] [--yes]`,
+`penelope factory list`, `penelope factory install NAME [--dry] [--yes]`, `penelope factory run NAME` and
+`penelope factory stop NAME`, plus `/factory ...` in the interface and HELP lines. `--dry` renders the units and writes
+neither the profile nor the registry. Without `--yes`, `new` and `install` only show the report and unit text; nothing
+is written into the user scheduler and no timer is enabled.
+
+The renderer writes a systemd user service and timer under `$XDG_CONFIG_HOME/systemd/user` (or
+`~/.config/systemd/user`). `every` becomes `OnActiveSec` plus `OnUnitActiveSec`, `at` becomes `OnCalendar=*-*-* HH:MM:00`
+with `Persistent=true`. The service sets `Type=oneshot`, the project as `WorkingDirectory` and
+`TimeoutStartSec=infinity`, so a long cluster is not killed after 90 s. The macOS renderer writes a launchd plist
+(`StartInterval` or `StartCalendarInterval`, `RunAtLoad=false`); the Windows renderer writes Task Scheduler XML
+(`TimeTrigger` with a repetition interval, or `CalendarTrigger` with `ScheduleByDay`). The install path calls
+`systemctl --user enable --now`, `launchctl bootstrap gui/UID` or `schtasks /Create`; `stop` reverses it. Every timer
+starts the normal command `penelope cluster run --profile PROFILE GOAL`, so the TUI is not involved.
+
+Measured: `cd cli && cargo test` → 251 unit tests + 8 integration tests, 0 failed (2026-11-26). New tests: `--dry`
+prints the service and timer with `OnUnitActiveSec=1m` (and `OnCalendar=*-*-* 09:30:00` for `--at`) and writes no
+profile or registry; the rendered units are written into a temporary folder, never the real user scheduler; the
+launchd and Task Scheduler text is checked on this Linux host; a factory is created, listed and stopped without a
+scheduler; three manual `factory run` invocations against a fake local chat endpoint append exactly three lines to a
+file and leave `"runs": 3` in the registry.
+
+Open:
+
+- **No live scheduler run yet.** The systemd unit text is checked and `TimeoutStartSec=infinity` is set, but this
+  session did not enable a real timer under `~/.config/systemd/user`; launchd and Task Scheduler are code paths with
+  text tests only.
+- A timer run starts the cluster command directly, so its stdout goes to the journal (systemd), the launchd log or the
+  Task Scheduler history. Only the manual `factory run` writes `.penelope/factories/NAME/runs.log`.
+- A timer does not inherit the environment of an interactive shell. A provider key that only exists as an exported
+  variable in the shell must also reach the systemd user manager (for example with `systemctl --user set-environment`
+  or an environment file); keys stored by `penelope login` are not affected.
+- The registry write is atomic per process but has no cross-process lock. Two timers that run in the same millisecond
+  can race on `last_run`; the cluster state and the worktree stay separate.
+- `factory new` refuses a name that is already a profile. To rename a factory, stop it and create a new one; there is no
+  rename or delete command.

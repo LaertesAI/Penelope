@@ -113,6 +113,7 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd { name: "/agents", help: "the agents written with $name(...)", key: "", takes_text: false },
     Cmd { name: "/cluster", help: "orchestrate clusters: /cluster GOAL, profiles, status ID, kill ID", key: "", takes_text: true },
     Cmd { name: "/clusters", help: "the cluster tree with reports and memory", key: "", takes_text: false },
+    Cmd { name: "/factory", help: "factories: new NAME --profile P --every 3h|--at HH:MM, list, install, run, stop", key: "", takes_text: true },
     Cmd { name: "/brain", help: "the memory map as a graph; /brain write makes an Obsidian vault", key: "", takes_text: false },
     Cmd { name: "/cost", help: "tokens and euro per role and model", key: "", takes_text: false },
     Cmd { name: "/context", help: "show what @ and the memory map would send", key: "", takes_text: true },
@@ -1305,6 +1306,26 @@ impl App {
                 } else {
                     let profile = profile.clone();
                     self.start_bg(move |ctx| crate::clusters::orchestrate(&ctx, &goal, profile.as_deref(), parallel));
+                }
+            }
+            "/factory" if rest.is_empty() => {
+                self.refresh_side();
+                self.pager("Factories", crate::factories::list_text(&self.ctx));
+            }
+            "/factory" if rest.starts_with("run ") => {
+                let name = rest.trim_start_matches("run ").trim().to_string();
+                if name.is_empty() {
+                    self.toast("/factory run NAME".to_string());
+                } else {
+                    self.start_bg(move |ctx| crate::factories::run(&ctx, &name));
+                }
+            }
+            "/factory" => {
+                let report = crate::factories::slash(&self.ctx, rest);
+                self.refresh_side();
+                match report {
+                    Ok(text) => self.pager("Factories", text),
+                    Err(e) => self.items.push(Item::Error(e)),
                 }
             }
 
@@ -2795,5 +2816,28 @@ mod tests {
             _ => panic!("help must open the pager"),
         }
         assert!(COMMANDS.iter().any(|c| c.name == "/mod"));
+    }
+
+    #[test]
+    fn factory_list_and_help_show_the_factory_command() {
+        let mut a = app();
+        a.command("/factory list");
+        match &a.overlay {
+            Overlay::Pager { title, lines, .. } => {
+                assert_eq!(title, "Factories");
+                let text = lines.join("\n");
+                assert!(text.contains("no factory yet") && text.contains("/factory new"), "{}", text);
+            }
+            _ => panic!("factories must open the pager"),
+        }
+        a.command("/help");
+        match &a.overlay {
+            Overlay::Pager { lines, .. } => {
+                let text = lines.join("\n");
+                assert!(text.contains("/factory") && text.contains("factories: new"), "{}", text);
+            }
+            _ => panic!("help must open the pager"),
+        }
+        assert!(COMMANDS.iter().any(|c| c.name == "/factory"));
     }
 }

@@ -26,6 +26,9 @@ fixed role chain.
   one cluster, its parts, report and memory.
 - Tools: `cluster_start`, `cluster_status`, `cluster_kill`. Commands: `/cluster GOAL`, `/clusters`,
   `penelope cluster run/list/status/dump/profiles/kill`.
+- A factory is a copy of a profile with a schedule (`every: "3h"` or `at: "09:30"`) and one purpose. The timer lives
+  in the operating system (systemd user timer, launchd, Task Scheduler), so a factory runs while Penelope is closed.
+  Commands: `/factory new/list/install/run/stop`, `penelope factory ...`; registry `.penelope/factories.json`.
 - Live check: a `solo` cluster with the real Claude command created `hello.txt`, ran `cat`, and the haiku validator
   returned `PASS` with the `cat` evidence. The cluster closed `S:done|P:2/2|T:12s`.
 
@@ -66,6 +69,16 @@ Nostos calls tools, Tiresias routes, Argos judges, Aiolos compresses.
 | `worktree` | `true` | own git worktree and branch; default true when the profile has a worker part |
 
 A profile is a file under `.penelope/clusters/NAME.json`, so the user can keep and reuse profiles.
+
+### Factories
+
+A factory is a profile with a schedule and one purpose. `/factory new NAME --profile P --every 3h` (or
+`--at 09:30`) copies P into `.penelope/clusters/profiles/NAME.json`, adds `every`/`at` and `purpose`, and writes an
+entry into `.penelope/factories.json`. `/factory install NAME --yes` renders and enables the operating-system timer:
+a systemd user service and timer on Linux, a launchd plist on macOS, a Task Scheduler task on Windows. Every timer runs
+`penelope cluster run --profile NAME GOAL`, the normal cluster command without the interface. `--dry` prints the units
+and writes nothing; `/factory stop NAME` disables the timer and removes its unit files but keeps the profile. The run
+count and the last result are in the registry; the cluster state stays under `.penelope/clusters/`.
 
 ## Lifecycle
 
