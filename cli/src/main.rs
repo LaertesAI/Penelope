@@ -83,6 +83,7 @@ penelope cluster kill ID     stop a running cluster at once
 penelope cluster dump ID     the state dump with the cause of a stuck cluster
 penelope cluster respawn ID [EXTRA]
                               kill ID and start it again with the cause from its dump (at most 2)
+penelope cluster advise [NAME]  one suggestion per part and task type the validator rejected often, worst first
 penelope cluster profile NAME [JSON]
                               create or change a profile under .penelope/clusters/profiles
 penelope models [PROVIDER]   the chat models the provider reports, with its effort levels
@@ -287,6 +288,13 @@ fn main() {
                     if id.is_empty() { loom::warn("usage: penelope cluster respawn ID [EXTRA]"); std::process::exit(2); }
                     println!("{}", clusters::respawn(&ctx, &id, &args.iter().skip(3).cloned().collect::<Vec<_>>().join(" ")));
                 }
+                "advise" => {
+                    let name = args.get(2).map(String::as_str).filter(|s| !s.trim().is_empty());
+                    match clusters::advise_text(&ctx, name) {
+                        Ok(text) => print!("{}", text),
+                        Err(e) => { loom::warn(&e); std::process::exit(2); }
+                    }
+                }
                 "profile" => {
                     let name = args.get(2).cloned().unwrap_or_default();
                     if name.is_empty() { loom::warn("usage: penelope cluster profile NAME [JSON]"); std::process::exit(2); }
@@ -334,7 +342,7 @@ fn main() {
                     // A bare word after cluster is the goal, not a verb.
                     let goal = args[1..].join(" ");
                     if other.starts_with('-') || goal.trim().is_empty() {
-                        loom::warn("usage: penelope cluster run GOAL [--profile NAME] [--dry] | list | status [ID] | dump ID | respawn ID [EXTRA] | profile NAME [JSON] | profiles | kill ID");
+                        loom::warn("usage: penelope cluster run GOAL [--profile NAME] [--dry] | list | status [ID] | dump ID | respawn ID [EXTRA] | advise [NAME] | profile NAME [JSON] | profiles | kill ID");
                         std::process::exit(2);
                     }
                     match clusters::orchestrate(&ctx, &goal, None, true) {
@@ -1032,6 +1040,7 @@ mod tests {
         assert!(HELP.contains("penelope replay ID --model MODEL"), "{}", HELP);
         assert!(HELP.contains("penelope cluster run GOAL [--profile NAME] [--dry] [--sequential]"), "{}", HELP);
         assert!(HELP.contains("--dry prints parts, model and an estimate, starts nothing"), "{}", HELP);
+        assert!(HELP.contains("penelope cluster advise [NAME]"), "{}", HELP);
         assert!(HELP.contains("(built-in, .json or .cluster)"), "{}", HELP);
     }
 }

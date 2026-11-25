@@ -4,7 +4,8 @@
 //! task type (for example `rust-fix`). `advise` prints one sentence per pair that has at least 5 results and a
 //! rejection share of 60 % or more, worst share first. The table is stored as JSON.
 //!
-//! Not wired into a command yet: nothing outside the tests calls this module.
+//! A cluster validator writes every verdict with `record` into `.penelope/clusters/scores.json`; `penelope cluster
+//! advise` reads the same table. `suggestions` returns the pairs with their numbers, so a caller can filter by part.
 
 use serde_json::{json, Value};
 use std::fs;
@@ -55,27 +56,46 @@ pub fn save(path: &Path, table: &Value) -> Result<(), String> {
     fs::write(path, text).map_err(|e| format!("cannot write {}: {}", path.display(), e))
 }
 
-/// One sentence per (part, task type) with at least 5 results and a rejection share of 60 % or more, worst share
-/// first. Equal shares are ordered by part and task type.
-pub fn advise(table: &Value) -> Vec<String> {
-    let mut found: Vec<(f64, String, String, u64, u64)> = Vec::new();
+/// One (part, task type) pair that needs a change.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Suggestion {
+    pub part: String,
+    pub task_type: String,
+    pub rejected: u64,
+    pub total: u64,
+}
+
+impl Suggestion {
+    pub fn sentence(&self) -> String {
+        format!("{} was rejected {} of {} times on {}: change its model.",
+                self.part, self.rejected, self.total, self.task_type)
+    }
+}
+
+/// One entry per (part, task type) with at least 5 results and a rejection share of 60 % or more, worst share first.
+/// Equal shares are ordered by part and task type.
+pub fn suggestions(table: &Value) -> Vec<Suggestion> {
+    let mut found: Vec<(f64, Suggestion)> = Vec::new();
     for (part, types) in table.as_object().into_iter().flatten() {
         for (task_type, cell) in types.as_object().into_iter().flatten() {
             let accepted = cell["accepted"].as_u64().unwrap_or(0);
             let rejected = cell["rejected"].as_u64().unwrap_or(0);
             let total = accepted + rejected;
             if total >= MIN_RESULTS && rejected * 100 >= MIN_REJECTED_PERCENT * total {
-                found.push((rejected as f64 / total as f64, part.clone(), task_type.clone(), rejected, total));
+                found.push((rejected as f64 / total as f64, Suggestion {
+                    part: part.clone(), task_type: task_type.clone(), rejected, total,
+                }));
             }
         }
     }
-    found.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.1.cmp(&b.1)).then_with(|| a.2.cmp(&b.2)));
-    found
-        .into_iter()
-        .map(|(_, part, task_type, rejected, total)| {
-            format!("{} was rejected {} of {} times on {}: change its model.", part, rejected, total, task_type)
-        })
-        .collect()
+    found.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
+        .then_with(|| a.1.part.cmp(&b.1.part)).then_with(|| a.1.task_type.cmp(&b.1.task_type)));
+    found.into_iter().map(|(_, suggestion)| suggestion).collect()
+}
+
+/// One sentence per suggestion, for a terminal or a test.
+pub fn advise(table: &Value) -> Vec<String> {
+    suggestions(table).iter().map(Suggestion::sentence).collect()
 }
 
 #[cfg(test)]

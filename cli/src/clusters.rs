@@ -29,6 +29,8 @@ static MERGE_LOCK: Mutex<()> = Mutex::new(());
 static REPORT_LOCK: Mutex<()> = Mutex::new(());
 /// Parallel parts append to one `memory.md`; one writer at a time keeps the sections whole.
 static MEMORY_LOCK: Mutex<()> = Mutex::new(());
+/// Two clusters may finish a validation at the same moment; the score table is read, changed and written under one lock.
+static SCORE_LOCK: Mutex<()> = Mutex::new(());
 /// The cancel flag of every cluster that is running in this process. `kill()` sets it at once; a watcher on the kill
 /// file reaches a cluster started by another process within 100 ms.
 static CANCELS: Mutex<Vec<(String, Arc<AtomicBool>)>> = Mutex::new(Vec::new());
@@ -68,6 +70,8 @@ pub struct Part {
     pub role: String,
     pub slot: String,
     pub task: String,
+    /// The kind of task this part does, for the score table (for example `rust-fix`). Empty means the profile name.
+    pub task_type: String,
     /// A model setting, a role name (`main`, `weak`, `scout`, `judge`, `worker`, ...), or empty for the role's model.
     pub model: Value,
     pub mcp: Vec<String>,
@@ -219,6 +223,7 @@ fn part(value: &Value, fallback: &str) -> Part {
         role,
         slot,
         task: value["task"].as_str().unwrap_or("").trim().to_string(),
+        task_type: value["task_type"].as_str().unwrap_or("").trim().to_string(),
         model,
         mcp: value["mcp"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default(),
         depends_on: ["needs", "after"].iter()
@@ -648,6 +653,7 @@ pub fn profiles_text(ctx: &Ctx) -> String {
     out.push_str("\nA profile is a file under .penelope/clusters/profiles/NAME.json or NAME.cluster. A part names a role, a slot and a\nmodel: \"main\", \"weak\", \"scout\", \"judge\", \"worker\" or a full model setting such as an OpenCode model.\n");
     out.push_str("A cluster file is one line: $dev(parts=[researcher, coder*3, validator, tool], max_models=8, max_depth=3, budget_eur=2).\nIt names built-in parts and repetitions only; it cannot carry a model, a tool or code.\n");
     out.push_str("A part with role \"human\" waits for yes or no. Without an interface set \"human\": \"yes\" or \"no\" in\nconfig.json; Penelope never assumes yes. A profile field \"before\": \"PROFILE\" sends the task through that read-only\nprompt cluster before its workers start; the prompt profile must not name a before of its own.\n");
+    out.push_str("A part may set \"task_type\" (for example \"rust-fix\"); validator results are scored per part and task type,\nwith the profile name as the default. `penelope cluster advise [NAME]` prints the parts that fail often.\n");
     out
 }
 
@@ -859,6 +865,96 @@ fn report(ctx: &Ctx, c: &Cluster, focus: &str, error: &str) -> String {
 
 fn memory_path(ctx: &Ctx, id: &str) -> PathBuf {
     cluster_dir(ctx, id).join("memory.md")
+}
+
+fn notes_dir(ctx: &Ctx, id: &str) -> PathBuf {
+    cluster_dir(ctx, id).join("notes")
+}
+
+/// The note name of a part. The profile may carry any text in a name; the file stem is made safe first.
+fn note_name(part: &Part) -> String {
+    let name = safe(&part.name);
+    if name.is_empty() { "part".to_string() } else { name }
+}
+
+/// The task a part works on: its own task, or the cluster task when the part names none.
+fn part_task<'a>(c: &'a Cluster, part: &'a Part) -> &'a str {
+    if part.task.trim().is_empty() { &c.task } else { &part.task }
+}
+
+fn write_part_note(ctx: &Ctx, c: &Cluster, profile: &Profile, part: &Part, result: Option<&str>,
+                   status: crate::notes::Status) {
+    let mut body = format!("Task: {}", part_task(c, part).trim());
+    if let Some(text) = result {
+        let text = text.trim();
+        if !text.is_empty() { body.push_str(&format!("\n\nResult:\n{}", text)); }
+    }
+    let mut note = crate::notes::Note {
+        name: note_name(part),
+        source: format!("cluster {} · {} · {}", c.name, part.role,
+                        if part.slot.is_empty() { &part.role } else { &part.slot }),
+        date: crate::notes::today(),
+        status,
+        links: crate::notes::links(&body),
+        body,
+    };
+    let mut add_link = |name: String| {
+        if !name.is_empty() && !note.links.iter().any(|l| l == &name) { note.links.push(name); }
+    };
+    // The parts this part waits for are links in both directions.
+    for need in &part.depends_on { add_link(safe(need)); }
+    // The worker list is one chain. A part sees the notes of its neighbours, so an independent part still gets the
+    // context of the part before it without loading the whole cluster.
+    if let Some(i) = profile.workers.iter().position(|p| p.name == part.name) {
+        if i > 0 { add_link(note_name(&profile.workers[i - 1])); }
+        if i + 1 < profile.workers.len() { add_link(note_name(&profile.workers[i + 1])); }
+    }
+    // The links must be in the body: `parse` reads `[[links]]` from the Markdown, so a link only in memory would be
+    // lost on the next load. The line is also readable in the note itself.
+    if !note.links.is_empty() {
+        let drawn: Vec<String> = note.links.iter().map(|l| format!("[[{}]]", l)).collect();
+        note.body.push_str(&format!("\n\nLinks: {}", drawn.join(" ")));
+    }
+    let _guard = MEMORY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _ = crate::notes::save(&notes_dir(ctx, &c.id), &note);
+}
+
+/// The prompt text of the notes at most `hops` links from `start`, stale notes left out. Public so a test can check the
+/// selection of a part without a model call.
+pub fn prompt_notes_text(dir: &Path, start: &str, hops: usize) -> String {
+    match crate::notes::load_dir(dir) {
+        Ok(notes) => crate::notes::context(&notes, start, hops),
+        Err(_) => String::new(),
+    }
+}
+
+/// The validator sees every open or confirmed note, never a stale one. The full `memory.md` stays the human log.
+fn validator_notes_text(ctx: &Ctx, id: &str) -> String {
+    let notes = match crate::notes::load_dir(&notes_dir(ctx, id)) { Ok(n) => n, Err(_) => return String::new() };
+    let live: Vec<&crate::notes::Note> = notes.iter().filter(|n| n.status != crate::notes::Status::Stale).collect();
+    crate::notes::text(&live)
+}
+
+fn scores_path(ctx: &Ctx) -> PathBuf {
+    base(ctx).join("scores.json")
+}
+
+/// The score table groups results by part and task type. A part may name its task type in the profile; otherwise the
+/// profile name is the task type, so `backend` and `frontend` runs stay apart.
+fn task_type_of(profile: &Profile, part: &Part) -> String {
+    if part.task_type.trim().is_empty() { profile.name.clone() } else { part.task_type.trim().to_string() }
+}
+
+/// Writes the outcome of the validator into `.penelope/clusters/scores.json`, one result per worker part.
+fn record_scores(ctx: &Ctx, profile: &Profile, accepted: bool) {
+    let _guard = SCORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let path = scores_path(ctx);
+    let mut table = crate::advise::load(&path).unwrap_or_else(|_| crate::advise::new_table());
+    for part in profile.workers.iter().filter(|p| p.role != "human") {
+        let task_type = task_type_of(profile, part);
+        crate::advise::record(&mut table, &part.name, &task_type, accepted);
+    }
+    let _ = crate::advise::save(&path, &table);
 }
 
 fn memory_line(ctx: &Ctx, c: &Cluster, part: &Part, model: &Value, text: &str, state: &str) {
@@ -1347,7 +1443,7 @@ Answer on the first line PASS or FAIL: one short reason, then the check and its 
 }
 
 fn validator_prompt(c: &Cluster, memory: &str) -> String {
-    format!("Cluster task: {}\n\nThe parts wrote this memory:\n{}\n\nCheck it. PASS only when the task is really done and the evidence is in the memory. \\
+    format!("Cluster task: {}\n\nThe parts wrote these notes:\n{}\n\nCheck it. PASS only when the task is really done and the evidence is in the notes. \\
 Otherwise FAIL with the smallest exact correction.", c.task, memory.chars().take(12_000).collect::<String>())
 }
 
@@ -1479,9 +1575,13 @@ fn run_workers(ctx: &Ctx, c: &mut Cluster, profile: &Profile, feedback: &str, li
             c.parts[*i].model = part_model_name(&part, &model);
             c.parts[*i].state = "working".to_string();
             let system = worker_system(c, &part, &model, feedback);
-            let memory = fs::read_to_string(memory_path(ctx, &c.id)).unwrap_or_default();
-            let task = format!("Cluster task: {}\n\nYour part: {}\n\nCluster memory so far:\n{}\n\nDo your part and report the evidence.",
-                               c.task, if part.task.is_empty() { &c.task } else { &part.task }, memory.chars().take(10_000).collect::<String>());
+            // The part's own task note starts the walk. Only notes at most two links away reach the prompt, and a stale
+            // note is left out by `notes::context`.
+            write_part_note(ctx, c, profile, &part, None, crate::notes::Status::Open);
+            let notes = prompt_notes_text(&notes_dir(ctx, &c.id), &note_name(&part), 2);
+            let task = format!("Cluster task: {}\n\nYour part: {}\n\nNotes within two links of your task note (stale notes left out):\n{}\n\nDo your part and report the evidence.",
+                               c.task, if part.task.is_empty() { &c.task } else { &part.task },
+                               if notes.trim().is_empty() { "(none yet)" } else { notes.trim() });
             jobs.push((*i, part, model, system, task));
         }
         for (i, _, _, _, _) in &jobs { pending.retain(|index| index != i); }
@@ -1527,6 +1627,7 @@ fn run_workers(ctx: &Ctx, c: &mut Cluster, profile: &Profile, feedback: &str, li
                     c.parts[i].output = done.text.clone();
                     c.parts[i].error.clear();
                     c.output.push_str(&format!("\n--- {} ({}) ---\n{}\n", part.name, part.slot, done.text));
+                    write_part_note(ctx, c, profile, &part, Some(&done.text), crate::notes::Status::Open);
                     memory_line(ctx, c, &part, &model, &done.text, "done");
                     c.done = (c.done + 1).min(c.total);
                     finished.push(i);
@@ -1544,6 +1645,7 @@ fn run_workers(ctx: &Ctx, c: &mut Cluster, profile: &Profile, feedback: &str, li
                 Err(e) if e.starts_with("BUDGET: ") => {
                     c.parts[i].state = "failed".to_string();
                     c.parts[i].error = e.clone();
+                    write_part_note(ctx, c, profile, &part, Some(&format!("NOT done: {}", e)), crate::notes::Status::Open);
                     memory_line(ctx, c, &part, &model, &format!("NOT done: {}", e), "failed");
                     c.error = e;
                     c.updated = now();
@@ -1554,6 +1656,7 @@ fn run_workers(ctx: &Ctx, c: &mut Cluster, profile: &Profile, feedback: &str, li
                 Err(e) if e.starts_with("STUCK: ") => {
                     c.parts[i].state = "failed".to_string();
                     c.parts[i].error = e.clone();
+                    write_part_note(ctx, c, profile, &part, Some(&format!("NOT done: {}", e)), crate::notes::Status::Open);
                     memory_line(ctx, c, &part, &model, &format!("NOT done: {}", e), "failed");
                     c.error = e;
                     c.updated = now();
@@ -1568,6 +1671,7 @@ fn run_workers(ctx: &Ctx, c: &mut Cluster, profile: &Profile, feedback: &str, li
                     c.parts[i].state = "failed".to_string();
                     c.parts[i].error = e.clone();
                     all_ok = false;
+                    write_part_note(ctx, c, profile, &part, Some(&format!("NOT done: {}", e)), crate::notes::Status::Open);
                     memory_line(ctx, c, &part, &model, &format!("NOT done: {}", e), "failed");
                     c.error = format!("{}: {}", part.name, e);
                 }
@@ -1603,7 +1707,10 @@ fn validate(ctx: &Ctx, c: &mut Cluster, profile: &Profile, limits: Limits, cance
     if let Some(p) = c.parts.get_mut(idx) { p.state = "working".to_string(); p.model = part_model_name(part, &model); }
     save(ctx, c)?;
     report(ctx, c, "validator", "");
-    let memory = fs::read_to_string(memory_path(ctx, &c.id)).unwrap_or_default();
+    // The validator checks every open or confirmed note; a stale note is not evidence. The full memory.md is the
+    // human log and is read only when no note exists yet (for example an older cluster from before notes).
+    let notes = validator_notes_text(ctx, &c.id);
+    let memory = if notes.trim().is_empty() { fs::read_to_string(memory_path(ctx, &c.id)).unwrap_or_default() } else { notes };
     let out = run_model(ctx, c, part, &validator_system(c, part, &model), &validator_prompt(c, &memory), 4, cancel, limits, watch);
     let done = match out {
         Ok(d) => d,
@@ -1627,6 +1734,14 @@ fn validate(ctx: &Ctx, c: &mut Cluster, profile: &Profile, limits: Limits, cance
     let said_pass = text.trim_start().to_uppercase().starts_with("PASS");
     // A PASS counts only when the validator really ran a check that passed. `done` without V is not accepted later.
     let ok = said_pass && checked;
+    // The validator owns the status of the worker notes: accepted notes become `confirmed`; a rejected result (and a
+    // confirmed note that a later validation contradicts) becomes `stale` and never reaches another prompt.
+    let status = if ok { crate::notes::Status::Confirmed } else { crate::notes::Status::Stale };
+    for worker in profile.workers.iter().filter(|p| p.role != "human") {
+        let _ = crate::notes::set_status(&notes_dir(ctx, &c.id), &note_name(worker), status);
+    }
+    // One result per worker part and task type, for `penelope cluster advise`.
+    record_scores(ctx, profile, ok);
     if let Some(p) = c.parts.get_mut(idx) { p.state = if ok { "done" } else { "failed" }.to_string(); p.output = text.clone(); p.error = if ok { String::new() } else { text.clone() }; }
     if ok {
         c.done = (c.done + 1).min(c.total);
@@ -2214,6 +2329,50 @@ pub fn orchestrate(ctx: &Ctx, goal: &str, hint: Option<&str>, parallel: bool) ->
     let ids: Vec<String> = created.iter().map(|(id, _)| id.clone()).collect();
     let summary = status_text(ctx, None);
     Ok(format!("{} clusters started: {}\n\n{}", created.len(), ids.join(", "), summary))
+}
+
+/// The parts a name refers to: a cluster id or name, a profile, or one part name. Used by `cluster advise NAME`.
+fn part_names_for(ctx: &Ctx, name: &str) -> Vec<String> {
+    let cluster = load(ctx, name).ok().or_else(|| list(ctx).into_iter().find(|c| c.name == name));
+    if let Some(c) = cluster {
+        let mut names: Vec<String> = c.parts.iter().map(|p| p.name.clone()).collect();
+        if let Ok(p) = profile(ctx, &c.profile) {
+            names.extend(p.workers.iter().map(|w| w.name.clone()));
+            names.extend(p.validator.iter().map(|v| v.name.clone()));
+        }
+        return names;
+    }
+    if let Ok(p) = profile(ctx, name) {
+        return p.workers.iter().map(|w| w.name.clone()).chain(p.validator.iter().map(|v| v.name.clone())).collect();
+    }
+    vec![name.to_string()]
+}
+
+/// `penelope cluster advise [NAME]`: one sentence per part and task type that the validator rejected often enough.
+/// Without a name every pair is shown; a name narrows it to a cluster, a profile or one part. Worst share first.
+pub fn advise_text(ctx: &Ctx, name: Option<&str>) -> Result<String, String> {
+    let path = scores_path(ctx);
+    if !path.exists() {
+        return Ok(format!("no cluster scores yet. A validator writes them to {} after a cluster run.\n", path.display()));
+    }
+    let table = crate::advise::load(&path)?;
+    let all = crate::advise::suggestions(&table);
+    let filter = name.map(str::trim).filter(|n| !n.is_empty());
+    let picked: Vec<&crate::advise::Suggestion> = match filter {
+        None => all.iter().collect(),
+        Some(n) => {
+            let names = part_names_for(ctx, n);
+            all.iter().filter(|s| names.iter().any(|known| known == &s.part)).collect()
+        }
+    };
+    if picked.is_empty() {
+        let scope = filter.map(|n| format!(" for {}", n)).unwrap_or_default();
+        return Ok(format!("no suggestion{}: a pair needs at least {} results and {} % rejected.\n",
+                           scope, crate::advise::MIN_RESULTS, crate::advise::MIN_REJECTED_PERCENT));
+    }
+    let mut out = String::new();
+    for suggestion in picked { out.push_str(&format!("{}\n", suggestion.sentence())); }
+    Ok(out)
 }
 
 pub fn status_text(ctx: &Ctx, id: Option<&str>) -> String {
@@ -3530,6 +3689,160 @@ mod tests {
         fs::write(profile_dir(&ctx).join("wrong.cluster"), "$other(parts=[coder, validator])").unwrap();
         let err = profile(&ctx, "wrong").unwrap_err();
         assert!(err.contains("names $other") && err.contains("called wrong"), "{}", err);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_part_prompt_holds_three_of_ten_linked_notes_and_no_stale_text() {
+        let dir = std::env::temp_dir().join(format!("penelope-cluster-notes-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let write = |name: &str, status: &str, body: &str| {
+            fs::write(dir.join(format!("{}.md", name)),
+                      format!("---\nsource: test\ndate: 2026-11-26\nstatus: {}\n---\n{}\n", status, body)).unwrap();
+        };
+        // n1 links n2 and n3. n2 links the stale n7, which links n8. The other notes are a second island.
+        write("n1", "open", "fact one [[n2]] [[n3]]");
+        write("n2", "confirmed", "fact two [[n7]]");
+        write("n3", "open", "fact three");
+        write("n4", "open", "[[n5]]");
+        write("n5", "open", "[[n6]]");
+        write("n6", "open", "[[n9]]");
+        write("n7", "stale", "STALE-SECRET [[n8]]");
+        write("n8", "open", "after the stale note");
+        write("n9", "open", "island");
+        write("n0", "open", "[[n4]]");
+
+        let text = prompt_notes_text(&dir, "n1", 2);
+        assert_eq!(text.matches("[note ").count(), 3, "{}", text);
+        assert!(text.contains("[note n1 ") && text.contains("[note n2 ") && text.contains("[note n3 "), "{}", text);
+        assert!(text.contains("fact one") && text.contains("fact two") && text.contains("fact three"), "{}", text);
+        assert!(!text.contains("STALE-SECRET") && !text.contains("[note n7 ") && !text.contains("[note n8 "),
+                "a stale note reached the part prompt: {}", text);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn scoring_profile(ctx: &Ctx) {
+        write_profile(ctx, "scored", json!({
+            "name": "scored",
+            "workers": [{"name": "coder-4", "role": "worker", "slot": "Telemach", "model": "main",
+                         "task": "Do the task.", "task_type": "rust-fix"}],
+            "validator": {"name": "check", "role": "judge", "slot": "Argos", "model": "judge", "task": "Check it."},
+            "max_models": 2, "max_depth": 1, "retries": 0, "worktree": false
+        }));
+    }
+
+    fn failed_pair() -> Vec<(u16, String)> {
+        vec![(200, text_reply("worker done")), (200, text_reply("FAIL: not right"))]
+    }
+
+    fn passed_pair() -> Vec<(u16, String)> {
+        vec![(200, text_reply("worker done")),
+             (200, tool_reply("read", json!({"path": "Cargo.toml"}))),
+             (200, text_reply("PASS: the check passed"))]
+    }
+
+    fn run_scored(ctx: &Ctx, name: &str) {
+        let p = profile(ctx, "scored").unwrap();
+        let c = new_cluster(ctx, &p, name, "score this part", None, Vec::new(), 0).unwrap();
+        let _ = run_cluster(ctx, &c.id).unwrap();
+    }
+
+    #[test]
+    fn four_rejections_of_five_in_the_validator_give_one_suggestion_naming_the_part() {
+        let mut replies = Vec::new();
+        for _ in 0..4 { replies.extend(failed_pair()); }
+        replies.extend(passed_pair());
+        let (address, _seen) = crate::llm::fake::serve(replies);
+        let (mut ctx, dir) = ctx();
+        fake_models(&mut ctx, &address);
+        scoring_profile(&ctx);
+        for i in 0..5 { run_scored(&ctx, &format!("score-{}", i)); }
+
+        let table: Value = serde_json::from_str(&fs::read_to_string(scores_path(&ctx)).unwrap()).unwrap();
+        assert_eq!(table["coder-4"]["rust-fix"]["rejected"], 4);
+        assert_eq!(table["coder-4"]["rust-fix"]["accepted"], 1);
+        let text = advise_text(&ctx, Some("scored")).unwrap();
+        assert_eq!(text.lines().count(), 1, "{}", text);
+        assert!(text.contains("coder-4") && text.contains("4 of 5") && text.contains("rust-fix"), "{}", text);
+        // A cluster name, a profile name and one part name all narrow the same table.
+        assert!(advise_text(&ctx, Some("score-0")).unwrap().contains("coder-4"));
+        assert!(advise_text(&ctx, Some("coder-4")).unwrap().contains("coder-4"));
+        assert!(advise_text(&ctx, None).unwrap().contains("coder-4"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn four_results_are_below_the_threshold_and_give_no_suggestion() {
+        let mut replies = Vec::new();
+        for _ in 0..4 { replies.extend(failed_pair()); }
+        let (address, _seen) = crate::llm::fake::serve(replies);
+        let (mut ctx, dir) = ctx();
+        fake_models(&mut ctx, &address);
+        scoring_profile(&ctx);
+        for i in 0..4 { run_scored(&ctx, &format!("score-{}", i)); }
+        let text = advise_text(&ctx, None).unwrap();
+        assert!(!text.contains("was rejected"), "{}", text);
+        assert!(text.contains("no suggestion") && text.contains("at least 5"), "{}", text);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn accepted_runs_do_not_create_a_false_suggestion() {
+        let mut replies = Vec::new();
+        for _ in 0..5 { replies.extend(passed_pair()); }
+        let (address, _seen) = crate::llm::fake::serve(replies);
+        let (mut ctx, dir) = ctx();
+        fake_models(&mut ctx, &address);
+        scoring_profile(&ctx);
+        for i in 0..5 { run_scored(&ctx, &format!("score-{}", i)); }
+        let table: Value = serde_json::from_str(&fs::read_to_string(scores_path(&ctx)).unwrap()).unwrap();
+        assert_eq!(table["coder-4"]["rust-fix"]["accepted"], 5);
+        assert_eq!(table["coder-4"]["rust-fix"]["rejected"], 0);
+        let text = advise_text(&ctx, None).unwrap();
+        assert!(!text.contains("was rejected"), "{}", text);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn part_notes_write_their_structural_links_into_the_markdown() {
+        let (ctx, dir) = ctx();
+        write_profile(&ctx, "linked", json!({
+            "name": "linked",
+            "workers": [
+                {"name": "a", "role": "worker", "slot": "Telemach", "model": "main", "task": "Part A."},
+                {"name": "b", "role": "worker", "slot": "Telemach", "model": "main", "task": "Part B.", "needs": ["a"]}
+            ],
+            "validator": {"name": "check", "role": "judge", "slot": "Argos", "model": "judge", "task": "Check."},
+            "max_models": 3, "max_depth": 1, "retries": 0, "worktree": false
+        }));
+        let p = profile(&ctx, "linked").unwrap();
+        let c = new_cluster(&ctx, &p, "linked-notes", "link the notes", None, Vec::new(), 0).unwrap();
+        for part in &p.workers { write_part_note(&ctx, &c, &p, part, None, crate::notes::Status::Open); }
+        let notes = notes_dir(&ctx, &c.id);
+        let a = fs::read_to_string(notes.join("a.md")).unwrap();
+        let b = fs::read_to_string(notes.join("b.md")).unwrap();
+        assert!(a.contains("[[b]]"), "the neighbour link is missing: {}", a);
+        assert!(b.contains("[[a]]"), "the dependency link is missing: {}", b);
+        let text = prompt_notes_text(&notes, "b", 1);
+        assert!(text.contains("[note a ") && text.contains("[note b "), "{}", text);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_validator_confirms_notes_and_a_later_rejection_marks_them_stale() {
+        let (ctx, dir) = ctx();
+        let p = profile(&ctx, "solo").unwrap();
+        let c = new_cluster(&ctx, &p, "note-status", "check note status", None, Vec::new(), 0).unwrap();
+        let worker = &p.workers[0];
+        write_part_note(&ctx, &c, &p, worker, None, crate::notes::Status::Open);
+        let note_path = notes_dir(&ctx, &c.id).join(format!("{}.md", note_name(worker)));
+        assert!(fs::read_to_string(&note_path).unwrap().contains("status: open"));
+        crate::notes::set_status(&notes_dir(&ctx, &c.id), &note_name(worker), crate::notes::Status::Confirmed).unwrap();
+        assert!(fs::read_to_string(&note_path).unwrap().contains("status: confirmed"));
+        crate::notes::set_status(&notes_dir(&ctx, &c.id), &note_name(worker), crate::notes::Status::Stale).unwrap();
+        let text = prompt_notes_text(&notes_dir(&ctx, &c.id), &note_name(worker), 2);
+        assert!(text.is_empty(), "a stale start note must not reach a prompt: {}", text);
         let _ = fs::remove_dir_all(&dir);
     }
 

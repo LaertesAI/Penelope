@@ -3,19 +3,37 @@
 //! A note is Markdown text. It may start with a header between two `---` lines holding `source:`, `date:` and
 //! `status:` (`confirmed`, `open` or `stale`). A missing status counts as `open`. `[[name]]` in the body links to
 //! another note by name. `within` returns the names of all notes at most `hops` links from a start note, following
-//! links in both directions, without stale notes, sorted by name.
+//! links in both directions, without stale notes, sorted by name. `context` turns that selection into prompt text.
 //!
-//! Not wired into a command yet: nothing outside the tests calls this module.
+//! A cluster keeps its notes under `.penelope/clusters/<id>/notes/`. The cluster validator sets the notes it accepts
+//! to `confirmed` and a later rejection to `stale`; a part's prompt loads only the notes at most two links from its own
+//! task note, so a stale fact never reaches a model.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+/// The longest body of one note that reaches a prompt, and the longest text of all selected notes together. A small
+/// model gets a small context; the file itself keeps the full text.
+const MAX_NOTE_TEXT: usize = 4_000;
+const MAX_CONTEXT_TEXT: usize = 12_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
     Confirmed,
     Open,
     Stale,
+}
+
+impl Status {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Status::Confirmed => "confirmed",
+            Status::Open => "open",
+            Status::Stale => "stale",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -103,10 +121,63 @@ pub fn load_dir(dir: &Path) -> Result<Vec<Note>, String> {
     Ok(notes)
 }
 
-/// Names of the notes at most `hops` links away from `start`, links followed both ways, stale notes left out
-/// (a stale note also does not pass the walk on), sorted by name. The start note is included when it is not stale.
-/// Links to notes that do not exist are ignored. An unknown or stale start returns an empty list.
-pub fn within(notes: &[Note], start: &str, hops: usize) -> Vec<String> {
+/// The date of today in UTC as `YYYY-MM-DD`, without a clock crate.
+pub fn today() -> String {
+    let secs = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let days = (secs / 86_400) as i64;
+    let (year, month, day) = civil_from_days(days);
+    format!("{:04}-{:02}-{:02}", year, month, day)
+}
+
+/// Howard Hinnant's `civil_from_days`: days since 1970-01-01 to a proleptic Gregorian date.
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let year = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (year + if month <= 2 { 1 } else { 0 }, month, day)
+}
+
+/// The file of a note. A note name is one plain file name, never a path, so a note cannot write outside its folder.
+fn file_of(dir: &Path, name: &str) -> Result<PathBuf, String> {
+    let name = name.trim();
+    if name.is_empty() || name == "." || name == ".." || name.contains('/') || name.contains('\\') {
+        return Err(format!("note name {:?} is not a plain file name", name));
+    }
+    Ok(dir.join(format!("{}.md", name)))
+}
+
+/// The Markdown form of a note: header between two `---` lines, then the body.
+pub fn render(note: &Note) -> String {
+    format!("---\nsource: {}\ndate: {}\nstatus: {}\n---\n{}\n",
+            note.source, note.date, note.status.as_str(), note.body.trim_end_matches('\n'))
+}
+
+/// Writes one note as `<name>.md` under `dir` and creates the folder when needed.
+pub fn save(dir: &Path, note: &Note) -> Result<(), String> {
+    let path = file_of(dir, &note.name)?;
+    fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {}", dir.display(), e))?;
+    fs::write(&path, render(note)).map_err(|e| format!("cannot write {}: {}", path.display(), e))
+}
+
+/// Changes only the status of an existing note and keeps source, date, body and links.
+pub fn set_status(dir: &Path, name: &str, status: Status) -> Result<(), String> {
+    let path = file_of(dir, name)?;
+    let text = fs::read_to_string(&path).map_err(|e| format!("cannot read {}: {}", path.display(), e))?;
+    let mut note = parse(name, &text)?;
+    note.status = status;
+    save(dir, &note)
+}
+
+/// The notes at most `hops` links away from `start`, links followed both ways, stale notes left out (a stale note
+/// also does not pass the walk on), sorted by name. The start note is included when it is not stale. Links to notes
+/// that do not exist are ignored. An unknown or stale start returns an empty list.
+pub fn within_notes<'a>(notes: &'a [Note], start: &str, hops: usize) -> Vec<&'a Note> {
     let by_name: BTreeMap<&str, &Note> = notes.iter().map(|n| (n.name.as_str(), n)).collect();
     match by_name.get(start) {
         Some(n) if n.status != Status::Stale => {}
@@ -135,7 +206,33 @@ pub fn within(notes: &[Note], start: &str, hops: usize) -> Vec<String> {
             }
         }
     }
-    seen.into_iter().map(|s| s.to_string()).collect()
+    seen.into_iter().filter_map(|name| by_name.get(name).copied()).collect()
+}
+
+/// Names of the notes at most `hops` links away from `start`, in the order `within_notes` returns them.
+pub fn within(notes: &[Note], start: &str, hops: usize) -> Vec<String> {
+    within_notes(notes, start, hops).into_iter().map(|n| n.name.clone()).collect()
+}
+
+/// The prompt text of a set of notes: one block per note, each body capped. Only the caller decides which notes;
+/// `within_notes` and `context` already leave stale notes out.
+pub fn text(notes: &[&Note]) -> String {
+    let mut out = String::new();
+    for note in notes {
+        let block = format!("[note {} · {} · {} · {}]\n{}\n\n", note.name, note.source, note.date,
+                            note.status.as_str(), note.body.trim().chars().take(MAX_NOTE_TEXT).collect::<String>());
+        if out.len() + block.len() > MAX_CONTEXT_TEXT {
+            break;
+        }
+        out.push_str(&block);
+    }
+    out
+}
+
+/// The prompt text of the notes at most `hops` links from `start`. Stale notes never appear and never carry the walk
+/// past themselves; an unknown or stale start gives an empty text.
+pub fn context(notes: &[Note], start: &str, hops: usize) -> String {
+    text(&within_notes(notes, start, hops))
 }
 
 #[cfg(test)]
@@ -218,6 +315,54 @@ mod tests {
     fn stale_note_does_not_pass_the_walk_on() {
         let notes = vec![note("a", "open", &["s"]), note("s", "stale", &["c"]), note("c", "open", &[])];
         assert_eq!(within(&notes, "a", 3), vec!["a"]);
+    }
+
+    #[test]
+    fn context_holds_three_of_ten_notes_and_no_stale_text() {
+        // n1 links n2 and n3; n2 links the stale n7, which links n8. n4, n5, n6 and n9 are a second island.
+        let mut notes = vec![
+            note("n1", "open", &["n2", "n3"]),
+            note("n2", "confirmed", &["n7"]),
+            note("n3", "open", &[]),
+            note("n4", "open", &["n5"]),
+            note("n5", "open", &["n6"]),
+            note("n6", "open", &["n9"]),
+            note("n7", "stale", &["n8"]),
+            note("n8", "open", &[]),
+            note("n9", "open", &[]),
+        ];
+        notes.push(note("n0", "open", &["n4"]));
+        let picked = within_notes(&notes, "n1", 2);
+        assert_eq!(picked.iter().map(|n| n.name.as_str()).collect::<Vec<_>>(), vec!["n1", "n2", "n3"]);
+        let text = context(&notes, "n1", 2);
+        assert_eq!(text.matches("[note ").count(), 3, "{}", text);
+        assert!(text.contains("[note n1 ") && text.contains("[note n2 ") && text.contains("[note n3 "), "{}", text);
+        assert!(!text.contains("[note n7 ") && !text.contains("[[n8]]"), "a stale note reached the prompt: {}", text);
+    }
+
+    #[test]
+    fn save_and_set_status_round_trip() {
+        let dir = std::env::temp_dir().join(format!("penelope-notes-save-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let note = parse("a", "---\nsource: validator\ndate: 2026-11-26\nstatus: open\n---\nsee [[b]]").unwrap();
+        save(&dir, &note).unwrap();
+        set_status(&dir, "a", Status::Confirmed).unwrap();
+        let notes = load_dir(&dir).unwrap();
+        assert_eq!((notes[0].status, notes[0].links.clone()), (Status::Confirmed, vec!["b".to_string()]));
+        let before = fs::read_to_string(dir.join("a.md")).unwrap();
+        assert!(before.contains("status: confirmed") && before.contains("see [[b]]"), "{}", before);
+        assert!(save(&dir, &parse("../x", "x").unwrap()).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn today_is_a_date() {
+        let date = today();
+        let parts: Vec<&str> = date.split('-').collect();
+        assert_eq!(parts.len(), 3, "{}", date);
+        assert_eq!(parts[0].len(), 4);
+        assert_eq!(parts[1].len(), 2);
+        assert_eq!(parts[2].len(), 2);
     }
 
     #[test]

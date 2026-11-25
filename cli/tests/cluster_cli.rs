@@ -73,7 +73,37 @@ fn help_names_the_dry_run_and_the_cluster_file() {
     assert!(ok, "{} {}", out, err);
     assert!(out.contains("penelope cluster run GOAL [--profile NAME] [--dry] [--sequential]"), "{}", out);
     assert!(out.contains("--dry prints parts, model and an estimate, starts nothing"), "{}", out);
+    assert!(out.contains("penelope cluster advise [NAME]"), "{}", out);
     assert!(out.contains("(built-in, .json or .cluster)"), "{}", out);
+}
+
+#[test]
+fn cluster_advise_prints_the_scored_suggestion_without_a_model() {
+    let d = temp("advise");
+    let root = d.join(".penelope");
+    std::fs::create_dir_all(root.join("clusters")).unwrap();
+    let scores = json!({"coder-4": {"rust-fix": {"accepted": 1, "rejected": 4}},
+                        "coder-5": {"rust-fix": {"accepted": 5, "rejected": 0}}});
+    std::fs::write(root.join("clusters/scores.json"), serde_json::to_string_pretty(&scores).unwrap()).unwrap();
+
+    let (ok, out, err) = run_bin(&["--root", root.to_str().unwrap(), "cluster", "advise"]);
+    assert!(ok, "{} {}", out, err);
+    assert_eq!(out.lines().filter(|l| l.contains("was rejected")).count(), 1, "{}", out);
+    assert!(out.contains("coder-4 was rejected 4 of 5 times on rust-fix: change its model."), "{}", out);
+    assert!(!out.contains("coder-5"), "an accepted part must not get a false suggestion: {}", out);
+
+    let (ok, out, err) = run_bin(&["--root", root.to_str().unwrap(), "cluster", "advise", "coder-4"]);
+    assert!(ok, "{} {}", out, err);
+    assert!(out.contains("coder-4") && out.contains("4 of 5"), "{}", out);
+
+    let empty = temp("advise-empty");
+    let empty_root = empty.join(".penelope");
+    std::fs::create_dir_all(&empty_root).unwrap();
+    let (ok, out, err) = run_bin(&["--root", empty_root.to_str().unwrap(), "cluster", "advise"]);
+    assert!(ok, "{} {}", out, err);
+    assert!(out.contains("no cluster scores yet"), "{}", out);
+    let _ = std::fs::remove_dir_all(&d);
+    let _ = std::fs::remove_dir_all(&empty);
 }
 
 #[test]
