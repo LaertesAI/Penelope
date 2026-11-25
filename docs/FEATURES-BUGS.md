@@ -1,6 +1,6 @@
 # Penelope: features, bugs and open goals
 
-State: 2026-11-25, working tree after the 0.11.0 second pass and the first 0.12 work. Test suite: 173 tests (171 unit and 2 eval command tests).
+State: 2026-11-25, working tree after the 0.11.0 second pass and the first 0.12 work. Test suite: 229 tests (227 unit and 2 eval command tests).
 This is the honest list behind `README.md` and `PLAN-0.12.md`. A feature is only listed as working when a test or a
 live run on this PC backs it.
 
@@ -89,7 +89,7 @@ live run on this PC backs it.
 
 ```bash
 cd cli
-cargo test                       # 173 tests
+cargo test                       # 229 tests
 cargo build --release
 ./target/release/penelope doctor
 ./target/release/penelope work list

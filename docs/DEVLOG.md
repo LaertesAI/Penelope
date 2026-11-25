@@ -5,7 +5,7 @@
 **Scope:** one contract layer for every tool, models in every role, agents written with `$`, shared memory and an
 Obsidian brain, cost in euro, ScreenCodec and Penelope's own cursor, plugin install and import, a startup weave, and
 the commands and views that make these reachable.  
-**Tests:** 189 passed, 0 failed. No test needs a key. The live runs against OpenCode Go are written down below and used no test fixture.
+**Tests:** 229 passed, 0 failed. No test needs a key. The live runs against OpenCode Go are written down below and used no test fixture.
 
 ## DeepSeek phase 1 (branch `feat/phase1-worktree-evidence`)
 
@@ -1121,7 +1121,7 @@ New CLI commands: `tools`, `tool list`, `tool call NAME JSON`, `route`, `agents`
 
 ## Tests and evidence
 
-`cargo test` in `cli/`: **189 passed, 0 failed**. The new tests, all without a real provider:
+`cargo test` in `cli/`: **229 passed, 0 failed**. The new tests, all without a real provider:
 
 | Test | What it proves |
 |---|---|
@@ -1271,7 +1271,7 @@ body.
 
 ```bash
 cd cli
-cargo test                     # 173 tests, no model, no key
+cargo test                     # 229 tests, no model, no key
 
 ./target/release/penelope tools
 ./target/release/penelope serve --print-config

@@ -3,7 +3,7 @@
 <p align="center">
   <a href="cli/Cargo.toml"><img src="https://img.shields.io/badge/version-0.11.0-C4623E?style=flat-square&labelColor=1C1A17" alt="version 0.11.0"></a>
   <a href="cli/Cargo.toml"><img src="https://img.shields.io/badge/Rust_edition-2021-C4623E?style=flat-square&labelColor=1C1A17" alt="Rust edition 2021"></a>
-  <a href="#build"><img src="https://img.shields.io/badge/tests-173_passing-C4623E?style=flat-square&labelColor=1C1A17" alt="173 tests passing"></a>
+  <a href="#build"><img src="https://img.shields.io/badge/tests-229_passing-C4623E?style=flat-square&labelColor=1C1A17" alt="229 tests passing"></a>
   <a href="#status"><img src="https://img.shields.io/badge/platform-Linux-C4623E?style=flat-square&labelColor=1C1A17" alt="platform Linux"></a>
   <a href="#parts"><img src="https://img.shields.io/badge/MCP_tools-46-C4623E?style=flat-square&labelColor=1C1A17" alt="46 MCP tools"></a>
   <a href="docs/PROVIDERS.md"><img src="https://img.shields.io/badge/providers-35-C4623E?style=flat-square&labelColor=1C1A17" alt="35 providers"></a>
@@ -30,7 +30,7 @@ model, keeps notes in a memory map, and asks before every change to a file.
 | Binary | `cli/target/release/penelope`, 7.7 MB (8,464,024 bytes), built from source |
 | Build | `cargo build --release`, profile `release` with `opt-level = 2` and `strip = true` |
 | Toolchain | rustc 1.99.1, edition 2021 |
-| Tests | 173 passed, 0 failed, no test needs a key. Live runs are listed in the devlog. |
+| Tests | 229 passed, 0 failed, no test needs a key. Live runs are listed in the devlog. |
 | Real runs | 29 with the `claude` command up to 0.10.0, live OpenCode Go runs on 2026-11-24, and three live cluster runs with Claude + haiku on 2026-11-25. See [`DEVLOG.md`](docs/DEVLOG.md). |
 | Platform | Linux. Background jobs read `/proc`. Windows and macOS are untried. |
 | Settings folder | `.penelope/` in the project, else `~/.penelope/` |
@@ -64,7 +64,7 @@ Needed: a Rust toolchain, Linux, and one model source (the `claude` command, an 
 ```bash
 cd cli
 cargo build --release
-cargo test                          # 173 tests, no model call
+cargo test                          # 229 tests, no model call
 ./target/release/penelope doctor    # one line per program and setting Penelope depends on
 ```
 
