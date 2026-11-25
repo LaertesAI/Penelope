@@ -4,6 +4,7 @@
 
 use crate::config::Ctx;
 use serde_json::{json, Value};
+use std::fs;
 
 pub struct Provider {
     /// The name the commands take, for example `penelope provider use groq`.
@@ -357,7 +358,7 @@ const OPENCODE_MODELS: &[Model] = &[
 /// The exact model list of a provider, when Penelope knows more than the one example in the table.
 pub fn models(provider: &str) -> &'static [Model] {
     match provider {
-        "claude-cli" => CLAUDE_MODELS,
+        "claude-cli" | "anthropic" => CLAUDE_MODELS,
         "opencode" => OPENCODE_MODELS,
         _ => &[],
     }
@@ -445,9 +446,154 @@ pub fn default_effort(provider: &str, model: &str) -> &'static str {
     if list.contains(&"high") { "high" } else { list.first().copied().unwrap_or("") }
 }
 
+/// One model as a provider reports it. The lists are strings because they come from the wire, not from a static table.
+#[derive(Clone, Debug, Default)]
+pub struct ModelInfo {
+    pub id: String,
+    pub label: String,
+    pub efforts: Vec<String>,
+}
+
+fn model_file(ctx: &Ctx, provider: &str) -> std::path::PathBuf {
+    let safe: String = provider.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' }).collect();
+    ctx.root.join("models").join(format!("{}.json", safe))
+}
+
+fn info(value: &Value) -> Option<ModelInfo> {
+    if let Some(id) = value.as_str() {
+        return Some(ModelInfo { id: id.to_string(), label: id.to_string(), efforts: Vec::new() });
+    }
+    let id = value["id"].as_str().or_else(|| value["name"].as_str()).or_else(|| value["model"].as_str())?.trim_start_matches("models/");
+    let label = value["name"].as_str().or_else(|| value["display_name"].as_str()).unwrap_or(id);
+    let mut efforts: Vec<String> = value["capabilities"]["reasoning"]["effort"].as_array()
+        .or_else(|| value["efforts"].as_array()).map(|a| a.iter().filter_map(|e| e.as_str().map(String::from)).collect()).unwrap_or_default();
+    if efforts.is_empty() { efforts = efforts_of_static(value["owned_by"].as_str().unwrap_or(""), id).iter().map(|e| e.to_string()).collect(); }
+    Some(ModelInfo { id: id.to_string(), label: label.to_string(), efforts })
+}
+
+/// The cached list. It is shown at once when the model screen opens, while the provider is asked in the background.
+pub fn cached_models(ctx: &Ctx, provider: &str) -> Vec<ModelInfo> {
+    let v: Value = fs::read_to_string(model_file(ctx, provider)).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    v["models"].as_array().map(|a| a.iter().filter_map(info).collect()).unwrap_or_default()
+}
+
+fn save_models(ctx: &Ctx, provider: &str, list: &[ModelInfo]) {
+    let path = model_file(ctx, provider);
+    if let Some(dir) = path.parent() { let _ = fs::create_dir_all(dir); }
+    let models: Vec<Value> = list.iter().map(|m| json!({"id": m.id, "label": m.label, "efforts": m.efforts})).collect();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let _ = fs::write(path, serde_json::to_string_pretty(&json!({"provider": provider, "at": now, "models": models})).unwrap());
+}
+
+/// The static catalog as `ModelInfo`, for the Claude command, for a provider without a list endpoint, and as fallback.
+pub fn static_models(provider: &str) -> Vec<ModelInfo> {
+    let list = models(provider);
+    if !list.is_empty() {
+        return list.iter().map(|m| ModelInfo { id: m.id.to_string(), label: m.label.to_string(), efforts: m.efforts.iter().map(|e| e.to_string()).collect() }).collect();
+    }
+    get(provider).map(|p| vec![ModelInfo {
+        id: p.model.to_string(), label: known_label(p.model).unwrap_or(p.model).to_string(),
+        efforts: efforts(provider, p.model).iter().map(|e| e.to_string()).collect(),
+    }]).unwrap_or_default()
+}
+
+fn chat_model(provider: &str, value: &Value, id: &str) -> bool {
+    if let Some(kind) = value["type"].as_str() { if kind != "chat" { return false; } }
+    let lower = id.to_lowercase();
+    let skip = ["embedding", "embed-", "embed_", "tts", "whisper", "dall-e", "moderation", "transcribe", "speech", "sora", "image-", "audio-",
+                "davinci", "babbage", "curie", "ada-", "text-"];
+    if provider != "ollama" && skip.iter().any(|s| lower.contains(s)) { return false; }
+    true
+}
+
+/// Asks the provider for its chat models. OpenAI-compatible endpoints answer at `/models`, Anthropic at `/v1/models`.
+/// The answer is cached; a failure leaves the last cached list or the static catalog in place.
+pub fn fetch_models(ctx: &Ctx, provider: &str, model: &Value) -> Result<Vec<ModelInfo>, String> {
+    if provider == "laertes" { return Err("the Laertes family has no model endpoint yet".to_string()); }
+    if provider == "claude-cli" { return Ok(static_models("claude-cli")); }
+    let Some(p) = get(provider) else { return Err(format!("no provider named {}", provider)) };
+    let base = model["base_url"].as_str().filter(|b| !b.trim().is_empty()).unwrap_or(p.base).trim_end_matches('/');
+    if base.is_empty() || base.contains(WORKSPACE) { return Err(format!("{} has no usable base address", provider)); }
+    let key = key(model);
+    let anthropic = p.kind == "anthropic";
+    let url = if anthropic {
+        if base.ends_with("/v1") { format!("{}/models", base) } else { format!("{}/v1/models", base) }
+    } else { format!("{}/models", base) };
+    let mut req = crate::net::agent(15).get(&url);
+    if !key.is_empty() {
+        req = if anthropic { req.set("x-api-key", &key) } else { req.set("Authorization", &format!("Bearer {}", key)) };
+    }
+    if anthropic { req = req.set("anthropic-version", crate::llm::ANTHROPIC_VERSION); }
+    if let Some(extra) = model["headers"].as_object() {
+        for (name, value) in extra { if let Some(v) = value.as_str() { req = req.set(name, v); } }
+    }
+    let resp = match req.call() {
+        Ok(r) => r,
+        Err(ureq::Error::Status(code, r)) => return Err(format!("{} answered {} {}", provider, code, r.status_text())),
+        Err(e) => return Err(format!("no answer from {}: {}", provider, e)),
+    };
+    let v = resp.into_json::<Value>().map_err(|e| format!("{} sent no JSON model list: {}", provider, e))?;
+    let items = v["data"].as_array().or_else(|| v["models"].as_array()).or_else(|| v["data"]["models"].as_array())
+        .cloned().ok_or_else(|| format!("{} sent no data list", provider))?;
+    let mut list: Vec<ModelInfo> = Vec::new();
+    for item in items {
+        let Some(mut found) = info(&item) else { continue };
+        if found.id.is_empty() || !chat_model(provider, &item, &found.id) || list.iter().any(|m| m.id == found.id) { continue; }
+        if found.label == found.id {
+            if let Some(label) = known_label(&found.id) { found.label = label.to_string(); }
+        }
+        // The provider's own effort column wins; the static rules are the fallback for endpoints that omit it.
+        if found.efforts.is_empty() { found.efforts = efforts(provider, &found.id).iter().map(|e| e.to_string()).collect(); }
+        list.push(found);
+    }
+    if list.is_empty() { return Err(format!("{} returned no chat model", provider)); }
+    save_models(ctx, provider, &list);
+    Ok(list)
+}
+
+// The static effort table is the fallback when an endpoint does not send its own column.
+fn efforts_of_static(provider: &str, model: &str) -> &'static [&'static str] {
+    if provider.is_empty() { &[] } else { efforts(provider, model) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_provider_list_wins_over_the_static_catalog_and_is_cached() {
+        let (address, seen) = crate::llm::fake::serve(vec![
+            (200, json!({"object": "list", "data": [
+                {"id": "deepseek-v4.1-flash", "name": "DeepSeek V4.1 Flash", "type": "chat",
+                 "capabilities": {"reasoning": {"supported": true, "effort": ["low", "high", "max"]}}},
+                {"id": "mimo-v2.6-flash", "name": "MiMo V2.6 Flash", "type": "chat", "capabilities": {"reasoning": {"supported": false}}},
+                {"id": "text-embedding-3-large", "type": "embedding"}
+            ]}).to_string()),
+            (200, json!({"data": [{"id": "claude-opus-5-5", "display_name": "Claude Opus 5.5"}]}).to_string()),
+        ]);
+        let dir = std::env::temp_dir().join(format!("penelope-models-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let ctx = crate::config::load(&dir.join(".penelope"));
+        let opencode = json!({"kind": "openai", "base_url": format!("{}/v1", address), "model": "deepseek-v4.1-flash", "api_key_env": ""});
+        let list = fetch_models(&ctx, "opencode", &opencode).unwrap();
+        assert_eq!(list.len(), 2, "{:?}", list);
+        assert_eq!((list[0].id.as_str(), list[0].label.as_str()), ("deepseek-v4.1-flash", "DeepSeek V4.1 Flash"));
+        assert_eq!(list[0].efforts, vec!["low", "high", "max"]);
+        assert!(list[1].efforts.is_empty());                  // MiMo has no effort field
+        assert_eq!(seen.lock().unwrap()[0].path, "/v1/models");
+        let cached = cached_models(&ctx, "opencode");
+        assert_eq!(cached.len(), 2);
+        assert_eq!(cached[0].efforts, vec!["low", "high", "max"]);
+
+        std::env::set_var("PENELOPE_TEST_KEY_MODELS", "test-key-models-0123456789");
+        let anthropic = json!({"kind": "anthropic", "base_url": address, "model": "claude-opus-5-5", "api_key_env": "PENELOPE_TEST_KEY_MODELS"});
+        let claude = fetch_models(&ctx, "anthropic", &anthropic).unwrap();
+        assert_eq!((claude[0].id.as_str(), claude[0].efforts.last().map(String::as_str)), ("claude-opus-5-5", Some("max")));
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen[1].path, "/v1/models");
+        assert!(seen[1].headers.contains(&"x-api-key: test-key-models-0123456789".to_string()), "{:?}", seen[1].headers);
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn the_table_is_well_formed_and_a_setting_names_the_variable_only() {
@@ -477,6 +623,8 @@ mod tests {
         assert!(supports_effort("opencode", "deepseek-v4.1-flash"));
         assert!(!supports_effort("opencode", "mimo-v2.6-flash"));
         assert!(supports_effort("openai", "gpt-6.2-astra") && !supports_effort("openai", "gpt-4o"));
+        assert_eq!(static_models("openai")[0].id, "gpt-6.2-astra");
+        assert_eq!(static_models("anthropic")[0].id, "claude-opus-5-5");
         assert!(supports_effort("openrouter", "openai/gpt-5.2") && supports_effort("openrouter", "anthropic/claude-sonnet-5-5"));
         assert!(supports_effort("deepseek", "deepseek-flash") && supports_effort("xai", "grok-4.7"));
         assert!(supports_effort("alibaba-intl", "qwen4-max") && supports_effort("zhipu", "glm-5.3"));

@@ -13,7 +13,7 @@ use art::Mood;
 use ratatui::crossterm::event::{self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event, KeyCode,
                                 KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind};
 use ratatui::crossterm::execute;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
@@ -153,6 +153,8 @@ enum Msg {
     AgentDone(Result<String, String>),
     /// A skill Penelope wrote from a long successful turn.
     Skill(String),
+    /// The model list a provider answered for the model screen.
+    Models { provider: String, result: Result<Vec<crate::providers::ModelInfo>, String> },
 }
 
 /// Numbers of the side panel that come from files under `.penelope`.
@@ -235,6 +237,12 @@ pub struct App {
     pub plugin_rows: Vec<plugins::Entry>,
     /// First x arms the removal of a plugin; a second x removes it.
     plugin_armed: Option<String>,
+    /// Model lists from the providers, by provider name. The static catalog is the fallback.
+    pub model_cache: HashMap<String, Vec<crate::providers::ModelInfo>>,
+    /// Where the list in the model screen came from: the provider, the cache, or the built-in catalog.
+    pub model_source: String,
+    /// Providers whose model list is being fetched right now.
+    models_fetching: HashSet<String>,
 }
 
 /// Labels and icons of status lines, so that a stored transcript finds its fixed texts again.
@@ -288,7 +296,7 @@ impl App {
             tokens: (0, 0), turns: 0, tool_calls: 0, trail: Vec::new(), learned: Vec::new(), side: Side::default(),
             approve_dir, allow_all: false, seen: HashSet::new(), shot: false, quit: false, session_id: None, tabs: Vec::new(), setup: false,
             intro: Instant::now(), context_refs: Vec::new(), login: None, delete_armed: None, tip: 0,
-            plugin_rows: Vec::new(), plugin_armed: None,
+            plugin_rows: Vec::new(), plugin_armed: None, model_cache: HashMap::new(), model_source: String::new(), models_fetching: HashSet::new(),
         };
         app.refresh_tabs();
         app.refresh_side();
@@ -413,18 +421,57 @@ impl App {
         COMMANDS.iter().filter(|c| q.is_empty() || c.name.contains(&q) || c.help.contains(&q)).collect()
     }
 
-    /// The model names the picker offers for the main or the weaker model.
-    pub fn model_choices(&self, target: &str) -> Vec<String> {
+    fn provider_name(&self, target: &str) -> String {
         let m = self.model_value(target);
-        let current = m["model"].as_str().unwrap_or("").to_string();
-        let provider = crate::providers::of(m).map(|p| p.name);
-        if let Some(name) = provider {
-            let list = crate::providers::models(name);
+        crate::providers::of(m).map(|p| p.name.to_string()).unwrap_or_else(|| m["kind"].as_str().unwrap_or("claude-cli").to_string())
+    }
+
+    /// The model names the picker offers: the provider's own list first, then the static catalog, then the current name.
+    pub fn model_choices(&self, target: &str) -> Vec<String> {
+        let provider = self.provider_name(target);
+        if let Some(list) = self.model_cache.get(&provider) {
             if !list.is_empty() {
-                return list.iter().map(|x| x.id.to_string()).collect();
+                return list.iter().map(|m| m.id.clone()).collect();
             }
         }
-        if !current.is_empty() { vec![current] } else { Vec::new() }
+        let list = crate::providers::models(&provider);
+        if !list.is_empty() {
+            return list.iter().map(|m| m.id.to_string()).collect();
+        }
+        let current = self.model_value(target)["model"].as_str().unwrap_or("");
+        if current.is_empty() { Vec::new() } else { vec![current.to_string()] }
+    }
+
+    /// The effort levels of one model. The provider's answer wins over the static rules.
+    pub fn model_efforts(&self, target: &str, model: &str) -> Vec<String> {
+        let provider = self.provider_name(target);
+        if let Some(found) = self.model_cache.get(&provider).and_then(|list| list.iter().find(|m| m.id == model)) {
+            return found.efforts.clone();
+        }
+        crate::providers::efforts(&provider, model).iter().map(|e| e.to_string()).collect()
+    }
+
+    /// Shows the cached list at once and asks the provider in the background for a fresh one.
+    fn load_models(&mut self, target: &str) {
+        let provider = self.provider_name(target);
+        if matches!(provider.as_str(), "claude-cli" | "laertes") {
+            self.model_source = if provider == "claude-cli" { "built-in Claude aliases".to_string() } else { "the family is in training".to_string() };
+            return;
+        }
+        let cached = crate::providers::cached_models(&self.ctx, &provider);
+        if !cached.is_empty() {
+            self.model_source = format!("{} cached models · {} · refreshing", cached.len(), provider);
+            self.model_cache.insert(provider.clone(), cached);
+        } else {
+            self.model_source = format!("asking {} for its models", provider);
+        }
+        if !self.models_fetching.insert(provider.clone()) { return; }
+        let model = self.model_value(target).clone();
+        let (ctx, tx) = (self.ctx.clone(), self.tx.clone());
+        std::thread::spawn(move || {
+            let result = crate::providers::fetch_models(&ctx, &provider, &model);
+            let _ = tx.send(Msg::Models { provider, result });
+        });
     }
 
     fn model_value(&self, target: &str) -> &serde_json::Value {
@@ -435,11 +482,15 @@ impl App {
     }
 
     fn set_model(&mut self, target: &str, model: &str) {
-        let provider = crate::providers::of(self.model_value(target)).map(|p| p.name).unwrap_or("claude-cli");
-        let effort = crate::providers::default_effort(provider, model);
+        let efforts = self.model_efforts(target, model);
+        let effort = if efforts.iter().any(|e| e == "high") { "high".to_string() } else { efforts.first().cloned().unwrap_or_default() };
         let value = if matches!(target, "main" | "weak" | "scout") { &mut self.ctx.cfg[target] } else { &mut self.ctx.cfg["roles"][target] };
         value["model"] = serde_json::json!(model);
-        if !effort.is_empty() { value["effort"] = serde_json::json!(effort); }
+        if effort.is_empty() {
+            if let Some(obj) = value.as_object_mut() { obj.remove("effort"); }
+        } else {
+            value["effort"] = serde_json::json!(effort);
+        }
         save_config(&self.ctx);
         self.refresh_side();
         self.toast(format!("{} model set to {}{}", target, model, if effort.is_empty() { String::new() } else { format!(" · effort {}", effort) }));
@@ -451,16 +502,15 @@ impl App {
             _ => return,
         };
         let Some(model) = model else { return };
-        let provider = crate::providers::of(self.model_value(target)).map(|p| p.name).unwrap_or("claude-cli");
-        let list = crate::providers::efforts(provider, &model);
+        let list = self.model_efforts(target, &model);
         if list.is_empty() {
             self.toast(format!("{} has no effort field; nothing is sent.", model));
             return;
         }
         let value = if matches!(target, "main" | "weak" | "scout") { &mut self.ctx.cfg[target] } else { &mut self.ctx.cfg["roles"][target] };
         let current = value["effort"].as_str().unwrap_or("");
-        let at = list.iter().position(|e| *e == current).unwrap_or(0);
-        let next = list[(at + 1) % list.len()];
+        let at = list.iter().position(|e| e == current).unwrap_or(0);
+        let next = list[(at + 1) % list.len()].clone();
         value["effort"] = serde_json::json!(next);
         save_config(&self.ctx);
         self.toast(format!("{} · effort {}", model, next));
@@ -749,6 +799,25 @@ impl App {
                     self.flash = Some((Mood::Learned, Instant::now()));
                     self.save_session();
                     self.refresh_side();
+                }
+                Msg::Models { provider, result } => {
+                    self.models_fetching.remove(&provider);
+                    match result {
+                        Ok(list) => {
+                            let count = list.len();
+                            self.model_cache.insert(provider.clone(), list);
+                            self.model_source = format!("{} models from {}", count, provider);
+                            if let Overlay::Models { sel: _, target } = &self.overlay {
+                                let last = self.model_choices(target).len().saturating_sub(1);
+                                if let Overlay::Models { sel, .. } = &mut self.overlay { *sel = (*sel).min(last); }
+                            }
+                        }
+                        Err(e) => {
+                            let cached = self.model_cache.get(&provider).map(|l| l.len()).unwrap_or(0);
+                            self.model_source = if cached > 0 { format!("{} cached models · provider unreachable: {}", cached, e) } else { format!("built-in names · {}", e) };
+                            self.toast(format!("the {} model list is unavailable: {}", provider, e));
+                        }
+                    }
                 }
                 Msg::AgentDone(result) => {
                     self.busy = None;
@@ -1477,6 +1546,8 @@ impl App {
                 KeyCode::Esc => close = true,
                 KeyCode::Up => *sel = sel.saturating_sub(1),
                 KeyCode::Down => *sel += 1,
+                KeyCode::PageUp => *sel = sel.saturating_sub(10),
+                KeyCode::PageDown => *sel += 10,
                 KeyCode::Enter => pick = Some((*sel, target.clone())),
                 KeyCode::Char('e') => effort = Some(target.clone()),
                 _ => {}
@@ -1597,7 +1668,10 @@ impl App {
             *sel = (*sel).min(ROLE_MODELS.len().saturating_sub(1));
         }
         if let Some(target) = models_open {
-            self.overlay = Overlay::Models { sel: 0, target };
+            self.load_models(&target);
+            let current = self.model_value(&target)["model"].as_str().unwrap_or("").to_string();
+            let at = self.model_choices(&target).iter().position(|m| *m == current).unwrap_or(0);
+            self.overlay = Overlay::Models { sel: at, target };
             close = false;
         }
         if roles_open {
@@ -2173,6 +2247,21 @@ mod tests {
             }
             _ => panic!("help must open the pager"),
         }
+    }
+
+    #[test]
+    fn the_picker_uses_the_provider_list_and_its_effort_column() {
+        let mut a = app();
+        a.ctx.cfg["main"] = serde_json::json!({"kind": "openai", "base_url": "https://opencode.ai/zen/go/v1",
+                                               "model": "deepseek-v4.1-flash", "effort": "low"});
+        a.model_cache.insert("opencode".to_string(), vec![
+            crate::providers::ModelInfo { id: "from-provider".into(), label: "From Provider".into(), efforts: vec!["low".into(), "high".into()] },
+        ]);
+        assert_eq!(a.model_choices("main"), vec!["from-provider".to_string()]);
+        assert_eq!(a.model_efforts("main", "from-provider"), vec!["low".to_string(), "high".to_string()]);
+        a.overlay = Overlay::Models { sel: 0, target: "main".into() };
+        press(&mut a, KeyCode::Char('e'));
+        assert_eq!(a.ctx.cfg["main"]["effort"], serde_json::json!("high"));
     }
 
     #[test]

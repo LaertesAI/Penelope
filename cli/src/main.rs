@@ -61,6 +61,7 @@ penelope update [--check]     check the update server, or install a newer signed
 penelope audit                look for keys and plain-http leaks in the settings folder
 penelope input [install|enable|status]
                               a native Wayland pointer for ScreenCodec, without ydotool
+penelope models [PROVIDER]   the chat models the provider reports, with its effort levels
 penelope provider use NAME [--role main|weak|scout] [--model MODEL] [--workspace ID] [--base-url URL]
                               write one model setting from the table to config.json
 penelope sessions             list the stored sessions, newest first
@@ -338,6 +339,34 @@ fn main() {
             match result {
                 Ok(text) => println!("{}", text),
                 Err(e) => { loom::warn(&e); std::process::exit(2); }
+            }
+        }
+        "models" => {
+            let current = providers::of(&ctx.cfg["main"]).map(|p| p.name.to_string());
+            let provider = args.get(1).cloned().or(current).unwrap_or_else(|| "claude-cli".to_string());
+            let model = if providers::of(&ctx.cfg["main"]).map(|p| p.name) == Some(provider.as_str()) {
+                ctx.cfg["main"].clone()
+            } else if let Some(p) = providers::get(&provider) {
+                serde_json::json!({"kind": p.kind, "base_url": p.base, "model": p.model, "api_key_env": p.key_env})
+            } else {
+                loom::warn(&format!("no provider named {} (penelope providers)", provider));
+                std::process::exit(2);
+            };
+            match providers::fetch_models(&ctx, &provider, &model) {
+                Ok(list) => {
+                    println!("{}: {} chat models", provider, list.len());
+                    for m in list {
+                        println!("{:<44} {:<32} {}", m.id, m.label.chars().take(32).collect::<String>(),
+                                 if m.efforts.is_empty() { "no effort".to_string() } else { m.efforts.join(" ") });
+                    }
+                }
+                Err(e) => {
+                    loom::warn(&e);
+                    let static_list = providers::static_models(&provider);
+                    if static_list.is_empty() { std::process::exit(2); }
+                    println!("built-in names for {}:", provider);
+                    for m in static_list { println!("{:<44} {}", m.id, if m.efforts.is_empty() { "no effort".to_string() } else { m.efforts.join(" ") }); }
+                }
             }
         }
         "provider" => match args.get(1).map(String::as_str) {
