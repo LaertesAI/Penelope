@@ -1,7 +1,7 @@
 # Plan for the coding agent: everything that is still missing in Penelope
 
 Written on 2026-11-25 from a talk with the owner and from a read of the code at commit `10bac25`
-(version 0.11.0, 288 tests, 55 files in `cli/src/`). The reader is a coding agent such as DeepSeek in OpenCode.
+(version 0.11.0, 300 tests, 56 files in `cli/src/`). The reader is a coding agent such as DeepSeek in OpenCode.
 Bug numbers such as B33 point into `docs/FEATURES-BUGS.md`. Block numbers point into `docs/CLUSTER-IDEAS.md`.
 
 ## How to work
@@ -204,7 +204,8 @@ These packages decide whether the idea can be shown. Do them in this order.
   `/factory new`, `/factory list`, `/factory stop`.
 - Done when: a factory that writes the time into a file every minute has written 3 lines after 3 minutes.
 
-### 4.4 Apps and a launcher
+### 4.4 Apps and a launcher — done
+- Result: `3e230e3`, PR #13. App folder/manifest/rights, install from folder/git with plugins::check and yes gate, `/app` launcher and F7, cluster-view app, path/rights gate. 289 unit + 11 integration. Open: no live GitHub install; HTML apps open in the browser and are not sandboxed; no update/ZIP; shell/fetch allowed path not live-tested; killed install can leave staging.
 - State: missing.
 - Build later: `/app install GITHUB-LINK` like a plugin, with the check of 4.1 and a list of rights per app (files,
   network, shell). First app: a view of all running clusters and their parts. No server of Laertes is needed, apps
