@@ -33,7 +33,7 @@ working tree of 0.11.0; the rest is ordered by risk to the user, not by how inte
 | Daily search probe and SearXNG instance list | built | 1 test, live probe marker |
 | CSS/fake-system injection warnings | built | 2 tests, live hidden HTML |
 | CI matrix, `cargo audit` and `pip-audit` | built | workflow files; Windows/macOS experimental |
-| Leak audit and retry | built | 165 tests, live 0 findings |
+| Leak audit and retry | built | 189 tests, live 0 findings |
 | Updater client and blueprint | built | 1 test, no server |
 
 ## P0 — before another person uses it daily
@@ -77,7 +77,7 @@ on the named OS.
 
 - First step: a GitHub Actions matrix (`ubuntu-24.04`, `windows-2025`, `macos-15`) that runs `cargo test`, the
   contract test and a `--help` smoke test; sign the macOS binary with a Developer ID when one exists.
-- Acceptance: 165 tests green on all three; one live `ask` with a local model on each; `penelope input status` chooses the
+- Acceptance: 189 tests green on all three; one live `ask` with a local model on each; `penelope input status` chooses the
   right backend.
 - Measure: build time, test failures, install size.
 

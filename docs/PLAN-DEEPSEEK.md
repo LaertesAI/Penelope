@@ -1,7 +1,7 @@
 # Plan for the coding agent: everything that is still missing in Penelope
 
 Written on 2026-11-25 from a talk with the owner and from a read of the code at commit `10bac25`
-(version 0.11.0, 181 tests, 51 files in `cli/src/`). The reader is a coding agent such as DeepSeek in OpenCode.
+(version 0.11.0, 189 tests, 52 files in `cli/src/`). The reader is a coding agent such as DeepSeek in OpenCode.
 Bug numbers such as B33 point into `docs/FEATURES-BUGS.md`. Block numbers point into `docs/CLUSTER-IDEAS.md`.
 
 ## How to work
@@ -118,7 +118,8 @@ These packages decide whether the idea can be shown. Do them in this order.
   tokens and euro, and starts nothing.
 - Done when: a cluster file and its JSON profile produce the same `Profile` in a test, and a dry run makes no model call.
 
-### 1.10 The measurement (B24)
+### 1.10 The measurement (B24) — done
+- Result: `0bdaf59`, PR #4. `penelope eval` for large / large-subagents / cluster with scratch copy, check, tokens, euro, wall time and `docs/RUNS.md`; `penelope replay` is read-only. 187 unit + 2 integration tests. No real 20-task run yet.
 - State: no eval runner exists. Every advantage of a cluster is an expectation.
 - Build: `penelope eval tasks.jsonl --setup NAME`. A task has a prompt, a repository state and a check command. Three
   setups: one large model, one large model with subagents, a cluster of small models. Output per setup: passed checks,
