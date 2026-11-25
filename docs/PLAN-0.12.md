@@ -181,6 +181,50 @@ Still open: white-on-white/off-screen/tiny-font detection, a link-host warning, 
 - Acceptance met by 8 auth tests, 6 account/2FA tests and a live new-address test. Recovery codes and a real mailbox are
   still open.
 
+#### G23 — Test loop after an edit
+
+- `test_command` in `config.json` (for example `cargo test`) runs after `write`/`edit`; the model sees the last 20 lines.
+- A per-turn counter stops after three failed test runs and reports the exact command and failure.
+- The loop is opt-in; a project without `test_command` keeps the current behaviour.
+- Acceptance: one failing edit is repaired in a live task; the fourth failure stops instead of looping.
+- Effort: M (3–5 days).
+
+#### G24 — LSP tool
+
+- `lsp` tool with `diagnostics` (errors and warnings with file/line) and `type` (the type under a position), backed by
+  `rust-analyzer` when it is installed.
+- Read-only; a missing server names the install command.
+- Acceptance: a planted type error appears with its exact line; a valid symbol returns its type.
+- Effort: M (4–6 days).
+
+#### G25 — Repo index with tree-sitter
+
+- Index files and symbols at session start, incrementally after an edit, and query it before grep.
+- Languages: Rust first, then Python, TypeScript and Markdown.
+- Acceptance: "where is the retry policy" reaches the right file without a full scan; the index is rebuilt after a branch
+  switch.
+- Effort: L (6–10 days).
+
+#### G26 — Eval and replay
+
+- `penelope eval tasks.jsonl` runs a task set, records hit rate, tokens and euro per model, and writes a report.
+- `penelope replay ID --model NAME` runs the stored prompts against another model without touching files.
+- Acceptance: the same set produces a comparable table for two models; a replay cannot write.
+- Effort: M (5–7 days).
+
+#### G27 — ACP server for editors
+
+- ACP over stdio for Zed and Neovim, reusing the tool contract and the role gate.
+- Acceptance: an editor opens a session, sees streamed text and tool calls, and cancels with its own shortcut.
+- Effort: L (7–12 days).
+
+#### G28 — Laertes plan provider
+
+- The `laertes` provider gets a plan key, a `/models` list and a budget/usage shape.
+- Until a family answers, the entry stays gold and refuses a call with "in training".
+- Acceptance: a key lists the plan models; a call to an untrained family is refused, not faked.
+- Effort: S (2–3 days) once the plan endpoint exists.
+
 #### G06 — Model endpoints for the eight families
 
 Start with the two that unblock the most work, then the rest:
