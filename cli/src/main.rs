@@ -27,6 +27,7 @@ mod memory;
 mod notes;
 mod net;
 mod mode;
+mod mods;
 mod platform;
 mod plugins;
 #[allow(dead_code)]

@@ -7,16 +7,117 @@
 //! `Painter::sync`, which sends the picture once and then moves, shows or removes it.
 
 use ratatui::layout::Rect;
+use std::cell::{Cell, RefCell};
+use std::fs;
 use std::io::{self, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 
-/// The picture, 360 by 360 pixels with 48 colours, 78 kB.
+/// The picture, 360 by 360 pixels with 48 colours, 78 kB. A mod may bring its own PNG; this one is the fallback.
 static PNG: &[u8] = include_bytes!("../../art/penelope_360.png");
 static ON: AtomicBool = AtomicBool::new(false);
 static WANT: Mutex<Option<Rect>> = Mutex::new(None);
 /// The number under which the terminal keeps the picture.
 const ID: u32 = 7001;
+/// A longer picture is refused before it reaches the terminal.
+const MAX_BYTES: u64 = 16 * 1024 * 1024;
+
+thread_local! {
+    /// The picture of this interface thread. A mod changes it, and the painter resends it once.
+    static IMAGE: RefCell<Option<Vec<u8>>> = RefCell::new(None);
+    /// Counts every change of the picture, so the painter knows when to send it again.
+    static GENERATION: Cell<u64> = Cell::new(0);
+}
+
+/// The bytes the terminal gets: the picture of the active mod, or the painted Penelope.
+fn image() -> Vec<u8> {
+    IMAGE.with(|i| i.borrow().clone()).unwrap_or_else(|| PNG.to_vec())
+}
+
+pub fn generation() -> u64 {
+    GENERATION.with(|g| g.get())
+}
+
+/// True when a mod changed the picture.
+#[cfg(test)]
+pub fn custom() -> bool {
+    IMAGE.with(|i| i.borrow().is_some())
+}
+
+/// The painted Penelope, after a mod goes off.
+pub fn use_default() {
+    let changed = IMAGE.with(|i| i.borrow_mut().take().is_some());
+    if changed {
+        GENERATION.with(|g| g.set(g.get() + 1));
+    }
+}
+
+/// Takes a PNG for the terminal. The kitty protocol carries PNG, so a JPEG is converted first.
+pub fn set_image(bytes: Vec<u8>) -> Result<(), String> {
+    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err("the picture is not a PNG".to_string());
+    }
+    IMAGE.with(|i| *i.borrow_mut() = Some(bytes));
+    GENERATION.with(|g| g.set(g.get() + 1));
+    Ok(())
+}
+
+/// Loads a picture from a mod folder. A missing or unreadable file is an error, and the caller keeps the old picture.
+pub fn set_path(path: &Path) -> Result<(), String> {
+    let size = fs::metadata(path).map(|m| m.len()).map_err(|e| format!("{} cannot be read: {}", crate::files::show(path), e))?;
+    if size > MAX_BYTES {
+        return Err(format!("{} is larger than {} MB", crate::files::show(path), MAX_BYTES / (1024 * 1024)));
+    }
+    let bytes = fs::read(path).map_err(|e| format!("{} cannot be read: {}", crate::files::show(path), e))?;
+    let png = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        bytes
+    } else if bytes.starts_with(&[0xFF, 0xD8]) {
+        jpeg_to_png(&bytes)?
+    } else {
+        return Err(format!("{} is not a PNG or JPEG", crate::files::show(path)));
+    };
+    set_image(png)
+}
+
+/// JPEG support without a new crate: the terminal only takes PNG, so a local converter does the step. A machine without
+/// ffmpeg or ImageMagick keeps the default picture and gets a clear line instead.
+fn jpeg_to_png(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let base = std::env::temp_dir().join(format!("penelope-picture-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    let (jpg, png) = (base.with_extension("jpg"), base.with_extension("png"));
+    fs::write(&jpg, bytes).map_err(|e| format!("the JPEG could not be written for conversion: {}", e))?;
+    let mut tried = false;
+    for program in ["ffmpeg", "magick"] {
+        if crate::config::which(program).is_none() {
+            continue;
+        }
+        tried = true;
+        let ok = if program == "ffmpeg" {
+            std::process::Command::new(program).args(["-y", "-loglevel", "error", "-i"]).arg(&jpg).arg(&png)
+                .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status()
+        } else {
+            std::process::Command::new(program).arg(&jpg).arg(&png)
+                .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status()
+        };
+        if ok.map(|s| s.success()).unwrap_or(false) {
+            if let Ok(out) = fs::read(&png) {
+                if out.starts_with(b"\x89PNG\r\n\x1a\n") {
+                    let _ = fs::remove_file(&jpg);
+                    let _ = fs::remove_file(&png);
+                    return Ok(out);
+                }
+            }
+        }
+    }
+    let _ = fs::remove_file(&jpg);
+    let _ = fs::remove_file(&png);
+    Err(if tried {
+        "the JPEG could not be converted to PNG; the default picture stays".to_string()
+    } else {
+        "a JPEG needs ffmpeg or ImageMagick to become a PNG; the default picture stays".to_string()
+    })
+}
 
 /// Whether the terminal named by these environment variables shows pictures.
 /// `PENELOPE_PICTURE=off` switches the picture off, `PENELOPE_PICTURE=on` forces it.
@@ -68,7 +169,7 @@ pub fn wanted() -> Option<Rect> {
 
 /// The picture as text for an SVG file.
 pub fn data_uri() -> String {
-    format!("data:image/png;base64,{}", base64(PNG))
+    format!("data:image/png;base64,{}", base64(&image()))
 }
 
 fn base64(bytes: &[u8]) -> String {
@@ -89,11 +190,22 @@ fn base64(bytes: &[u8]) -> String {
 pub struct Painter {
     sent: bool,
     at: Option<Rect>,
+    generation: u64,
 }
 
 impl Painter {
     /// Call after every drawn frame. Writes nothing when the place did not change.
     pub fn sync(&mut self, out: &mut impl Write) -> io::Result<()> {
+        let generation = generation();
+        if generation != self.generation {
+            // a mod brought another picture: the terminal forgets the old one, the new one goes out below
+            if self.at.is_some() {
+                write!(out, "\x1b_Ga=d,d=i,i={},q=2\x1b\\", ID)?;
+            }
+            self.sent = false;
+            self.at = None;
+            self.generation = generation;
+        }
         let want = WANT.lock().unwrap().take();
         if !on() || want == self.at {
             return Ok(());
@@ -104,7 +216,7 @@ impl Painter {
         if let Some(rect) = want {
             if !self.sent {
                 // the picture travels once, in pieces of 4,096 characters, and stays in the terminal under its number
-                let data = base64(PNG);
+                let data = base64(&image());
                 let pieces: Vec<&str> = data.as_bytes().chunks(4096).map(|c| std::str::from_utf8(c).unwrap()).collect();
                 for (i, piece) in pieces.iter().enumerate() {
                     let more = if i + 1 < pieces.len() { 1 } else { 0 };
@@ -193,5 +305,18 @@ mod tests {
         painter.sync(&mut out).unwrap();
         assert_eq!(String::from_utf8(out).unwrap(), "\x1b_Ga=d,d=i,i=7001,q=2\x1b\\", "no wish removes the picture");
         force(false);
+    }
+
+    #[test]
+    fn a_mod_picture_replaces_the_default_and_the_default_comes_back() {
+        use_default();
+        let before = generation();
+        assert!(!custom());
+        set_image(b"\x89PNG\r\n\x1a\nfake".to_vec()).unwrap();
+        assert!(custom() && generation() == before + 1);
+        assert!(data_uri().ends_with(&base64(b"\x89PNG\r\n\x1a\nfake")));
+        assert!(set_image(b"not a png".to_vec()).is_err());
+        use_default();
+        assert!(!custom() && generation() == before + 2);
     }
 }

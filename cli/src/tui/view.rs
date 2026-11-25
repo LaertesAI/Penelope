@@ -11,7 +11,6 @@ use ratatui::widgets::{Clear, Paragraph};
 use ratatui::Frame;
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-const SIDE_W: u16 = 36;
 
 fn fg(c: art::Rgb) -> Style {
     Style::default().fg(col(c))
@@ -60,6 +59,7 @@ fn model_line(app: &App, weak: bool) -> (String, String) {
 }
 
 pub fn draw(f: &mut Frame, app: &mut App) {
+    art::set_palette(app.palette);
     let area = f.area();
     picture::cancel();
     fill(f, area, INK);
@@ -287,10 +287,12 @@ fn home(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn chat(f: &mut Frame, app: &mut App, area: Rect) {
-    let side = app.sidebar && area.width >= 100 && area.height >= 16;
-    let main = if side { Rect::new(area.x, area.y, area.width - SIDE_W, area.height) } else { area };
+    // The layout of a mod: side keeps the 36 column panel, compact narrows it, top hides it.
+    let side_w = app.layout.sidebar_width();
+    let side = app.sidebar && app.layout.shows_sidebar() && side_w > 0 && area.width >= side_w + 64 && area.height >= 16;
+    let main = if side { Rect::new(area.x, area.y, area.width - side_w, area.height) } else { area };
     if side {
-        sidebar(f, app, Rect::new(main.right(), area.y, SIDE_W, area.height));
+        sidebar(f, app, Rect::new(main.right(), area.y, side_w, area.height));
     }
     let pad = if main.width >= 60 { 2 } else { 1 };
     let (x, w) = (main.x + pad, main.width - 2 * pad);
