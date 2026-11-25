@@ -49,6 +49,7 @@ const HELP: &str = "penelope                      chat with Penelope in the full
 penelope chat --plain         chat line by line, without the full screen interface
 penelope chat --resume N      go on with session N of the list
 penelope ask \"TEXT\"           one question, one answer
+penelope ask --json \"TEXT\"    the same turn as newline-delimited JSON events
 penelope init                 create a .penelope folder in this directory
 penelope setup [--here]       answer seven questions: models, who searches, privacy, policies, web search
 penelope providers            list the provider table and say per entry whether its key is set
