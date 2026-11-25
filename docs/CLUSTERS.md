@@ -17,7 +17,12 @@ fixed role chain.
   for its parent and its depth is checked against the parent's `max_depth`.
 - Every part writes into the cluster's one `memory.md`. The validator reads that memory, runs the project's check where
   it can, and answers `PASS` or `FAIL`. A `FAIL` sends the result back to the workers for up to `retries` rounds.
-- The report file uses the compact line (`S:working|P:1/2|T:12s|F:backend|E:...`). `cluster_status` shows the tree,
+- A profile with a worker part gets `worktree: true` by default: its cluster works in a branch `agent/<id>` under
+  `.penelope/worktrees/`. The patch reaches the live tree only after the validator answered `PASS`; a conflict is
+  reported and leaves the worktree for inspection. `kill` removes the worktree and its branch. `research` and
+  `live-test` set `worktree: false` explicitly.
+- The report file uses the compact line (`S:working|P:1/2|T:12s|F:backend|E:...|V:cargo test ok`). `V` is the check
+  the validator ran and its result; `S:done` without a non-empty `V` is not accepted. `cluster_status` shows the tree,
   one cluster, its parts, report and memory.
 - Tools: `cluster_start`, `cluster_status`, `cluster_kill`. Commands: `/cluster GOAL`, `/clusters`,
   `penelope cluster run/list/status/dump/profiles/kill`.
@@ -58,6 +63,7 @@ Nostos calls tools, Tiresias routes, Argos judges, Aiolos compresses.
 | `budget` | `tokens: 200000, minutes: 30` | limit; a cluster over budget stops and returns its state dump |
 | `tools` | `read, edit, run` | tools the workers may call; tool calls go through the routing model |
 | `stuck_after` | `3 reports` | reports without progress before the orchestrator treats the cluster as stuck |
+| `worktree` | `true` | own git worktree and branch; default true when the profile has a worker part |
 
 A profile is a file under `.penelope/clusters/NAME.json`, so the user can keep and reuse profiles.
 
@@ -96,6 +102,7 @@ S:stuck|P:4/9|T:312s|F:src/net/handshake.rs:88|E:TLSHandshakeTimeoutAfter3Retrie
 | `TRIED` | what it tried, joined with `+` |
 | `SUSPECT` | its guess of the cause |
 | `OUT` | result or diff summary when done |
+| `V` | the check the validator ran and its result; required when `S` is `done` |
 
 Measured on 2026-11-25 with the Qwen2.5 tokenizer, tokens before and after removing spaces, tabs, commas and line
 breaks:
@@ -132,7 +139,6 @@ a report with `S:stuck` or an unchanged `P` over `stuck_after` reports leads to 
 
 - A cluster cannot yet create a new subcluster while it runs; the orchestrator writes subclusters into the plan.
 - Workers inside one cluster run in order. Parallel workers need a merge rule for overlapping files.
-- A coding cluster still works in the live tree. The worktree isolation from `penelope work` is the next step.
 - Cost is recorded per cluster and role, but there is no hard per-cluster stop while a model call is running.
 - The zombie watch (`stuck_after`, repeated tool calls) is stored in the profile but not enforced yet.
 - The 8 Laertes families are parts with `slot` labels; a family in training blocks its cluster instead of being

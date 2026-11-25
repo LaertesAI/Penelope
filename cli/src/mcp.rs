@@ -49,7 +49,27 @@ fn hidden_for_lead(ctx: &Ctx) -> Vec<&'static str> {
 }
 
 /// The handler table. It is reached only through `route::dispatch`, which has checked the role and the arguments.
+/// A cluster validator sets `PENELOPE_TOOL_LOG`: every call is then written there as one JSON line, so the cluster can
+/// report the check the validator really ran.
 pub(crate) fn call_raw(ctx: &Ctx, name: &str, a: &Value) -> Result<String, String> {
+    let result = call_raw_inner(ctx, name, a);
+    if let Ok(path) = std::env::var("PENELOPE_TOOL_LOG") {
+        if !path.trim().is_empty() {
+            let line = json!({"name": name, "args": a, "ok": result.is_ok(),
+                              "result": result.as_deref().unwrap_or("").chars().take(4000).collect::<String>()});
+            if let Some(dir) = std::path::Path::new(&path).parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+                use std::io::Write;
+                let _ = writeln!(f, "{}", line);
+            }
+        }
+    }
+    result
+}
+
+fn call_raw_inner(ctx: &Ctx, name: &str, a: &Value) -> Result<String, String> {
     let s = |k: &str| a[k].as_str().unwrap_or("").to_string();
     let n = |k: &str| a[k].as_u64().unwrap_or(0) as usize;
     match name {

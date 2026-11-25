@@ -7,6 +7,45 @@ Obsidian brain, cost in euro, ScreenCodec and Penelope's own cursor, plugin inst
 the commands and views that make these reachable.  
 **Tests:** 165 passed, 0 failed. No test needs a key. The live runs against OpenCode Go are written down below and used no test fixture.
 
+## DeepSeek phase 1 (branch `feat/phase1-worktree-evidence`)
+
+### 1.1 One git worktree per cluster
+
+A profile now carries `worktree`. It defaults to true when the profile has a worker part; the built-in `research` and
+`live-test` profiles set it to false explicitly. `new_cluster()` creates a worktree and a branch `agent/<cluster id>`
+under `<project>/.penelope/worktrees/` and stores `project`, `worktree`, `branch` and `cwd` in the cluster JSON. A
+worktree profile in a folder without git is refused before anything runs, so a coding part cannot fall back to the
+live tree.
+
+API parts get the cluster cwd injected into every tool call that takes a `cwd` and did not name one. The Claude CLI
+part starts with `current_dir` set to the worktree. `run_cluster()` applies the worktree patch with `git apply` only
+after the validator answered PASS; a rejected patch is reported as a merge conflict, the cluster ends `blocked`, and
+the worktree stays. `kill()` removes the worktree and its branch; a running cluster repeats the cleanup when it sees
+the kill flag.
+
+Measured: `cd cli && cargo test` → `168 passed; 0 failed` (2026-11-25). The new tests cover two clusters that edit
+`hello.txt` in separate worktrees with one killed, a tool call without `cwd` that writes in its worktree, and a
+worktree profile refused in a non-git folder.
+
+### 1.2 Evidence field `V:`
+
+`clusters::report` now builds every line with `proof::render`, so the fields S, P, T, F, E keep their order and their
+escape rules, and `V:` is added when the cluster has evidence. `validate()` records every tool call of the validator
+(API tool loops directly; Claude CLI parts through the `PENELOPE_TOOL_LOG` written by `mcp::call_raw`) and fills `V:`
+with the first successful command check, for example `cat hello.txt ok`. A command counts as passed only with
+`exit code 0`; a refused or failed check is written as `failed`.
+
+A PASS counts only when at least one check ran and passed. A validator that said PASS without a tool call makes the
+cluster `failed`; `run_cluster` also calls `proof::accept` before it writes `S:done`, so a done line without a
+non-empty V cannot leave the cluster. The validator prompt now requires at least one check.
+
+Measured: `cd cli && cargo test` → `172 passed; 0 failed` (2026-11-25). New tests: the solo fixture ends with
+`S:done` and `V:cat hello.txt ok`; a PASS without a check ends `failed`; `proof::accept` rejects a written done line
+without V; a Claude tool log becomes `cargo test ok` and `cat missing.txt failed`.
+
+Open: a live Claude validator was not run in this session (no Claude login in the test environment). The tool-log
+path is covered by a unit test of `checks_from_log`, not by a real `claude` call.
+
 This is a working increment, not a claim that every limit is gone. The last section names what is still open and how
 each claim can be checked on this machine.
 

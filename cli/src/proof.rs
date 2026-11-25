@@ -8,7 +8,8 @@
 //! and `\n` for a line break. A `\` followed by any other character is an error. `render` always writes this form,
 //! so `parse(render(r)) == r`.
 //!
-//! Not wired into a command yet: nothing outside the tests calls this module.
+//! `clusters::report` writes every report line with `render`, and `clusters::run_cluster` calls `accept` before it
+//! writes `S:done`, so a done line without evidence cannot leave the cluster.
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Report {
