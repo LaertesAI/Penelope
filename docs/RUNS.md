@@ -1,7 +1,7 @@
 # Penelope: real runs
 
 Every real run with its numbers, oldest first. The README names the headline numbers only.
-The last section holds the 4 runs of the tools added in 0.10.0. No run used a provider key.
+The last section holds the 4 runs of the tools added in 0.10.0. The section after it holds the live runs of 0.11.0.
 
 The runs of 2026-11-23 used the old command name `katecli`.
 
@@ -123,3 +123,57 @@ and held `src/config.txt` with 7 lines, `src/lib.rs` with 6 lines and `log.txt` 
 One run without a model (2026-11-24): a stand-in script for chat completions listened on port 18765 of the test PC.
 It answered `penelope ask` and then `penelope chat --resume 1 --plain` from a second process. The second request
 carried 4 messages, the first request and its answer among them.
+
+## Live runs of version 0.11.0 (2026-11-24)
+
+Provider: OpenCode Go, `https://opencode.ai/zen/go/v1`, model `mimo-v2.6-flash`, wire format `openai`. The key lived
+only in `OPENCODE_API_KEY`; `config.json` stored the variable name. The settings folder was `/tmp/penelope-live`.
+
+| Run | Tool calls | Tokens in | Tokens out | Result |
+|---|---|---|---|---|
+| `ask "Answer with one word: pong"` | 0 | 3,565 | 5 | `pong` |
+| `ask "Use the tool run to execute echo penelope-live"` | 1 | 7,032 | 61 | exact output `penelope-live`, exit 0 |
+| `orchestrate '$reader(role=judge,goal="Read the README and say in one sentence what Penelope is")'` | 1 | 9,008 | 105 | `reader.check` read the README and answered in one sentence |
+| `ask` with ScreenCodec: open a local page, snapshot, click `button1`, snapshot | 3 | 24,814 | 270 | counter 0 → 1, 34 s |
+
+ScreenCodec 0.8.1 ran from a temporary venv (`/tmp/screencodec-venv`):
+
+- `screencodec-mcp doctor` passed Chromium, Tesseract, OpenCV, a test page, the click check, a real window capture
+  (837×668, 1.2 s) and a monitor capture (3440×1440, 8.9 s).
+- `penelope screen demo http://127.0.0.1:8765/` read 122 lines of hardened SDL text in one process; open and snapshot
+  in one process is what keeps the page.
+- `screen desktop` with `screencodec.desktop = "on"` returned the active window as 44 text elements in 1.2 s. No
+  screenshot was stored. The setting went back to `off` and the captured text was deleted.
+- `penelope cursor 100 100` moved the X11 pointer to `X=100 Y=100`, checked with `xdotool getmouselocation`.
+
+Limits of these runs: one provider, one small model, one PC. The desktop capture showed private content and is not
+part of the repository. `desktop_click` was not tested, because this session has no ydotool with a running ydotoold.
+
+## Live runs of the second 0.11.0 pass (2026-11-24)
+
+| Run | Result |
+|---|---|
+| `penelope login groq` with a dummy key, then `penelope auth`, then `penelope logout groq` | key stored in the Secret Service, status said `groq stored`, logout removed it, lookup empty. The test file had mode 600 and held no key. |
+| `penelope plugin import` in a fresh folder | 4 installed Claude plugins and 20+ skills from `~/.claude/skills` and `~/.agents/skills` were registered, each with its MCP tools denied. |
+| `ask "Use the tool computer ... report the counter"` | lead made 1 tool call; the tool role opened the page and reported 0; 10,929 tokens in, 117 out, 25 s. |
+| `ask` with five explicit `run` calls | 5 tool calls, `done`, auto-skill `call-tool-run-exactly` written with clean Markdown; 33,523 tokens in, 182 out, 18 s. |
+| `ask "From now on, always run the test suite ..."` | weak model filed `rust/tests`, consolidation added `rules/rust-notes`; 11,928 tokens in, 908 out. |
+| `screen desktop-click "Increase the counter"` with the uinput helper | counter 0 → 1, then 1 → 2; the native cursor moved; `desktop` was set back to `ask`. |
+| `penelope audit` on the live folder | 20 text files, 0 findings; redirects off, no listener. |
+| `penelope mode` and `penelope update --check` | six modes listed; updater said no server is set and named `docs/AUTOUPDATE.md`. |
+
+Limits: the desktop click used a `/dev/uinput` helper because this Wayland session has no ydotool; the helper is
+installed by `penelope input install` and only enabled by a person. The Windows branches were not run.
+
+## Web search of the second pass (2026-11-24)
+
+| Run | Result |
+|---|---|
+| `penelope search "rust tokio select!"` | 8 results from DuckDuckGo in 0.7 s, ranked, with engine and score |
+| `penelope search "Rust 2026 release notes" --fresh` after DuckDuckGo refused | Bing answered; the `bing.com/ck/a` tracking links were decoded to Wikipedia and rust-lang pages |
+| `penelope research "What is the tokio select macro and when should I use it?" --depth standard --pages 3` | 2 queries, 3 pages, DuckDuckGo, 10.3 s; cited answer with 10 sources on `mimo-v2.6-flash` |
+| `penelope research` on an old folder with `search.kind` only | the deep config merge added the new search fields without touching the old value |
+
+The research answer cited the docs.rs page, a tutorial and a blog, named the missing alternatives (`join!`,
+`FuturesUnordered`) and listed the pages that were only snippets. The search cache lives under
+`.penelope/search/cache/`; `penelope audit` found no key in it.
