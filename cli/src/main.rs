@@ -20,6 +20,8 @@ mod llm;
 mod mcp;
 mod mcpclient;
 mod memory;
+#[allow(dead_code)]
+mod notes;
 mod net;
 mod mode;
 mod platform;
