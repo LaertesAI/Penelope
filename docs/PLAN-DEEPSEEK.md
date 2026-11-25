@@ -1,7 +1,7 @@
 # Plan for the coding agent: everything that is still missing in Penelope
 
 Written on 2026-11-25 from a talk with the owner and from a read of the code at commit `10bac25`
-(version 0.11.0, 165 tests, 51 files in `cli/src/`). The reader is a coding agent such as DeepSeek in OpenCode.
+(version 0.11.0, 181 tests, 51 files in `cli/src/`). The reader is a coding agent such as DeepSeek in OpenCode.
 Bug numbers such as B33 point into `docs/FEATURES-BUGS.md`. Block numbers point into `docs/CLUSTER-IDEAS.md`.
 
 ## How to work
@@ -53,14 +53,16 @@ Bug numbers such as B33 point into `docs/FEATURES-BUGS.md`. Block numbers point 
 
 These packages decide whether the idea can be shown. Do them in this order.
 
-### 1.1 One git worktree per cluster (B01, B33, block 2)
+### 1.1 One git worktree per cluster (B01, B33, block 2) — done
+- Result: `b57dacf`. Worktree and branch per writing cluster, cwd injection, merge only after PASS, conflict reported, kill removes both. Live solo cluster wrote `result.txt` in its worktree and the live tree received it after PASS.
 - State: a coding cluster writes into the live folder. Two clusters can overwrite each other.
 - Build: `new_cluster()` creates a worktree and a branch for every cluster that may write. `kill()` removes both.
   `run_cluster()` merges into the folder of the user only after the validator said `PASS`. A merge conflict is
   reported to the orchestrator and never solved silently.
 - Done when: a test starts two clusters that edit the same file, kills one, and the file holds only the other edit.
 
-### 1.2 The evidence field `V:` (block 1)
+### 1.2 The evidence field `V:` (block 1) — done
+- Result: `eedf32a`. `report()` uses `proof::render`; `validate()` fills V from real checks; `S:done` without V is refused. Live report: `S:done|P:2/2|T:16s|F:end|E:-|V:cat result.txt ... ok`.
 - State: `report()` in `clusters.rs` writes `S:|P:|T:|F:|E:`. `proof.rs` can parse and check `V:`, nothing uses it.
 - Build: `validate()` writes the command it ran and its result into `V:`. The orchestrator calls `proof::accept` and
   treats `S:done` without `V:` as a failure of the cluster.
@@ -143,7 +145,8 @@ These packages decide whether the idea can be shown. Do them in this order.
 
 ## Phase 3: MCP
 
-### 3.1 A client that lives between two calls (B05, B06, B19)
+### 3.1 A client that lives between two calls (B05, B06, B19) — done
+- Result: `d475172`, `a4fddc7`, PR #2. One process per server/session, env/cwd, per-tool rules, media files, timeouts. 9 mcpclient tests. Open: native claude still gets `mcp__SERVER__*` for a per-tool deny; the pool is per Penelope session.
 - State: `mcpclient.rs` starts one process per call, stdio only, text results only, no env and no cwd.
 - Build: keep one process per server and session. Add env, cwd, allow or deny per tool, and picture and resource
   content in results.
