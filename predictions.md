@@ -43,3 +43,13 @@ network. Expected: cluster +10 tasks (the five rename and five delete tasks), la
 
 Keep rule: hits rise by at least the noise threshold, EUR and time rise by at most 10 %, or hits stay equal and
 EUR or time fall by at least 15 %.
+
+## Round 2
+
+Hypothesis, written before the change: the validator takes 40.9 % of the cluster time and about 41 % of its euro.
+A profile with one worker and no retry cannot use a validator to correct anything: a FAIL is final. Skipping that
+validator and letting the worker's own check be the evidence keeps the hits and cuts EUR and time by about 40 %.
+Expected: cluster 50/50, about 0.50 EUR, about 535 s. The change is one profile flag (`single_model`) and one branch
+in `run_cluster_inner`; the eval profile sets the flag, the built-in profiles keep the validator.
+
+Keep rule: hits stay equal and EUR or time falls by at least 15 %, or hits rise by at least the noise threshold.

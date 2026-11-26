@@ -402,7 +402,7 @@ fn ensure_cluster_profile(ctx: &Ctx) -> Result<(), String> {
         "validator": {"name": "check", "role": "judge", "slot": "small-check",
                       "model": "weak",
                       "task": "Check the coder's evidence against the task. Answer PASS or FAIL with one reason."},
-        "max_models": 2, "max_depth": 1, "max_steps": 8, "retries": 0, "worktree": false
+        "max_models": 2, "max_depth": 1, "max_steps": 8, "retries": 0, "single_model": true, "worktree": false
     });
     fs::write(dir.join(format!("{}.json", CLUSTER_PROFILE)), serde_json::to_string_pretty(&profile).unwrap())
         .map_err(|e| format!("cannot write the eval cluster profile: {}", e))
@@ -881,12 +881,15 @@ mod tests {
         ctx.cfg["prices"] = json!({"test-model": [1.0, 2.0]});
         let parsed = parse_tasks(&file).unwrap();
         let result = run_setup(&ctx, file.to_str().unwrap(), "cluster", &parsed).unwrap();
-        assert_eq!((result.passed(), result.tokens()), (1, (50, 7)));
+        assert_eq!((result.passed(), result.tokens()), (1, (30, 3)));
         assert!(ctx.root.join("clusters/profiles").join(format!("{}.json", CLUSTER_PROFILE)).is_file());
+        let profile: Value = serde_json::from_str(&fs::read_to_string(ctx.root.join("clusters/profiles").join(format!("{}.json", CLUSTER_PROFILE))).unwrap()).unwrap();
+        assert_eq!(profile["single_model"], true);
         let seen = seen.lock().unwrap();
-        assert_eq!(seen.len(), 2);
+        assert_eq!(seen.len(), 1);
         let systems: Vec<String> = seen.iter().map(|s| s.body["messages"][0]["content"].as_str().unwrap_or("").to_string()).collect();
-        assert!(systems.iter().any(|s| s.contains("part of the Penelope cluster")) && systems.iter().any(|s| s.contains("validator part")), "{:?}", systems);
+        assert!(systems.iter().any(|s| s.contains("part of the Penelope cluster")), "{:?}", systems);
+        assert!(!systems.iter().any(|s| s.contains("validator part")), "the one-worker profile with no retry must skip the validator: {:?}", systems);
         let _ = fs::remove_dir_all(&d);
     }
 
