@@ -4722,6 +4722,19 @@ mod tests {
     }
 
     #[test]
+    fn advise_apply_refuses_a_cluster_file_that_cannot_carry_a_model() {
+        let (ctx, dir) = ctx();
+        fs::create_dir_all(profile_dir(&ctx)).unwrap();
+        fs::write(profile_dir(&ctx).join("clust.cluster"), "$clust(parts=[scout, validator], worktree=false)").unwrap();
+        fs::create_dir_all(base(&ctx)).unwrap();
+        fs::write(scores_path(&ctx), json!({"scout": {"clust": {"accepted": 1, "rejected": 4}}}).to_string()).unwrap();
+        let err = advise_apply(&ctx, Some("clust")).unwrap_err();
+        assert!(err.contains(".cluster file") && err.contains("cannot carry a model"), "{}", err);
+        assert!(!profile_dir(&ctx).join("clust.json").exists(), "the refused apply wrote no profile");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn part_notes_write_their_structural_links_into_the_markdown() {
         let (ctx, dir) = ctx();
         write_profile(&ctx, "linked", json!({
