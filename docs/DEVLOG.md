@@ -5,7 +5,7 @@
 **Scope:** one contract layer for every tool, models in every role, agents written with `$`, shared memory and an
 Obsidian brain, cost in euro, ScreenCodec and Penelope's own cursor, plugin install and import, a startup weave, and
 the commands and views that make these reachable.  
-**Tests:** 317 passed, 0 failed. No test needs a key. The live runs against OpenCode Go are written down below and used no test fixture.
+**Tests:** 334 passed, 0 failed. No test needs a key. The live runs against OpenCode Go are written down below and used no test fixture.
 
 ## DeepSeek phase 1 (branch `feat/phase1-worktree-evidence`)
 
@@ -302,7 +302,7 @@ Penelope writes for herself is a row that joins the same table at runtime.
 
 ### One table
 
-`cli/src/spec.rs` holds 46 built-in tools as `(name, description, schema)`. The schema is JSON text, parsed when the
+`cli/src/spec.rs` holds 54 built-in tools as `(name, description, schema)`. The schema is JSON text, parsed when the
 list is built. The file's test checks:
 
 - every name is unique, lower case, and has a description;
@@ -1195,7 +1195,7 @@ New CLI commands: `tools`, `tool list`, `tool call NAME JSON`, `route`, `agents`
 
 ## Tests and evidence
 
-`cargo test` in `cli/`: **317 passed, 0 failed**. The new tests, all without a real provider:
+`cargo test` in `cli/`: **334 passed, 0 failed**. The new tests, all without a real provider:
 
 | Test | What it proves |
 |---|---|
@@ -1345,7 +1345,7 @@ body.
 
 ```bash
 cd cli
-cargo test                     # 317 tests, no model, no key
+cargo test                     # 334 tests, no model, no key
 
 ./target/release/penelope tools
 ./target/release/penelope serve --print-config

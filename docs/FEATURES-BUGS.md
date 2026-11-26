@@ -9,12 +9,14 @@ live run on this PC backs it.
 | Area | Feature | Evidence |
 |---|---|---|
 | Normal use | TUI, plain chat, `ask`, sessions, `/quit` | TUI started in tmux 120×40; plain chat completed a turn; `ask` returned `ok` |
-| Contracts | 46 tools, one schema table, role gate | `spec` and `route` tests, every name reaches a handler |
+| Contracts | 54 tools, one schema table, role gate | `spec` and `route` tests, every name reaches a handler |
 | Agents | `$name(...)`, plans, roles, budgets, crew panel | parser, router and live one-step tests |
 | Clusters | orchestrator plan, profiles from parts, parallel clusters, `after`/parent order, one memory file, validator retry, reports, kill | 5 tests, live solo cluster with Claude + haiku validator |
 | Cluster base modules | `proof` (evidence `V:`), `notes` (linked notes and status), `advise` (part scores and suggestions) | 27 tests, not wired yet |
 | Tools | read/write/edit, undo, find/grep/tree, jobs, git, clipboard, HTTP, JSON | unit tests and real changes |
 | Test loop | `test_command` after a successful write/edit (last 20 lines), stop after `test_attempts` failures, per-turn reset | 10 tests with fake commands; cluster parts opt in per profile |
+| LSP | `lsp` diagnostics/type/definition through rust-analyzer, read-only | 8 tests, real rust-analyzer on a temp Cargo project |
+| ACP | `penelope acp` JSON-RPC for Zed/Neovim, text and tool updates, cancel | 6 piped-child tests, fake endpoint |
 | Search | 10 sources, parallel fanout, cache, dedupe/rank, health, reranker client, SearXNG pool | live 3 engines; `search health --probe` |
 | Search ops | `search probe [--daily]`, `search instances add URL`, `search fanout on|off` | 2 tests, live 3 engines, daily marker |
 | Read | HTML → Markdown, local PDF, reader API, warnings | live PDF (24 words), reader tests |
@@ -61,7 +63,6 @@ live run on this PC backs it.
 | B18 | low | A scanned PDF still needs OCR. | `scrape.rs` | reader API or OCR |
 | B19 | low | `mcp add` has no `env`/`cwd`/remote transport. | `plugins.rs` | 0.13 |
 | B20 | low | The website account/admin views are real for login only; downloads and full admin pages are still mock. | `Laertes/website` | Website 0.12 |
-| B22 | medium | No LSP tool; rust-analyzer is installed but not wired. | `which rust-analyzer` | `lsp` tool with diagnostics and types |
 | B23 | medium | No tree-sitter repo index; grep and tree are the only overview. | no tree-sitter dependency | Index files and symbols at start |
 | B24 | medium | The eval runner and read-only replay exist; no real 20-task run with three models has been made yet. | `eval.rs`, `docs/EVAL.md` | First real table in `docs/RUNS.md` |
 | B26 | medium | The Laertes provider is a placeholder without a plan key or a model list. | `providers.rs` | Add the plan endpoint and models |
@@ -82,14 +83,14 @@ live run on this PC backs it.
 - [ ] Linux, Windows and macOS CI run the same 189 tests; macOS is signed or labelled unsigned.
 - [ ] `pip-audit` and `cargo audit` run in CI; a known CVE fails the job.
 - [ ] A `deploy/` unit and README for the daily probe.
-- [ ] Test loop, LSP, tree-sitter index, eval/replay and an ACP server.
+- [ ] Tree-sitter repo index. Test loop, LSP, eval/replay and ACP are built.
 - [ ] A real Laertes plan provider with its model list.
 
 ## How to reproduce the baseline
 
 ```bash
 cd cli
-cargo test                       # 317 tests
+cargo test                       # 334 tests
 cargo build --release
 ./target/release/penelope doctor
 ./target/release/penelope work list

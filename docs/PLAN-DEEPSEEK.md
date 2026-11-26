@@ -1,7 +1,7 @@
 # Plan for the coding agent: everything that is still missing in Penelope
 
 Written on 2026-11-25 from a talk with the owner and from a read of the code at commit `10bac25`
-(version 0.11.0, 317 tests, 57 files in `cli/src/`). The reader is a coding agent such as DeepSeek in OpenCode.
+(version 0.11.0, 334 tests, 58 files in `cli/src/`). The reader is a coding agent such as DeepSeek in OpenCode.
 Bug numbers such as B33 point into `docs/FEATURES-BUGS.md`. Block numbers point into `docs/CLUSTER-IDEAS.md`.
 
 ## How to work

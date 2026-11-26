@@ -11,7 +11,7 @@ the contract layer, the eight roles, agents, the shared memory, the brain, the c
 
 | Part | State in 0.11.0 |
 |---|---|
-| Tools | 46 built-in tools and tools a project writes itself (`tool_new`). `spec.rs` is the only table; `route::dispatch` checks role and schema |
+| Tools | 54 built-in tools and tools a project writes itself (`tool_new`). `spec.rs` is the only table; `route::dispatch` checks role and schema |
 | Subagents | 8 roles: lead, scout, worker, judge, tool, condenser, filter, router. An agent written with `$name(...)` runs a plan of role calls; the lead can delegate with the tool `agent` |
 | Who decides | the role gate, the fixed `delegate`, `run_policy` and `edit_policy`; a router model may choose the plan, a privacy model may redact between models |
 | Learning | `learn`, `learn_tools`, consolidation of rules and complaints into the shared memory, and `mark_used` for paths that worked |

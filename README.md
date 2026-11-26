@@ -3,9 +3,9 @@
 <p align="center">
   <a href="cli/Cargo.toml"><img src="https://img.shields.io/badge/version-0.11.0-C4623E?style=flat-square&labelColor=1C1A17" alt="version 0.11.0"></a>
   <a href="cli/Cargo.toml"><img src="https://img.shields.io/badge/Rust_edition-2021-C4623E?style=flat-square&labelColor=1C1A17" alt="Rust edition 2021"></a>
-  <a href="#build"><img src="https://img.shields.io/badge/tests-317_passing-C4623E?style=flat-square&labelColor=1C1A17" alt="317 tests passing"></a>
+  <a href="#build"><img src="https://img.shields.io/badge/tests-334_passing-C4623E?style=flat-square&labelColor=1C1A17" alt="334 tests passing"></a>
   <a href="#status"><img src="https://img.shields.io/badge/platform-Linux-C4623E?style=flat-square&labelColor=1C1A17" alt="platform Linux"></a>
-  <a href="#parts"><img src="https://img.shields.io/badge/MCP_tools-46-C4623E?style=flat-square&labelColor=1C1A17" alt="46 MCP tools"></a>
+  <a href="#parts"><img src="https://img.shields.io/badge/MCP_tools-54-C4623E?style=flat-square&labelColor=1C1A17" alt="54 MCP tools"></a>
   <a href="docs/PROVIDERS.md"><img src="https://img.shields.io/badge/providers-35-C4623E?style=flat-square&labelColor=1C1A17" alt="35 providers"></a>
   <a href="#status"><img src="https://img.shields.io/badge/status-alpha-C4623E?style=flat-square&labelColor=1C1A17" alt="status alpha"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/licence-MIT-C4623E?style=flat-square&labelColor=1C1A17" alt="licence MIT"></a>
@@ -26,11 +26,11 @@ model, keeps notes in a memory map, and asks before every change to a file.
 | Date | 2026-11-25 |
 | Stage | alpha: one developer, one PC, no packaged release |
 | Repository | https://github.com/LaertesAI/Penelope, branch `main` |
-| Source | [`cli/`](cli), 57 Rust files, 31,226 lines |
-| Binary | `cli/target/release/penelope`, 7.7 MB (9,040,888 bytes), built from source |
+| Source | [`cli/`](cli), 58 Rust files, 32,387 lines |
+| Binary | `cli/target/release/penelope`, 7.7 MB (9,203,912 bytes), built from source |
 | Build | `cargo build --release`, profile `release` with `opt-level = 2` and `strip = true` |
 | Toolchain | rustc 1.99.1, edition 2021 |
-| Tests | 317 passed, 0 failed, no test needs a key. Live runs are listed in the devlog. |
+| Tests | 334 passed, 0 failed, no test needs a key. Live runs are listed in the devlog. |
 | Real runs | 29 with the `claude` command up to 0.10.0, live OpenCode Go runs on 2026-11-24, and three live cluster runs with Claude + haiku on 2026-11-25. See [`DEVLOG.md`](docs/DEVLOG.md). |
 | Platform | Linux. Background jobs read `/proc`. Windows and macOS are untried. |
 | Settings folder | `.penelope/` in the project, else `~/.penelope/` |
@@ -64,7 +64,7 @@ Needed: a Rust toolchain, Linux, and one model source (the `claude` command, an 
 ```bash
 cd cli
 cargo build --release
-cargo test                          # 317 tests, no model call
+cargo test                          # 334 tests, no model call
 ./target/release/penelope doctor    # one line per program and setting Penelope depends on
 ```
 
@@ -118,7 +118,7 @@ The two screens are separate. `/providers` connects a provider: arrows choose, `
 | Routed tool output | `run` executes a shell command. Output over 40 lines goes to the weaker model and comes back as at most 12 lines. The raw output stays on disk under a run id. | 0.1 | yes |
 | Web pages | `fetch` loads a page and the weaker model answers one question from it. The page text never enters the main model. | 0.1 | 1 page |
 | Memory map | Notes live at waypoints under `.penelope/memory/`. A lookup follows signposts one level at a time and never searches all notes. A finished walk is stored, so the same request jumps to its waypoint. | 0.1 | 3 runs |
-| MCP server | `penelope mcp` offers all 46 tools to any MCP client. | 0.1 | every turn |
+| MCP server | `penelope mcp` offers all 54 tools to any MCP client. | 0.1 | every turn |
 | MCP management | `penelope mcp add/remove/allow/deny/list/call` manages standalone servers next to the plugin servers. | 0.11 | 1 test, live echo server |
 | Local HTTP API | `penelope serve` answers `/search`, `/read`, `/embed`, `/rerank`, `/redact` and `/whoami` on loopback, with a bearer token for a remote bind and 120 requests per minute. | 0.11 | 6 tests, live curl |
 | Worktrees | `penelope work new/list/diff/apply/remove` keeps a task on its own branch; the live tree changes only on `apply`. | 0.12 | 1 test, live git worktree |
@@ -187,11 +187,17 @@ The two screens are separate. `/providers` connects a provider: arrows choose, `
 | Messages API | The kind `anthropic` talks to the Messages API with tool use. | 0.10 | test only |
 | Sessions for HTTP endpoints | The messages of a conversation lie in `.penelope/sessions/ID.history.json`, so `penelope chat --resume N` goes on with it. | 0.10 | 1 resumed session against a stand-in script, no real provider |
 
-The 46 tools: `run`, `run_detail`, `job_start`, `job_read`, `job_stop`, `fetch`, `web_search`, `read`, `write`, `edit`, `unzip`, `pr_create`,
-`undo`, `find`, `grep`, `tree`, `outline`, `ask_user`, `scout`, `scouts`, `plan`, `memory_go`, `memory_note`,
-`memory_forget`, `memory_map`, `skill`, `git_commit`, `check`, `tool_new`, `tool_list`, `screen`, `cursor`,
-`mcp_servers`, `mcp_call`, `session_search`, `http_request`, `json_query`, `git_diff`, `clipboard`, `agent`,
-`cluster_start`, `cluster_status`, `cluster_kill`, `computer`, `skill_new`, `research`.
+The 54 tools: `run`, `run_detail`, `job_start`, `job_read`, `job_stop`,
+`fetch`, `web_search`, `research`, `read`, `write`,
+`edit`, `unzip`, `pr_create`, `undo`, `find`,
+`grep`, `tree`, `outline`, `lsp`, `ask_user`,
+`scout`, `scouts`, `plan`, `memory_go`, `memory_note`,
+`memory_forget`, `memory_map`, `skill_new`, `skill`, `git_commit`,
+`check`, `tool_new`, `tool_list`, `mcp_servers`, `mcp_call`,
+`session_search`, `http_request`, `json_query`, `git_diff`, `clipboard`,
+`agent`, `cluster_start`, `cluster_spawn`, `cluster_ask`, `cluster_status`,
+`cluster_kill`, `cluster_dump`, `cluster_respawn`, `cluster_profile`, `computer`,
+`screen`, `cursor`, `brief_check`, `brief_put`.
 
 ## The full screen interface
 
@@ -331,7 +337,7 @@ penelope screen demo URL       # real ScreenCodec: open and read in one process
 penelope screen tools          # the tools ScreenCodec really offers
 penelope cursor X Y [--click]  # Penelope's own pointer
 penelope stats
-penelope mcp [--root DIR]         # serve the 46 tools to another MCP client
+penelope mcp [--root DIR]         # serve the 54 tools to another MCP client
 penelope mcp add NAME COMMAND [ARGS...] [--allow]
 penelope mcp remove NAME
 penelope mcp allow|deny NAME

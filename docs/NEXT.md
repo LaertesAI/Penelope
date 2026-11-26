@@ -10,7 +10,7 @@ working tree of 0.11.0; the rest is ordered by risk to the user, not by how inte
 
 | Part | State | Evidence |
 |---|---|---|
-| Contract layer for 46 tools | built | 2 tests, every name reaches a handler |
+| Contract layer for 54 tools | built | 2 tests, every name reaches a handler |
 | Clusters: orchestrator, parts, profiles, parallel and ordered runs, one memory file, validator | built | 5 tests, live solo cluster |
 | Login for Claude and 35 providers | built | live dummy key in the Secret Service |
 | Six modes incl. a refusing `safe` | built | 1 test, live `/mode safe` |
