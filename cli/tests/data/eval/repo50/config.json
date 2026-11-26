@@ -1,0 +1,7 @@
+{
+ "mode": "slow",
+ "debug": false,
+ "retries": 1,
+ "region": "us",
+ "owner": "none"
+}

@@ -82,6 +82,16 @@ fn run_bin(args: &[&str]) -> (bool, String, String) {
 }
 
 #[test]
+fn the_fifty_task_set_has_three_setups_and_fifty_checks() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/eval/tasks50.jsonl");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let tasks: Vec<Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(tasks.len(), 50);
+    assert!(tasks.iter().all(|t| t["check"].as_str().map(|c| !c.is_empty()).unwrap_or(false)));
+    assert!(tasks.iter().all(|t| t["setup"]["repo"] == "repo50"));
+}
+
+#[test]
 fn help_lists_eval_and_replay() {
     let (ok, out, err) = run_bin(&["--help"]);
     assert!(ok, "{} {}", out, err);
