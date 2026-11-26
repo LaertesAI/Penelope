@@ -367,6 +367,49 @@ fn transcript(app: &App, w: usize) -> Vec<Line<'static>> {
             }
         }
     }
+    if let Some(since) = app.busy.filter(|_| !app.streaming) {
+        if !out.is_empty() {
+            out.push(Line::default());
+        }
+        out.extend(loom(app, w, since.elapsed().as_secs()));
+    }
+    out
+}
+
+/// What the loom says while the model works, one phase every three seconds.
+const LOOM_PHASES: [&str; 4] = ["warping the loom", "casting the shuttle", "beating the weft", "reading the pattern"];
+
+/// The waiting block under the transcript: a shuttle runs along the weft between two posts, woven thread behind it,
+/// open warp ahead. Below it the tail of the model's thinking, when the provider streams it.
+pub fn loom(app: &App, w: usize, secs: u64) -> Vec<Line<'static>> {
+    let span = w.saturating_sub(34).clamp(8, 40);
+    let step = (app.tick / 2) as usize % (2 * span);
+    let (at, right) = if step < span { (step, true) } else { (2 * span - 1 - step, false) };
+    let mut weft: Vec<Span<'static>> = vec![Span::raw("  "), Span::styled("╪", fg(ASH))];
+    for i in 0..span {
+        let span_style = if i == at {
+            Span::styled("◆", bold(SEA))
+        } else if (right && i < at) || (!right && i > at) {
+            Span::styled("═", fg(CLAY))
+        } else {
+            Span::styled("┄", fg(DIM))
+        };
+        weft.push(span_style);
+    }
+    weft.push(Span::styled("╪", fg(ASH)));
+    let working = app.mood() == Mood::Working;
+    let phase = if working { "a tool runs" } else { LOOM_PHASES[(secs / 3) as usize % LOOM_PHASES.len()] };
+    weft.push(Span::styled(format!("  {} · {}s", phase, secs), fg(ASH)));
+    let mut out = vec![Line::from(weft)];
+    let thought: String = app.thinking.split_whitespace().collect::<Vec<_>>().join(" ");
+    if !thought.is_empty() {
+        let rows = wrap_plain(&thought, w.saturating_sub(8).max(10));
+        let first = rows.len().saturating_sub(2);
+        for (i, row) in rows.into_iter().skip(first).enumerate() {
+            let lead = if i == 0 { "    ↳ " } else { "      " };
+            out.push(Line::from(vec![Span::styled(lead, fg(DIM)), Span::styled(row, fg(DIM).add_modifier(Modifier::ITALIC))]));
+        }
+    }
     out
 }
 
@@ -837,7 +880,8 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
             }
         }
         Overlay::Models { sel, target } => {
-            let choices = app.model_choices(target);
+            let rows = app.model_rows(target);
+            let choices: Vec<String> = rows.iter().map(|(_, m)| m.clone()).collect();
             let inner = dialog(f, area, &format!("Models · {}", target_label(target)), 84, choices.len().min(20) as u16 + 10);
             let current = target_value(app, target)["model"].as_str().unwrap_or("?").to_string();
             let current_levels = app.model_efforts(target, &current);
@@ -848,19 +892,22 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
                 put(f, inner, inner.x, inner.y, &clip(&app.model_source, inner.width as usize), on(DIM, RAISED));
             }
             let first = if choices.len() > 20 { sel.saturating_sub(19) } else { 0 };
-            for (i, name) in choices.iter().enumerate().skip(first).take(20) {
+            for (i, (row_provider, name)) in rows.iter().enumerate().skip(first).take(20) {
                 let y = inner.y + 2 + (i - first) as u16;
-                let chosen = i == (*sel).min(choices.len().saturating_sub(1));
+                let chosen = i == (*sel).min(rows.len().saturating_sub(1));
                 let bg = if chosen { NIGHT } else { RAISED };
+                let is_current = *name == current && *row_provider == provider;
                 fill(f, Rect::new(inner.x.saturating_sub(1), y, inner.width + 2, 1), bg);
-                put(f, inner, inner.x, y, if *name == current { "●" } else { "○" }, on(if *name == current { SEA } else { DIM }, bg));
-                put(f, inner, inner.x + 2, y, &clip(name, 46), on(PAPER, bg));
-                let effort = app.model_efforts(target, name).join(" ");
-                put(f, inner, inner.x + 50, y, &clip(if effort.is_empty() { "no effort" } else { &effort }, 28), on(DIM, bg));
+                put(f, inner, inner.x, y, if is_current { "●" } else { "○" }, on(if is_current { SEA } else { DIM }, bg));
+                put(f, inner, inner.x + 2, y, &clip(name, 34), on(PAPER, bg));
+                let shown = if row_provider == "claude-cli" { "Claude subscription".to_string() } else { row_provider.clone() };
+                put(f, inner, inner.x + 37, y, &clip(&shown, 20), on(ASH, bg));
+                let effort = app.provider_efforts(row_provider, name).join(" ");
+                put(f, inner, inner.x + 59, y, &clip(if effort.is_empty() { "no effort" } else { &effort }, 24), on(DIM, bg));
             }
-            let selected = choices.get(*sel).cloned().unwrap_or_default();
-            let selected_label = app.model_cache.get(&provider).and_then(|list| list.iter().find(|m| m.id == selected)).map(|m| m.label.clone())
-                .or_else(|| crate::providers::models(&provider).iter().find(|m| m.id == selected).map(|m| m.label.to_string()))
+            let (selected_provider, selected) = rows.get(*sel).cloned().unwrap_or_default();
+            let selected_label = app.model_cache.get(&selected_provider).and_then(|list| list.iter().find(|m| m.id == selected)).map(|m| m.label.clone())
+                .or_else(|| crate::providers::models(&selected_provider).iter().find(|m| m.id == selected).map(|m| m.label.to_string()))
                 .unwrap_or_else(|| selected.clone());
             let note = format!("{} · current {} / effort {}", selected_label, current, current_effort);
             put(f, inner, inner.x, inner.bottom().saturating_sub(2), &clip(&note, inner.width as usize), on(CLAY, RAISED));

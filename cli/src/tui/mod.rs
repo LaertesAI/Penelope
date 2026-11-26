@@ -204,6 +204,8 @@ pub struct App {
     pub learning: bool,
     /// True while the last transcript item is a reply that still grows.
     streaming: bool,
+    /// The tail of the thinking the provider streamed in the current step, for the loom under the transcript.
+    pub thinking: String,
     /// Lines between the lower edge of the view and the end of the transcript.
     pub scroll: usize,
     pub page: usize,
@@ -317,7 +319,7 @@ impl App {
         let history = history[history.len().saturating_sub(200)..].to_vec();
         let mut app = App {
             ctx, items: Vec::new(), input: Vec::new(), cursor: 0, history, hist_at: None, overlay: Overlay::None, slash_sel: 0,
-            busy: None, learning: false, streaming: false, scroll: 0, page: 10, sidebar: true, tick: 0, last_key: Instant::now(), flash: None, toast: None,
+            busy: None, learning: false, streaming: false, thinking: String::new(), scroll: 0, page: 10, sidebar: true, tick: 0, last_key: Instant::now(), flash: None, toast: None,
             palette: art::Palette::DEFAULT, layout: mods::Layout::Side, keys: mods::Keys::default(), mod_name: None, mod_restore: None, mod_startup: None,
             chat: Some(Chat::new()), cancel: Arc::new(AtomicBool::new(false)), pid: Arc::new(AtomicU32::new(0)), tx, rx,
             tokens: (0, 0), turns: 0, tool_calls: 0, trail: Vec::new(), learned: Vec::new(), side: Side::default(),
@@ -563,27 +565,84 @@ impl App {
         crate::providers::efforts(&provider, model).iter().map(|e| e.to_string()).collect()
     }
 
-    /// Shows the cached list at once and asks the provider in the background for a fresh one.
+    /// The providers the picker lists, the target's own first. A provider counts when it has a key, a stored login or
+    /// the Claude command; a local server counts once it answered with a model list.
+    pub fn connected_providers(&self, target: &str) -> Vec<String> {
+        let current = self.provider_name(target);
+        let mut out = vec![current.clone()];
+        for p in crate::providers::TABLE {
+            if p.name == current { continue; }
+            let local = p.key_optional && p.kind == "openai";
+            let answered = self.model_cache.get(p.name).map(|l| !l.is_empty()).unwrap_or(false);
+            if crate::providers::connected(p) || (local && answered) {
+                out.push(p.name.to_string());
+            }
+        }
+        out
+    }
+
+    /// Every model of every connected provider as (provider, model), the target's provider first.
+    pub fn model_rows(&self, target: &str) -> Vec<(String, String)> {
+        let current = self.provider_name(target);
+        let mut out: Vec<(String, String)> = self.model_choices(target).into_iter().map(|m| (current.clone(), m)).collect();
+        for provider in self.connected_providers(target).into_iter().skip(1) {
+            let names: Vec<String> = match self.model_cache.get(&provider) {
+                Some(list) => list.iter().map(|m| m.id.clone()).collect(),
+                None => crate::providers::static_models(&provider).into_iter().map(|m| m.id).collect(),
+            };
+            for name in names {
+                if !out.iter().any(|(p, m)| *p == provider && *m == name) {
+                    out.push((provider.clone(), name));
+                }
+            }
+        }
+        out
+    }
+
+    /// The effort levels of one model at one provider, the provider's answer before the static rules.
+    pub fn provider_efforts(&self, provider: &str, model: &str) -> Vec<String> {
+        if let Some(found) = self.model_cache.get(provider).and_then(|list| list.iter().find(|m| m.id == model)) {
+            return found.efforts.clone();
+        }
+        crate::providers::efforts(provider, model).iter().map(|e| e.to_string()).collect()
+    }
+
+    /// Shows the cached lists at once and asks every connected provider and every local server in the background.
     fn load_models(&mut self, target: &str) {
-        let provider = self.provider_name(target);
-        if matches!(provider.as_str(), "claude-cli" | "laertes") {
-            self.model_source = if provider == "claude-cli" { "built-in Claude aliases".to_string() } else { "the family is in training".to_string() };
-            return;
+        let current = self.provider_name(target);
+        let mut asked = Vec::new();
+        for p in crate::providers::TABLE {
+            let local = p.key_optional && p.kind == "openai";
+            if p.name != current && !crate::providers::connected(p) && !local { continue; }
+            if matches!(p.kind, "claude-cli" | "laertes") { continue; }
+            let cached = crate::providers::cached_models(&self.ctx, p.name);
+            if !cached.is_empty() && (!local || p.name == current) {
+                self.model_cache.insert(p.name.to_string(), cached);
+            }
+            if !self.models_fetching.insert(p.name.to_string()) { continue; }
+            let model = if p.name == current { self.model_value(target).clone() }
+                else { serde_json::json!({"kind": p.kind, "base_url": p.base, "api_key_env": p.key_env}) };
+            let (ctx, tx, provider) = (self.ctx.clone(), self.tx.clone(), p.name.to_string());
+            asked.push(provider.clone());
+            std::thread::spawn(move || {
+                let result = crate::providers::fetch_models(&ctx, &provider, &model);
+                let _ = tx.send(Msg::Models { provider, result });
+            });
         }
-        let cached = crate::providers::cached_models(&self.ctx, &provider);
-        if !cached.is_empty() {
-            self.model_source = format!("{} cached models · {} · refreshing", cached.len(), provider);
-            self.model_cache.insert(provider.clone(), cached);
-        } else {
-            self.model_source = format!("asking {} for its models", provider);
-        }
-        if !self.models_fetching.insert(provider.clone()) { return; }
-        let model = self.model_value(target).clone();
-        let (ctx, tx) = (self.ctx.clone(), self.tx.clone());
-        std::thread::spawn(move || {
-            let result = crate::providers::fetch_models(&ctx, &provider, &model);
-            let _ = tx.send(Msg::Models { provider, result });
-        });
+        self.model_source = self.models_summary(target);
+        if !asked.is_empty() { self.model_source.push_str(" · refreshing"); }
+    }
+
+    /// One line above the list: how many models from how many providers, and how many providers still lack a key.
+    fn models_summary(&self, target: &str) -> String {
+        let providers = self.connected_providers(target);
+        let rows = self.model_rows(target).len();
+        let missing = crate::providers::TABLE.iter().filter(|p| !p.key_optional && !crate::providers::connected(p)).count();
+        let names: Vec<String> = providers.iter().map(|p| match p.as_str() {
+            "claude-cli" => "Claude subscription".to_string(),
+            other => crate::providers::get(other).map(|x| x.label.to_string()).unwrap_or_else(|| other.to_string()),
+        }).collect();
+        format!("{} models from {} · {} providers without a key: /providers", rows, names.join(", "), missing)
     }
 
     fn model_value(&self, target: &str) -> &serde_json::Value {
@@ -610,7 +669,7 @@ impl App {
 
     fn cycle_effort(&mut self, target: &str) {
         let (_sel, model) = match &self.overlay {
-            Overlay::Models { sel, .. } => (*sel, self.model_choices(target).get(*sel).cloned()),
+            Overlay::Models { sel, .. } => (*sel, self.model_rows(target).get(*sel).filter(|(p, _)| *p == self.provider_name(target)).map(|(_, m)| m.clone())),
             _ => return,
         };
         let Some(model) = model else { return };
@@ -814,6 +873,7 @@ impl App {
         self.cancel = chat.cancel.clone();
         self.pid = chat.pid.clone();
         self.busy = Some(Instant::now());
+        self.thinking.clear();
         self.items.push(Item::User(text.clone()));
         self.scroll = 0;
         let mut ctx = self.ctx.clone();
@@ -899,7 +959,13 @@ impl App {
                     self.trail = trail;
                     self.note("◆", "memory", way, art::SEA);
                 }
+                Msg::Turn(TurnEvent::Thinking(t)) => {
+                    self.thinking.push_str(&t);
+                    let excess = self.thinking.chars().count().saturating_sub(600);
+                    if excess > 0 { self.thinking = self.thinking.chars().skip(excess).collect(); }
+                }
                 Msg::Turn(TurnEvent::Delta(t)) => {
+                    self.thinking.clear();
                     match self.items.last_mut() {
                         Some(Item::Reply(text)) if self.streaming => text.push_str(&t),
                         _ => self.items.push(Item::Reply(t.trim_start().to_string())),
@@ -908,6 +974,7 @@ impl App {
                     self.scroll = 0;
                 }
                 Msg::Turn(TurnEvent::Text(t)) => {
+                    self.thinking.clear();
                     match self.items.last_mut() {
                         Some(Item::Reply(text)) if self.streaming => *text = t,        // the finished block replaces its pieces
                         _ => self.items.push(Item::Reply(t)),
@@ -960,18 +1027,20 @@ impl App {
                     self.models_fetching.remove(&provider);
                     match result {
                         Ok(list) => {
-                            let count = list.len();
                             self.model_cache.insert(provider.clone(), list);
-                            self.model_source = format!("{} models from {}", count, provider);
                             if let Overlay::Models { sel: _, target } = &self.overlay {
-                                let last = self.model_choices(target).len().saturating_sub(1);
+                                let target = target.clone();
+                                self.model_source = self.models_summary(&target);
+                                let last = self.model_rows(&target).len().saturating_sub(1);
                                 if let Overlay::Models { sel, .. } = &mut self.overlay { *sel = (*sel).min(last); }
                             }
                         }
                         Err(e) => {
-                            let cached = self.model_cache.get(&provider).map(|l| l.len()).unwrap_or(0);
-                            self.model_source = if cached > 0 { format!("{} cached models · provider unreachable: {}", cached, e) } else { format!("built-in names · {}", e) };
-                            self.toast(format!("the {} model list is unavailable: {}", provider, e));
+                            // A local server that is not running is normal; only the target's own provider is reported.
+                            let own = match &self.overlay { Overlay::Models { target, .. } => self.provider_name(target) == provider, _ => false };
+                            if own {
+                                self.toast(format!("the {} model list is unavailable: {}", provider, e));
+                            }
                         }
                     }
                 }
@@ -1148,7 +1217,7 @@ impl App {
                 let target = "main".to_string();
                 self.load_models(&target);
                 let current = self.model_value(&target)["model"].as_str().unwrap_or("").to_string();
-                let at = self.model_choices(&target).iter().position(|m| *m == current).unwrap_or(0);
+                let at = self.model_rows(&target).iter().position(|(_, m)| *m == current).unwrap_or(0);
                 self.overlay = Overlay::Models { sel: at, target };
             }
             "/mode" if !rest.is_empty() => {
@@ -2030,7 +2099,7 @@ impl App {
             },
         }
         if let Overlay::Models { sel: _, target } = &self.overlay {
-            let last = self.model_choices(target).len().saturating_sub(1);
+            let last = self.model_rows(target).len().saturating_sub(1);
             if let Overlay::Models { sel, .. } = &mut self.overlay {
                 *sel = (*sel).min(last);
             }
@@ -2048,7 +2117,7 @@ impl App {
         if let Some(target) = models_open {
             self.load_models(&target);
             let current = self.model_value(&target)["model"].as_str().unwrap_or("").to_string();
-            let at = self.model_choices(&target).iter().position(|m| *m == current).unwrap_or(0);
+            let at = self.model_rows(&target).iter().position(|(_, m)| *m == current).unwrap_or(0);
             self.overlay = Overlay::Models { sel: at, target };
             close = false;
         }
@@ -2185,7 +2254,10 @@ impl App {
             close = false;
         }
         if let Some((sel, target)) = pick {
-            if let Some(model) = self.model_choices(&target).get(sel).cloned() {
+            if let Some((provider, model)) = self.model_rows(&target).get(sel).cloned() {
+                if provider != self.provider_name(&target) {
+                    self.select_provider(&provider, &target);
+                }
                 self.set_model(&target, &model);
             }
             close = true;
@@ -2534,6 +2606,35 @@ mod tests {
     }
 
     #[test]
+    fn the_loom_runs_while_the_model_thinks_and_shows_its_thinking() {
+        let mut a = app();
+        a.items.push(Item::User("why".into()));
+        a.busy = Some(Instant::now());
+        a.tx.send(Msg::Turn(TurnEvent::Thinking("The user asks why. ".into()))).unwrap();
+        a.tx.send(Msg::Turn(TurnEvent::Thinking("Check the  notes first.".into()))).unwrap();
+        a.drain();
+        assert_eq!(a.thinking, "The user asks why. Check the  notes first.");
+        let text = screen(&mut a, 120, 40);
+        assert!(text.contains("◆") && text.contains("╪") && text.contains("warping the loom"), "{}", text);
+        assert!(text.contains("The user asks why. Check the notes first."), "{}", text);
+        a.tx.send(Msg::Turn(TurnEvent::Delta("Because".into()))).unwrap();
+        a.drain();
+        assert!(a.thinking.is_empty());
+        let text = screen(&mut a, 120, 40);
+        assert!(!text.contains("warping the loom"), "the loom hides while the answer streams: {}", text);
+    }
+
+    #[test]
+    fn the_shuttle_moves_along_the_weft() {
+        let mut a = app();
+        let shuttle = |a: &App| crate::tui::view::loom(a, 80, 0)[0].spans.iter().position(|s| s.content == "◆").unwrap();
+        a.tick = 0;
+        let first = shuttle(&a);
+        a.tick = 10;
+        assert_ne!(first, shuttle(&a));
+    }
+
+    #[test]
     fn home_shows_the_wordmark() {
         let mut a = app();
         let text = screen(&mut a, 120, 40);
@@ -2786,6 +2887,36 @@ mod tests {
         a.overlay = Overlay::Models { sel: 0, target: "main".into() };
         press(&mut a, KeyCode::Char('e'));
         assert_eq!(a.ctx.cfg["main"]["effort"], serde_json::json!("high"));
+    }
+
+    #[test]
+    fn the_picker_lists_a_local_server_that_answered_and_enter_switches_to_it() {
+        let mut a = app();
+        a.ctx.cfg["main"] = serde_json::json!({"kind": "openai", "base_url": "https://opencode.ai/zen/go/v1",
+                                               "model": "deepseek-v4.1-flash", "effort": "low"});
+        a.model_cache.insert("opencode".to_string(), vec![
+            crate::providers::ModelInfo { id: "deepseek-v4.1-flash".into(), label: "DeepSeek".into(), efforts: vec!["low".into()] },
+        ]);
+        a.model_cache.insert("ollama".to_string(), vec![
+            crate::providers::ModelInfo { id: "qwen3:1.7b".into(), label: "qwen3:1.7b".into(), efforts: vec![] },
+        ]);
+        let rows = a.model_rows("main");
+        assert_eq!(rows.first(), Some(&("opencode".to_string(), "deepseek-v4.1-flash".to_string())), "{:?}", rows);
+        let at = rows.iter().position(|(p, m)| p == "ollama" && m == "qwen3:1.7b").expect("the local server is listed");
+        assert!(a.connected_providers("main").iter().any(|p| p == "ollama"));
+        a.overlay = Overlay::Models { sel: at, target: "main".into() };
+        press(&mut a, KeyCode::Enter);
+        assert_eq!(a.ctx.cfg["main"]["base_url"], serde_json::json!("http://localhost:11434/v1"));
+        assert_eq!(a.ctx.cfg["main"]["model"], serde_json::json!("qwen3:1.7b"));
+    }
+
+    #[test]
+    fn a_provider_without_a_key_is_not_listed() {
+        let mut a = app();
+        a.ctx.cfg["main"] = serde_json::json!({"kind": "openai", "base_url": "https://opencode.ai/zen/go/v1", "model": "deepseek-v4.1-flash"});
+        let providers = a.connected_providers("main");
+        assert_eq!(providers.first().map(String::as_str), Some("opencode"));
+        assert!(!providers.iter().any(|p| p == "laertes" || p == "ollama"), "{:?}", providers);
     }
 
     #[test]
