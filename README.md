@@ -349,6 +349,8 @@ penelope doctor
   "weak": {"kind": "claude-cli", "model": "haiku"},
   "run_policy": "safe",
   "edit_policy": "ask",
+  "test_command": "",
+  "test_attempts": 3,
   "delegate": "auto",
   "search": {"kind": "auto", "fanout": true, "cache": true, "cache_ttl": 3600, "limit": 8, "language": "en", "safe": true,
              "jina": false, "wikipedia": false, "api_url": "", "urls": [],
@@ -378,6 +380,8 @@ penelope doctor
 | `main`, `weak`, `scout` | `kind` is `claude-cli`, `openai` or `anthropic` | The HTTP kinds take `base_url`, `model`, `api_key_env` and optionally `effort` (`low`, `medium`, `high`, `max`, or an OpenCode level). `anthropic` also takes `max_tokens` (default 16000) and `api_version`. Without `scout` the scout uses `weak`. Search stays client-side by default; the local server is in [`docs/SERVER.md`](docs/SERVER.md) and the remaining APIs are in [`docs/SERVER-APIS.md`](docs/SERVER-APIS.md). |
 | `run_policy` | `safe`, `all` | `safe` runs read-only and build commands without shell operators. Every other command asks in the interface and is refused outside it. `all` runs every command. |
 | `edit_policy` | `ask`, `all` | `ask` asks before every change to a file. `all` changes files without a question. |
+| `test_command` | shell command | Empty means the test loop is off. After a successful `write` or `edit`, Penelope runs the command in the project or the call's `cwd` and adds its last 20 lines to the tool result. It is a normal shell command, not another tool call. |
+| `test_attempts` | number, default 3 | Failed test runs in one turn before the loop stops. The next tool result says `TEST LOOP STOPPED`; no further tool runs in that turn and the main model answers with the failure. A new user turn starts the count again. A cluster part uses its profile's `test_command` only, so the loop stays off there by default. |
 | `delegate` | `auto`, `web`, `offer`, `off` | `auto` sends every search to the scout, the main model has no search tools. `web` sends web research only. `offer` lets the main model choose. `off` has no scout. |
 | `search` | object | `kind` is `auto`, `startpage`, `duckduckgo`, `bing`, `searxng`, `brave`, `tavily`, `exa`, `firecrawl`, `wikipedia`, `api` or `off`. `fanout` asks all configured engines and merges; `cache` and `cache_ttl` keep a query; `limit`, `language`, `safe`; `jina` sends a JavaScript page to `r.jina.ai`; `wikipedia` adds it to the normal fanout. `api_url` is a server search API (`POST` with `{query, language, country, safe, recency, limit, page}`; `server_api_key_env` names its bearer key); `urls` lists several SearXNG instances; `rerank` is `{enabled, url, api_key_env}` and reorders the top hits with `{query, documents, top_k}`. Key variables: `api_key_env` (Brave), `tavily_api_key_env`, `exa_api_key_env`, `firecrawl_api_key_env`, `PENELOPE_SEARCH_API_KEY`, `RERANK_API_KEY`; the reader row names `PENELOPE_READER_API_KEY`. `penelope login tavily|exa|firecrawl|brave|search|rerank|reader` stores a service key. `penelope search health [--probe]` shows or measures each engine. |
 | `reader` | `enabled`, `url`, `api_key_env` | The P1 reader endpoint. Empty `url` means no server reader; static HTML and local PDF still work. `POST {url, max_chars, formats:["markdown"], wait_ms}` must answer `{title, author, published, markdown, links, final_url, content_type}`. A private, loopback or unresolved target is refused before the request. |
