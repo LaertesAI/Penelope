@@ -159,7 +159,7 @@ The two screens are separate. `/providers` connects a provider: arrows choose, `
 | ScreenCodec and cursor | `screen` with the real tools and ids, `desktop`, `cursor` through hyprctl, xdotool, ydotool, the uinput helper, PowerShell or macOS Quartz. | 0.11 | 122 lines read, live desktop click 0→1→2, native pointer moved |
 | Plugin MCP tools | `mcp_servers` and `mcp_call` behind the plugin allow gate, for HTTP models too. | 0.11 | 1 test |
 | Plugin install and import | `/plugins install LINK` clones, unpacks or registers a plugin; the first start takes over the plugins of other harnesses. A ZIP is unpacked into the plugin home first. | 0.11 | 5 tests, live ZIP |
-| Plugin administration | `plugin update NAME` pulls a git plugin or re-reads a local/ZIP one; `plugin remove NAME` takes it out of the registry and leaves the folder. | 0.11 | 1 test, live update/remove |
+| Plugin administration | `plugin update NAME` clones the new commit of a git plugin into a quarantine folder, checks it there and switches the registry only after a clean check; a local/ZIP plugin is re-read. The registry pins every git plugin to its checked commit. `plugin remove NAME` takes it out of the registry and leaves the folder. | 0.11 | 3 tests, live update/remove |
 | More tools | `session_search`, `http_request`, `json_query`, `git_diff`, `clipboard`, `agent`. | 0.11 | 1 test |
 | Logo and keys | The woven mark above the wordmark, a short weaving animation on the home screen, F5 for a new session, F6 twice for delete, Delete in the session list. | 0.11 / 0.12 | TUI tests, tmux capture |
 | Web search, ranked | 10 sources, cache, canonical URLs, diversity, scores, rate-limit fallback. A server search API and a reranker follow the same JSON contract. | 0.11 | 9 tests, live 8 results, live health rows |
@@ -311,7 +311,7 @@ penelope jobs                     # background jobs of this folder
 penelope jobs read N              # new output of job N
 penelope jobs stop N              # end job N and every process it started
 penelope plugin add ~/path/to/plugin
-penelope plugin update NAME   # pull git, or re-read a local or ZIP plugin
+penelope plugin update NAME   # check a new git commit in quarantine, or re-read a local or ZIP plugin
 penelope plugin remove NAME   # take it out of the registry; the folder stays
 penelope plugin install LINK   # clone a git plugin, or unpack a .zip, and register it
 penelope plugin import         # take over the plugins of other harnesses once

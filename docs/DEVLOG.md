@@ -1649,3 +1649,45 @@ Open:
   deleted by hand.
 - The built-in cluster view reads all cluster state files under `.penelope/clusters`; a very large history is read on
   every opening. There is no cache.
+
+## Plugin update in quarantine (branch `fix/plugin-update-quarantine`, 2026-11-26)
+
+Paper 22 found that `plugin update NAME` and a second `plugin install LINK` ran `git pull --ff-only` inside the
+registered plugin folder. A refused check left the pulled files there, and the registry still pointed at the folder,
+so the refused code ran on the next start.
+
+- **Pin.** `register` writes `repo` and `commit` (the full hash of `HEAD`) for every plugin in a git folder or in a
+  marketplace repository. Every read path for skills, commands and MCP servers goes through `active()`, which drops a
+  plugin whose folder no longer holds that commit. `plugin list` shows the commit and the line `blocked: its folder
+  moved from the checked commit ...`. `HEAD` is read from the files under `.git`, with `git rev-parse` as fallback.
+- **Quarantine.** `update` clones the upstream branch of `origin` with `--depth 1` into
+  `PLUGIN_HOME/.quarantine/NAME-STAMP` and checks it there. A refusal deletes the quarantine clone; the registry keeps
+  the old commit and the old folder is not touched. A clean commit moves to `PLUGIN_HOME/.versions/NAME/COMMIT`, the
+  registry switches to it, and the old clone is deleted when it lies inside the plugin home and no plugin points into
+  it. A second `install LINK` on an existing clone calls `update`; nothing is pulled in place any more. An update that
+  renames the plugin is refused.
+- **Text check.** `check` also reads every `SKILL.md`, the command files, `.mcp.json` and the `mcpServers` of
+  `plugin.json`. Hidden Unicode (tag characters, bidirectional controls, zero-width characters, joiners and variation
+  selectors after ASCII) refuses the plugin with `file:line` and the line shown with `<U+XXXX>`. An MCP server command
+  with a malware pattern refuses it. Lines that address the model (ignore earlier instructions, hide from the person,
+  SSH keys, HTML comments) are listed as `review:` lines without a refusal. The report lists each skill, command and
+  MCP server with its command line and environment names.
+
+Measured: `cd cli && cargo test` → 293 unit tests + 11 integration tests, 0 failed (2026-11-26). New tests: a refused
+update (a `curl | sh` commit) leaves the registry, `HEAD` and the files of the old clone at the checked commit and an
+empty quarantine, and the next clean commit switches the registry to `.versions/`; the registry stores the 40-digit
+commit, and a commit made in the plugin folder outside Penelope hides its skills and MCP servers until the folder is
+back; a `SKILL.md` with Unicode tag characters is refused at `SKILL.md:5`, while emoji with joiners pass; the report
+lists a skill and an MCP server with its environment names, flags an HTML comment that addresses the model, and refuses
+an MCP server command that pipes a download into a shell.
+
+Open:
+
+- No live update against github.com was run; the tests use local `file://` repositories.
+- A force-push upstream is accepted. The quarantine clone has depth 1, so it cannot test that the new commit descends
+  from the old one.
+- `allow` survives an update. An update that adds an MCP server to an allowed plugin gets its tools allowed.
+- A plugin folder without git has no pin; its files can change between two starts unchecked.
+- The pin compares `HEAD` only. An edit to the files of a pinned folder without a commit is not detected.
+- A registry written before this change has no `commit`; those plugins run unpinned until their next `add` or `update`.
+- The plugins screen of the TUI drops a blocked plugin; only `plugin list` names it with the reason.
