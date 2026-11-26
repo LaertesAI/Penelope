@@ -123,6 +123,12 @@ fn call_raw_inner(ctx: &Ctx, name: &str, a: &Value) -> Result<String, String> {
         "scout" => Ok(crate::scout::run(ctx, &s("task"), &s("cwd"))),
         "tree" => Ok(crate::files::tree(&s("dir"), n("depth"), &s("cwd"))),
         "outline" => Ok(crate::files::outline(ctx, &s("path"), &s("cwd"))),
+        "lsp" => {
+            // The eval task folder is the default cwd, as for every file tool.
+            let mut args = a.clone();
+            args["cwd"] = json!(s("cwd"));
+            crate::lsp::tool(ctx, &args).map(|text| tools::guard(ctx, &text))
+        }
         "ask_user" => Ok(tools::ask_user(&s("question"), &a["options"])),
         "plan" => Ok(tools::plan(ctx, &a["items"])),
         "run_detail" => Ok(tools::run_detail(ctx, a["id"].as_u64().unwrap_or(0), &s("pattern"))),
