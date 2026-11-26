@@ -54,6 +54,7 @@ mod startup;
 mod tools;
 mod tui;
 mod update;
+mod vet;
 mod weak;
 mod work;
 

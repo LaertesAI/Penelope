@@ -1759,3 +1759,42 @@ Measured: same `cargo test` run, 315 tests, 0 failed. New tests:
 
 Open: the score table has no reset command, and a model label from a full model object can be suggested in text but
 is only written back when it maps to a setting name (`main`, `weak` or a role).
+
+## Prose rules for skills (branch `feat/skill-md-scan`)
+
+### `vet.rs`: the install check reads `SKILL.md`
+
+Research Paper 44 counts 632 flaws in 157 confirmed malicious skills: 532 sit in `SKILL.md`, 84.2 %. The check
+before this branch read only scripts and `package.json`. `plugins::check` now also runs `vet::scan`, so
+`penelope plugin install` and `/app install` read the prose the model loads as instructions: any `SKILL.md`, and the
+`.md` files directly in `skills/`, `commands/` and `agents/`. A README and a docs folder stay unread.
+
+Blocking rules, each with file and line in the refusal:
+- invisible Unicode in any small text file: tag characters, supplementary variation selectors, bidi controls, and two
+  or more zero-width characters in one line (GlassWorm hid code in variation selectors);
+- a download run in a shell from a raw IP, a paste host, a short link, plain HTTP or a variable; base64 into a shell,
+  `rm -rf /` and a reverse shell from the old script rules, now also in prose;
+- a password-protected archive (`unzip -P`, `7z ... -p`, "password" next to an archive);
+- a download from a raw public IP address;
+- a secret path (`~/.ssh/`, `.env`, `.aws/credentials`, `mcp.json`, ...) and a network send in the same line or code
+  block;
+- an override phrase ("ignore previous instructions", "do not tell the user") inside an HTML comment.
+
+Warnings, listed in the report and never blocking: an installer run from a named HTTPS host (`curl -fsSL
+https://unity.com/install.sh | bash`), an override phrase in plain text, a request to paste into a terminal, a paste
+host, one zero-width character, and a secret path and a send far apart in the same skill. A line with "never", "do
+not" or "avoid" is a warning about a command, not an instruction. A backtick outside a code block is inline code.
+
+Measured: `cargo test` 345 passed, 1 ignored (the corpus harness). Corpus: 566 distinct harmless `SKILL.md` folders
+from the local Claude plugin caches, `PENELOPE_VET_CORPUS=list.txt cargo test vet_corpus -- --ignored --nocapture`:
+0 blocked, 8 warned (1.4 %). The first run blocked 7: 6 Persian lines with a zero-width non-joiner and 1 vendor
+installer from unity.com. Both rules were narrowed.
+
+Coverage of the 17 incidents in Paper 44: the prose rules reach A1 (download from the prerequisites, locked ZIP),
+A2 (injection and downloads in Markdown), A3 (remote script, credential theft) and A5 (invisible characters); B3 was
+already caught by the script rules. C1 is reached only when the poisoned text sits in a skill file, not in a server's
+tool description. B1, B2, B4 and D1 to D3 need the update quarantine and an OSV lookup; E1, F1, F2 and G1 are no
+install. No malicious sample was run; the tests use payload-free stand-ins.
+
+Open: tool descriptions in `.mcp.json` servers and in `tools/list` are not read yet; a host list in the manifest
+would let the installer rule block hosts outside it (Paper 44, section 7, step 1).
