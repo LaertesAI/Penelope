@@ -70,3 +70,7 @@ time 372.4 s at most 1.3 times large (400.1 s) and below the brief's 581 s. The 
 
 The hold-out hashes are unchanged. It runs once after the loop stopped, large and cluster, with the same binary.
 The result is added here after the run.
+
+Hold-out result: large 50/50, 1.1096 EUR, 345.0 s. cluster 50/50, 0.5408 EUR, 548.9 s.
+b = 0, c = 0, exact McNemar p = 1.0 on the hold-out and on all 100 pairs. The cluster is 51.3 % cheaper and
+1.59 times slower. A hit lead is not proven. Both 50-task sets are saturated for these two setups.
