@@ -1,5 +1,6 @@
 //! penelope: the Laertes harness on the command line.
 
+mod acp;
 #[allow(dead_code)]
 mod advise;
 mod agents;
@@ -160,6 +161,7 @@ penelope brain [--write]       the memory map as a graph; --write makes an Obsid
 penelope consolidate          take the lasting rules of the last session into the shared memory
 penelope plugin install LINK  clone a plugin from git, check its scripts and register it
 penelope plugin import        take over the plugins of other harnesses on this PC
+penelope acp                  serve the Agent Client Protocol to Zed or Neovim on stdin and stdout
 penelope mcp [--root DIR]     serve Penelope's tools as an MCP server on stdin and stdout
 penelope mcp add NAME COMMAND [ARGS...] [--allow]
                               register a standalone MCP server
@@ -601,6 +603,12 @@ fn main() {
             print!("{}", mcpclient::list(&ctx, args.iter().any(|a| a == "--probe")));
         }
         "mcp" => mcp::serve(&ctx),
+        "acp" => {
+            if let Err(e) = acp::run(&ctx) {
+                loom::warn(&e);
+                std::process::exit(1);
+            }
+        }
         "memory" => memory_cmd(&ctx, &args[1..]),
         "run" => {
             let mut rest: Vec<String> = args[1..].to_vec();
@@ -1069,5 +1077,6 @@ mod tests {
         assert!(HELP.contains("(built-in, .json or .cluster)"), "{}", HELP);
         assert!(HELP.contains("penelope factory new NAME --profile P (--every 3h | --at HH:MM)"), "{}", HELP);
         assert!(HELP.contains("penelope factory list") && HELP.contains("penelope factory run NAME") && HELP.contains("penelope factory stop NAME"), "{}", HELP);
+        assert!(HELP.contains("penelope acp") && HELP.contains("Agent Client Protocol"), "{}", HELP);
     }
 }

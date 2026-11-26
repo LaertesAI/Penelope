@@ -1,6 +1,6 @@
 # Penelope: features, bugs and open goals
 
-State: 2026-11-25, working tree after the 0.11.0 second pass and the first 0.12 work. Test suite: 300 tests (227 unit and 2 eval command tests).
+State: 2026-11-25, working tree after the 0.11.0 second pass and the first 0.12 work. Test suite: 310 tests (293 unit and 17 command tests).
 This is the honest list behind `README.md` and `PLAN-0.12.md`. A feature is only listed as working when a test or a
 live run on this PC backs it.
 
@@ -33,6 +33,7 @@ live run on this PC backs it.
 | Sandbox | `bwrap` with read-only root, one writable folder and no network | 1 test, live `echo` |
 | Allowlist | confirmed commands hashed per project, `penelope allow` | 1 test |
 | CI stream | `penelope ask --json` events | live Claude JSON stream |
+| Editors | `penelope acp`: JSON-RPC over stdio for Zed/Neovim with initialize, session/new, prompt, cancel, streamed text and tool updates, shutdown | 6 CLI tests with a fake local endpoint |
 | PR | `pr_create` with a question, never pushes | spec/handler, no live PR |
 
 ## Bugs and weak spots
@@ -63,7 +64,6 @@ live run on this PC backs it.
 | B22 | medium | No LSP tool; rust-analyzer is installed but not wired. | `which rust-analyzer` | `lsp` tool with diagnostics and types |
 | B23 | medium | No tree-sitter repo index; grep and tree are the only overview. | no tree-sitter dependency | Index files and symbols at start |
 | B24 | medium | The eval runner and read-only replay exist; no real 20-task run with three models has been made yet. | `eval.rs`, `docs/EVAL.md` | First real table in `docs/RUNS.md` |
-| B25 | medium | No ACP server for Zed/Neovim. | no ACP module | JSON-RPC endpoint over stdio |
 | B26 | medium | The Laertes provider is a placeholder without a plan key or a model list. | `providers.rs` | Add the plan endpoint and models |
 | B27 | low | `/rewind` restores the transcript and files but starts a fresh chat history; the next HTTP turn does not see the rewound messages. | `rewind` in TUI | Rebuild the model history from the checkpoint |
 | B28 | low | Research and web search share the scout role; they cannot have separate models yet. | `ROLE_MODELS` | Split the research tool onto its own role |
