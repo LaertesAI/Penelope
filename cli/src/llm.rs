@@ -278,7 +278,7 @@ pub fn chat_cancel(model: &Value, system: &str, history: &[Value], tools: &[Valu
         return Err(format!("the answer holds no message: {}", v.to_string().chars().take(200).collect::<String>()));
     }
     let message = choice["message"].clone();
-    let calls = message["tool_calls"].as_array().cloned().unwrap_or_default().iter().map(|c| ToolCall {
+    let mut calls: Vec<ToolCall> = message["tool_calls"].as_array().cloned().unwrap_or_default().iter().map(|c| ToolCall {
         id: c["id"].as_str().unwrap_or("").to_string(), name: c["function"]["name"].as_str().unwrap_or("").to_string(),
         // The arguments arrive as a JSON text. A text that does not parse becomes Null and the loop reports it to the model.
         args: match &c["function"]["arguments"] {
@@ -287,9 +287,58 @@ pub fn chat_cancel(model: &Value, system: &str, history: &[Value], tools: &[Valu
             Value::Object(o) => Value::Object(o.clone()),
             _ => json!({}),
         } }).collect();
-    Ok(Reply { text: message["content"].as_str().unwrap_or("").trim().to_string(), calls, message,
+    let mut text = message["content"].as_str().unwrap_or("").trim().to_string();
+    // A server without a tool-call parser hands Qwen's <tool_call> blocks back as text. They become calls here.
+    if calls.is_empty() && text.contains("<tool_call>") {
+        let (found, rest) = text_tool_calls(&text);
+        calls = found;
+        text = rest;
+    }
+    Ok(Reply { text, calls, message,
                tokens_in: v["usage"]["prompt_tokens"].as_u64().unwrap_or(0), tokens_out: v["usage"]["completion_tokens"].as_u64().unwrap_or(0),
                stop: choice["finish_reason"].as_str().unwrap_or("").to_string() })
+}
+
+/// Tool calls written as text in the Qwen and Hermes format: one JSON object with `name` and `arguments` between
+/// `<tool_call>` and `</tool_call>`, any number per answer. A `<think>` block is dropped. Returns the calls and the text
+/// that is left, for example the reason after `none:` when no tool fits. A block that does not parse stays in the text.
+pub fn text_tool_calls(content: &str) -> (Vec<ToolCall>, String) {
+    let mut rest = content.to_string();
+    if let (Some(start), Some(end)) = (rest.find("<think>"), rest.find("</think>")) {
+        if end > start {
+            rest.replace_range(start..end + "</think>".len(), "");
+        }
+    }
+    let mut calls = Vec::new();
+    let mut left = String::new();
+    let mut cursor = rest.as_str();
+    while let Some(open) = cursor.find("<tool_call>") {
+        left.push_str(&cursor[..open]);
+        let after = &cursor[open + "<tool_call>".len()..];
+        let Some(close) = after.find("</tool_call>") else {
+            left.push_str(&cursor[open..]);
+            cursor = "";
+            break;
+        };
+        let body = after[..close].trim();
+        match serde_json::from_str::<Value>(body) {
+            Ok(v) if v["name"].as_str().map(|n| !n.is_empty()).unwrap_or(false) => {
+                let args = match &v["arguments"] {
+                    Value::Object(o) => Value::Object(o.clone()),
+                    Value::String(s) => serde_json::from_str(s).unwrap_or(Value::Null),
+                    Value::Null => json!({}),
+                    _ => Value::Null,
+                };
+                calls.push(ToolCall { id: format!("text-call-{}", calls.len() + 1), name: v["name"].as_str().unwrap().to_string(), args });
+            }
+            _ => left.push_str(&cursor[open..open + "<tool_call>".len() + close + "</tool_call>".len()]),
+        }
+        cursor = &after[close + "</tool_call>".len()..];
+    }
+    left.push_str(cursor);
+    let text = left.trim();
+    let text = text.strip_prefix("none:").map(str::trim).unwrap_or(text);
+    (calls, text.to_string())
 }
 
 /// The tool loop. `history` grows by every message of the turn. `exec` runs one tool call and returns its text and
@@ -380,6 +429,46 @@ pub fn run_loop_with(model: &Value, system: &str, history: &mut Vec<Value>, tool
         }
     }
     Err(format!("stopped after {} rounds of tool calls", rounds))
+}
+
+#[cfg(test)]
+mod text_call_tests {
+    use super::*;
+
+    #[test]
+    fn two_blocks_after_a_thought_become_two_calls() {
+        let answer = "<think>\n- host: penelope, memory yes\n- tool: read, grep\n- args: path; pattern, path\n</think>\n\n<tool_call>\n{\"name\": \"read\", \"arguments\": {\"path\": \"src/main.rs\"}}\n</tool_call>\n<tool_call>\n{\"name\": \"grep\", \"arguments\": {\"pattern\": \"TODO\", \"path\": \"src\"}}\n</tool_call>";
+        let (calls, rest) = text_tool_calls(answer);
+        assert_eq!(calls.len(), 2);
+        assert_eq!((calls[0].name.as_str(), calls[0].args["path"].as_str()), ("read", Some("src/main.rs")));
+        assert_eq!((calls[1].name.as_str(), calls[1].args["pattern"].as_str()), ("grep", Some("TODO")));
+        assert_ne!(calls[0].id, calls[1].id);
+        assert_eq!(rest, "");
+    }
+
+    #[test]
+    fn no_block_keeps_the_reason_after_none() {
+        let answer = "<think>\n- host: claude-code, memory no\n- tool: none, memory needs penelope\n</think>\n\nnone: memory needs penelope";
+        let (calls, rest) = text_tool_calls(answer);
+        assert!(calls.is_empty());
+        assert_eq!(rest, "memory needs penelope");
+    }
+
+    #[test]
+    fn a_broken_block_stays_text_and_a_good_one_still_counts() {
+        let answer = "<tool_call>\n{not json}\n</tool_call>\n<tool_call>\n{\"name\": \"read\", \"arguments\": \"{\\\"path\\\": \\\"a\\\"}\"}\n</tool_call>";
+        let (calls, rest) = text_tool_calls(answer);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].args["path"].as_str(), Some("a"));
+        assert!(rest.contains("{not json}"), "{}", rest);
+    }
+
+    #[test]
+    fn an_open_block_without_end_is_left_as_text() {
+        let (calls, rest) = text_tool_calls("<tool_call>\n{\"name\": \"read\"");
+        assert!(calls.is_empty());
+        assert!(rest.starts_with("<tool_call>"));
+    }
 }
 
 #[cfg(test)]
