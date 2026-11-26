@@ -107,14 +107,22 @@ fn a_dry_factory_prints_the_unit_and_writes_neither_profile_nor_registry() {
     let (ok, out, err) = run_bin(&["--root", root.to_str().unwrap(), "factory", "new", "tick", "--profile", "base", "--every", "3h", "--dry"]);
     assert!(ok, "{} {}", out, err);
     assert!(out.starts_with("Dry run"), "{}", out);
-    assert!(out.contains("penelope-factory-tick.service") && out.contains("penelope-factory-tick.timer"), "{}", out);
-    assert!(out.contains("OnUnitActiveSec=3h") && out.contains("Unit=penelope-factory-tick.service"), "{}", out);
+    // The dry run prints the units of this system's scheduler: systemd, launchd or Task Scheduler.
+    #[cfg(not(any(target_os = "macos", windows)))]
+    let (every, at) = (vec!["penelope-factory-tick.service", "penelope-factory-tick.timer", "OnUnitActiveSec=3h",
+                            "Unit=penelope-factory-tick.service"], vec!["OnCalendar=*-*-* 09:30:00"]);
+    #[cfg(target_os = "macos")]
+    let (every, at) = (vec!["ai.laertes.penelope.factory.tick.plist", "<key>StartInterval</key>", "<integer>10800</integer>"],
+                       vec!["<key>Hour</key>\n    <integer>09</integer>", "<integer>30</integer>"]);
+    #[cfg(windows)]
+    let (every, at) = (vec!["PenelopeFactory-tick.xml", "<Interval>PT10800S</Interval>"], vec!["T09:30:00"]);
+    assert!(every.iter().all(|l| out.contains(l)), "{}", out);
     assert!(out.contains("cluster") && out.contains("run") && out.contains("--profile") && out.contains("tick"), "{}", out);
     assert!(!root.join("clusters/profiles/tick.json").exists(), "a dry run wrote a factory profile");
     assert!(!root.join("factories.json").exists(), "a dry run wrote the registry");
     let (ok, out, err) = run_bin(&["--root", root.to_str().unwrap(), "factory", "new", "morning", "--profile", "base", "--at", "09:30", "--dry"]);
     assert!(ok, "{} {}", out, err);
-    assert!(out.contains("OnCalendar=*-*-* 09:30:00"), "{}", out);
+    assert!(at.iter().all(|l| out.contains(l)), "{}", out);
     let _ = std::fs::remove_dir_all(&d);
 }
 
