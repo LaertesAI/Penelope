@@ -24,6 +24,7 @@ mod files;
 mod input;
 mod jobs;
 mod llm;
+mod lsp;
 mod mcp;
 mod mcpclient;
 mod memory;
