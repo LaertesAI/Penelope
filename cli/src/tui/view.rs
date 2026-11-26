@@ -837,7 +837,8 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
             }
         }
         Overlay::Models { sel, target } => {
-            let choices = app.model_choices(target);
+            let rows = app.model_rows(target);
+            let choices: Vec<String> = rows.iter().map(|(_, m)| m.clone()).collect();
             let inner = dialog(f, area, &format!("Models · {}", target_label(target)), 84, choices.len().min(20) as u16 + 10);
             let current = target_value(app, target)["model"].as_str().unwrap_or("?").to_string();
             let current_levels = app.model_efforts(target, &current);
@@ -848,19 +849,22 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
                 put(f, inner, inner.x, inner.y, &clip(&app.model_source, inner.width as usize), on(DIM, RAISED));
             }
             let first = if choices.len() > 20 { sel.saturating_sub(19) } else { 0 };
-            for (i, name) in choices.iter().enumerate().skip(first).take(20) {
+            for (i, (row_provider, name)) in rows.iter().enumerate().skip(first).take(20) {
                 let y = inner.y + 2 + (i - first) as u16;
-                let chosen = i == (*sel).min(choices.len().saturating_sub(1));
+                let chosen = i == (*sel).min(rows.len().saturating_sub(1));
                 let bg = if chosen { NIGHT } else { RAISED };
+                let is_current = *name == current && *row_provider == provider;
                 fill(f, Rect::new(inner.x.saturating_sub(1), y, inner.width + 2, 1), bg);
-                put(f, inner, inner.x, y, if *name == current { "●" } else { "○" }, on(if *name == current { SEA } else { DIM }, bg));
-                put(f, inner, inner.x + 2, y, &clip(name, 46), on(PAPER, bg));
-                let effort = app.model_efforts(target, name).join(" ");
-                put(f, inner, inner.x + 50, y, &clip(if effort.is_empty() { "no effort" } else { &effort }, 28), on(DIM, bg));
+                put(f, inner, inner.x, y, if is_current { "●" } else { "○" }, on(if is_current { SEA } else { DIM }, bg));
+                put(f, inner, inner.x + 2, y, &clip(name, 34), on(PAPER, bg));
+                let shown = if row_provider == "claude-cli" { "Claude subscription".to_string() } else { row_provider.clone() };
+                put(f, inner, inner.x + 37, y, &clip(&shown, 20), on(ASH, bg));
+                let effort = app.provider_efforts(row_provider, name).join(" ");
+                put(f, inner, inner.x + 59, y, &clip(if effort.is_empty() { "no effort" } else { &effort }, 24), on(DIM, bg));
             }
-            let selected = choices.get(*sel).cloned().unwrap_or_default();
-            let selected_label = app.model_cache.get(&provider).and_then(|list| list.iter().find(|m| m.id == selected)).map(|m| m.label.clone())
-                .or_else(|| crate::providers::models(&provider).iter().find(|m| m.id == selected).map(|m| m.label.to_string()))
+            let (selected_provider, selected) = rows.get(*sel).cloned().unwrap_or_default();
+            let selected_label = app.model_cache.get(&selected_provider).and_then(|list| list.iter().find(|m| m.id == selected)).map(|m| m.label.clone())
+                .or_else(|| crate::providers::models(&selected_provider).iter().find(|m| m.id == selected).map(|m| m.label.to_string()))
                 .unwrap_or_else(|| selected.clone());
             let note = format!("{} · current {} / effort {}", selected_label, current, current_effort);
             put(f, inner, inner.x, inner.bottom().saturating_sub(2), &clip(&note, inner.width as usize), on(CLAY, RAISED));

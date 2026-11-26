@@ -181,6 +181,16 @@ pub fn state_of(p: &Provider) -> &'static str {
     if crate::auth::has(p.name) { "stored" } else { env }
 }
 
+/// True when Penelope can reach the provider now: a key in the environment or the keyring, or the Claude command with
+/// its own login. A local server (`no key, optional`) counts only after it answered, so the caller decides that one.
+pub fn connected(p: &Provider) -> bool {
+    match p.kind {
+        "laertes" => false,
+        "claude-cli" => crate::config::which("claude").is_some(),
+        _ => matches!(state_of(p), "key set" | "stored"),
+    }
+}
+
 /// "key set" or "no key" for one variable name. The value itself is never returned.
 pub fn key_state(key_env: &str, optional: bool) -> &'static str {
     if key_env.is_empty() {
@@ -316,6 +326,7 @@ pub struct Model {
 }
 
 const CLAUDE_MODELS: &[Model] = &[
+    Model { id: "claude-fable-5-2", label: "Claude Fable 5.2", efforts: &["low", "medium", "high", "max"] },
     Model { id: "claude-opus-5-5", label: "Claude Opus 5.5", efforts: &["low", "medium", "high", "max"] },
     Model { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5", efforts: &["low", "medium", "high", "max"] },
     Model { id: "claude-haiku-5-5", label: "Claude Haiku 5.5", efforts: &["low", "medium", "high", "max"] },
@@ -622,7 +633,7 @@ mod tests {
         assert!(!supports_effort("opencode", "mimo-v2.6-flash"));
         assert!(supports_effort("openai", "gpt-6.2-astra") && !supports_effort("openai", "gpt-4o"));
         assert_eq!(static_models("openai")[0].id, "gpt-6.2-astra");
-        assert_eq!(static_models("anthropic")[0].id, "claude-opus-5-5");
+        assert_eq!(static_models("anthropic")[0].id, "claude-fable-5-2");
         assert!(supports_effort("openrouter", "openai/gpt-5.2") && supports_effort("openrouter", "anthropic/claude-sonnet-5-5"));
         assert!(supports_effort("deepseek", "deepseek-flash") && supports_effort("xai", "grok-4.7"));
         assert!(supports_effort("alibaba-intl", "qwen4-max") && supports_effort("zhipu", "glm-5.3"));
