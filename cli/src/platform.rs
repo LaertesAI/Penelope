@@ -123,7 +123,7 @@ pub fn pointer_position() -> Option<(i64, i64)> {
         let mut parts = text.split_whitespace();
         return Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?));
     }
-    #[cfg(not(windows))]
+    #[cfg(all(not(windows), not(target_os = "macos")))]
     {
         if std::env::var("WAYLAND_DISPLAY").is_ok() && crate::config::which("hyprctl").is_some() {
             let out = Command::new("hyprctl").arg("cursorpos").output().ok()?;
@@ -173,7 +173,7 @@ pub fn move_pointer(x: i64, y: i64, click: bool) -> Result<String, String> {
         }
         Ok(format!("cursor at {}, {}", x, y))
     }
-    #[cfg(not(windows))]
+    #[cfg(all(not(windows), not(target_os = "macos")))]
     {
         let _ = click;          // the Unix path clicks after the move in cursor.rs
         if std::env::var("WAYLAND_DISPLAY").is_ok() && crate::config::which("hyprctl").is_some() {
