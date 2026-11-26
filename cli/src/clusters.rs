@@ -1033,6 +1033,8 @@ fn write_part_note(ctx: &Ctx, c: &Cluster, profile: &Profile, part: &Part, resul
         status,
         links: crate::notes::links(&body),
         body,
+        level: 1,
+        hash: String::new(),
     };
     let mut add_link = |name: String| {
         if !name.is_empty() && !note.links.iter().any(|l| l == &name) { note.links.push(name); }
@@ -4769,7 +4771,9 @@ mod tests {
         let note_path = notes_dir(&ctx, &c.id).join(format!("{}.md", note_name(worker)));
         assert!(fs::read_to_string(&note_path).unwrap().contains("status: open"));
         crate::notes::set_status(&notes_dir(&ctx, &c.id), &note_name(worker), crate::notes::Status::Confirmed).unwrap();
-        assert!(fs::read_to_string(&note_path).unwrap().contains("status: confirmed"));
+        let loaded = crate::notes::load_dir(&notes_dir(&ctx, &c.id)).unwrap();
+        assert_eq!(loaded.iter().find(|n| n.name == note_name(worker)).unwrap().status, crate::notes::Status::Confirmed);
+        assert!(fs::read_to_string(note_path.with_extension("events.log")).unwrap().contains("\"status\":\"confirmed\""));
         crate::notes::set_status(&notes_dir(&ctx, &c.id), &note_name(worker), crate::notes::Status::Stale).unwrap();
         let text = prompt_notes_text(&notes_dir(&ctx, &c.id), &note_name(worker), 2);
         assert!(text.is_empty(), "a stale start note must not reach a prompt: {}", text);
