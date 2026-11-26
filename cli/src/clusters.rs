@@ -112,6 +112,9 @@ pub struct Profile {
     pub budget_eur: f64,
     pub max_steps: usize,
     pub retries: usize,
+    /// True sends a one-worker, no-retry profile through one model and skips the final validator. The validator cannot
+    /// correct a result when there is no retry; the caller's own check is the judge. Off by default.
+    pub single_model: bool,
     /// Seconds between two reports of a running part. 0 reports after every model answer.
     pub report_every: u64,
     /// Consecutive reports with one `P:` and `F:`, or repeated equal tool calls, before the cluster is stuck.
@@ -352,6 +355,7 @@ fn parse_profile(value: &Value, fallback_name: &str) -> Result<Profile, String> 
     let budget_eur = value["budget_eur"].as_f64().unwrap_or(0.0).max(0.0);
     let max_steps = value["max_steps"].as_u64().unwrap_or(12).clamp(1, 30) as usize;
     let retries = value["retries"].as_u64().unwrap_or(1).min(3) as usize;
+    let single_model = value["single_model"].as_bool().unwrap_or(false);
     let report_every = seconds_of(&value["report_every"]).unwrap_or(0);
     let stuck_after = count_of(&value["stuck_after"]).unwrap_or(3).max(1);
     // A profile with a worker part writes, so it gets a worktree unless it says otherwise. A research or live-test
@@ -418,7 +422,7 @@ fn parse_profile(value: &Value, fallback_name: &str) -> Result<Profile, String> 
         return Err(format!("profile {}: use every or at, not both", name));
     }
     let purpose = value["purpose"].as_str().map(str::trim).filter(|s| !s.is_empty()).map(|s| s.chars().take(1000).collect::<String>());
-    Ok(Profile { name, workers: list, validator, max_models, max_depth, max_parallel, budget_eur, max_steps, retries, report_every, stuck_after, worktree, before, every, at, purpose, quorum, second_model, decider_model, shadow_of })
+    Ok(Profile { name, workers: list, validator, max_models, max_depth, max_parallel, budget_eur, max_steps, retries, single_model, report_every, stuck_after, worktree, before, every, at, purpose, quorum, second_model, decider_model, shadow_of })
 }
 
 fn builtin(name: &str) -> Option<Profile> {
@@ -2024,6 +2028,10 @@ fn run_workers(ctx: &Ctx, c: &mut Cluster, profile: &Profile, feedback: &str, li
                     c.output.push_str(&format!("\n--- {} ({}) ---\n{}\n", part.name, part.slot, text));
                     write_part_note(ctx, c, profile, &part, Some(&text), crate::notes::Status::Open);
                     memory_line(ctx, c, &part, &model, &text, "done");
+                    if c.evidence.trim().is_empty() {
+                        let evidence = evidence_of(&done.checks);
+                        if !evidence.is_empty() { c.evidence = evidence; }
+                    }
                     if let Some(v) = &vote {
                         let result = if v.escalated { format!("escalated to {}", v.decider_model) } else { "agreed".to_string() };
                         append_memory(ctx, c, &format!("\n## quorum · {}\n\nfirst answer ({}):\n{}\n\nsecond answer ({}):\n{}\n\n{}: {}\n",
@@ -2312,7 +2320,11 @@ fn run_cluster_inner(ctx: &Ctx, id: &str, session_before: Option<f64>) -> Result
     c.done = 0;
     c.quorum_agreed = 0;
     c.quorum_escalated = 0;
-    c.total = profile.workers.len() + profile.validator.iter().count();
+    // A profile with one worker and no retry has no second round. Its validator can only report, not correct, so the
+    // result goes to the one model; a caller that wants the validator sets retries to 1. This is the switch from Paper 35
+    // for a sequential task.
+    let single_model = profile.single_model && profile.workers.len() == 1 && profile.retries == 0 && profile.validator.is_some();
+    c.total = profile.workers.len() + if single_model { 0 } else { profile.validator.iter().count() };
     c.error.clear();
     c.evidence.clear();
     c.updated = now();
@@ -2357,6 +2369,7 @@ fn run_cluster_inner(ctx: &Ctx, id: &str, session_before: Option<f64>) -> Result
             Err(e) => { c.state = "blocked".to_string(); c.error = e; c.updated = now(); save(ctx, &c)?; return Ok(format!("cluster {} blocked: {}", id, c.error)); }
         };
         if !workers_ok { break; }
+        if single_model { ok = workers_ok; break; }
         if profile.validator.is_none() { ok = true; break; }
         match validate(ctx, &mut c, &profile, limits, &cancel, &watch, &focus) {
             Ok(true) => { ok = true; break; }
@@ -3703,6 +3716,34 @@ mod tests {
         let line = fs::read_to_string(cluster_dir(&ctx, &c.id).join("report.txt")).unwrap();
         let r = crate::proof::parse(&line).unwrap();
         assert!(crate::proof::accept(&r).is_err(), "{}", line);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_one_worker_profile_without_retry_skips_the_final_validator() {
+        let (address, seen) = crate::llm::fake::serve(vec![
+            (200, tool_reply("write", json!({"path": "hello.txt", "text": "hello\n"}))),
+            (200, tool_reply("run", json!({"command": "cat hello.txt"}))),
+            (200, text_reply("created hello.txt")),
+        ]);
+        let (mut ctx, dir) = ctx();
+        fake_models(&mut ctx, &address);
+        write_profile(&ctx, "single", json!({
+            "name": "single",
+            "workers": [{"name": "coder", "role": "worker", "slot": "small", "model": "main", "task": "Do the task."}],
+            "validator": {"name": "check", "role": "judge", "slot": "check", "model": "main", "task": "Check."},
+            "max_models": 2, "max_depth": 1, "max_steps": 8, "retries": 0, "single_model": true
+        }));
+        let p = profile(&ctx, "single").unwrap();
+        let c = new_cluster(&ctx, &p, "single-fixture", "write hello.txt", None, Vec::new(), 0).unwrap();
+        let out = run_cluster(&ctx, &c.id).unwrap();
+        assert!(out.contains("done"), "{}", out);
+        let c = load(&ctx, &c.id).unwrap();
+        assert_eq!((c.state.as_str(), c.done, c.total), ("done", 1, 1));
+        assert_eq!(c.evidence, "cat hello.txt ok");
+        assert_eq!(seen.lock().unwrap().len(), 3, "the validator must not run");
+        let line = fs::read_to_string(cluster_dir(&ctx, &c.id).join("report.txt")).unwrap();
+        assert!(line.contains("P:1/1"), "{}", line);
         let _ = fs::remove_dir_all(&dir);
     }
 

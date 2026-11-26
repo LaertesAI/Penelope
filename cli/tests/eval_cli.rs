@@ -253,6 +253,41 @@ fn sha256(data: &[u8]) -> String {
     h.finish()
 }
 
+fn walk_files(base: &Path, dir: &Path, out: &mut Vec<(String, Vec<u8>)>) {
+    for entry in std::fs::read_dir(dir).unwrap().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            walk_files(base, &path, out);
+        } else {
+            let rel = path.strip_prefix(base).unwrap().to_string_lossy().replace('\\', "/");
+            out.push((rel, std::fs::read(&path).unwrap()));
+        }
+    }
+}
+
+#[test]
+fn the_holdout_is_frozen() {
+    assert_eq!(sha256(b"abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/eval");
+    let bytes = std::fs::read(base.join("holdout50.jsonl")).unwrap();
+    assert_eq!(sha256(&bytes), "ce9c73a5f2eb05b21f55864d267d26534b6bdb278b8586415de138a98f4569d2");
+    let tasks: Vec<Value> = String::from_utf8(bytes).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(tasks.len(), 50);
+    assert!(tasks.iter().all(|t| t["check"].as_str().map(|c| !c.is_empty()).unwrap_or(false)));
+    let mut files = Vec::new();
+    walk_files(&base.join("holdout_repo"), &base.join("holdout_repo"), &mut files);
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    assert!(files.len() >= 10, "{}", files.len());
+    let mut h = Sha256::new();
+    for (rel, data) in &files {
+        h.update(rel.as_bytes());
+        h.update(&[0]);
+        h.update(data);
+        h.update(&[0]);
+    }
+    assert_eq!(h.finish(), "c3224aba7eeb471f6512c30d072bf547a11bde1ed5c4f9c42f184df566b1c830");
+}
+
 #[test]
 fn the_swebench_holdout_is_frozen() {
     assert_eq!(sha256(b"abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
