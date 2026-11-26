@@ -45,6 +45,8 @@ thread_local! {
     /// The cluster whose part is running on this thread. A tool call resolves it here; the MCP server of a Claude part
     /// finds the same id in `PENELOPE_CLUSTER`.
     static ACTIVE_CLUSTER: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// The origin level of the running part. A worker is L:1, a validator L:2, a person outside a cluster L:3.
+    static ACTIVE_LEVEL: RefCell<Option<u8>> = const { RefCell::new(None) };
 }
 
 /// Runs a block of work as a part of one cluster. Nested clusters restore the parent id when they return.
@@ -53,6 +55,20 @@ pub fn with_cluster<T>(id: &str, f: impl FnOnce() -> T) -> T {
     let out = f();
     ACTIVE_CLUSTER.with(|c| *c.borrow_mut() = before);
     out
+}
+
+/// Runs a block at one origin level. A file written inside inherits this level.
+pub fn with_level<T>(level: u8, f: impl FnOnce() -> T) -> T {
+    let before = ACTIVE_LEVEL.with(|c| c.replace(Some(level.min(3))));
+    let out = f();
+    ACTIVE_LEVEL.with(|c| *c.borrow_mut() = before);
+    out
+}
+
+/// The origin level of the running part: the explicit level, otherwise 1 inside a cluster and 3 outside.
+pub fn current_level() -> u8 {
+    if let Some(level) = ACTIVE_LEVEL.with(|c| *c.borrow()) { return level; }
+    if current_cluster().is_some() { 1 } else { 3 }
 }
 
 /// The cluster of the running part, or `None` outside a cluster. A Claude CLI part reaches this through its MCP server.
@@ -1041,6 +1057,42 @@ fn report(ctx: &Ctx, c: &Cluster, focus: &str, error: &str) -> String {
     line
 }
 
+fn taint_path(ctx: &Ctx) -> PathBuf {
+    ctx.root.join("taint.json")
+}
+
+fn content_hash(bytes: &[u8]) -> String {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in bytes {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    format!("{:016x}", h)
+}
+
+/// Records the writer level of a file after a write or edit. The key is the canonical path, the value the level and
+/// the hash of the bytes. A later read with the same hash inherits the level; a changed hash is visible as changed.
+pub fn note_file(ctx: &Ctx, path: &Path, level: u8) {
+    let Ok(bytes) = fs::read(path) else { return };
+    let key = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()).to_string_lossy().to_string();
+    let mut map: serde_json::Map<String, Value> = fs::read_to_string(taint_path(ctx)).ok()
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .and_then(|v| v.as_object().cloned()).unwrap_or_default();
+    map.insert(key, json!({"L": level.min(3), "hash": content_hash(&bytes)}));
+    let _ = fs::write(taint_path(ctx), Value::Object(map).to_string());
+}
+
+/// The recorded level of a file and whether its bytes still match the recorded hash.
+pub fn file_level(ctx: &Ctx, path: &Path) -> Option<(u8, bool)> {
+    let key = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()).to_string_lossy().to_string();
+    let map: Value = fs::read_to_string(taint_path(ctx)).ok().and_then(|s| serde_json::from_str(&s).ok())?;
+    let entry = map.get(&key)?;
+    let level = entry["L"].as_u64()? as u8;
+    let hash = entry["hash"].as_str()?.to_string();
+    let same = fs::read(path).map(|b| content_hash(&b) == hash).unwrap_or(false);
+    Some((level, same))
+}
+
 fn memory_path(ctx: &Ctx, id: &str) -> PathBuf {
     cluster_dir(ctx, id).join("memory.md")
 }
@@ -2025,7 +2077,7 @@ fn validate(ctx: &Ctx, c: &mut Cluster, profile: &Profile, limits: Limits, cance
     // human log and is read only when no note exists yet (for example an older cluster from before notes).
     let notes = validator_notes_text(ctx, &c.id);
     let memory = if notes.trim().is_empty() { fs::read_to_string(memory_path(ctx, &c.id)).unwrap_or_default() } else { notes };
-    let out = run_model(ctx, c, part, &validator_system(c, part, &model), &validator_prompt(c, &memory), 4, cancel, limits, watch);
+    let out = with_level(2, || run_model(ctx, c, part, &validator_system(c, part, &model), &validator_prompt(c, &memory), 4, cancel, limits, watch));
     let done = match out {
         Ok(d) => d,
         Err(e) => {
