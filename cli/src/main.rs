@@ -843,6 +843,7 @@ fn answer_json(ctx: &config::Ctx, chat: &mut backend::Chat, text: &str) -> bool 
     let mut masked = 0usize;
     let result = chat.turn_with(ctx, &expanded.text, &notes, &mut |e| match e {
         backend::Event::Delta(s) => emit(serde_json::json!({"event": "delta", "text": s})),
+        backend::Event::Thinking(s) => emit(serde_json::json!({"event": "thinking", "text": s})),
         backend::Event::Text(s) => emit(serde_json::json!({"event": "text", "text": s})),
         backend::Event::ToolStart { id, name, detail } => emit(serde_json::json!({"event": "tool_start", "id": id, "name": name, "detail": detail})),
         backend::Event::ToolEnd { id, ok, summary } => emit(serde_json::json!({"event": "tool_end", "id": id, "ok": ok, "summary": summary})),
