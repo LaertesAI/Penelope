@@ -1683,3 +1683,79 @@ Open:
 - A changed app name in the manifest is refused during update, so the launcher and `apps.json` keep one identity.
 - A Penelope process killed during an update can leave `.penelope/apps/.NAME-update-*` or `.NAME-backup-*`; the
   launcher ignores hidden folders.
+
+## DeepSeek phase 2.3 (branch `feat/phase23-quorum-shadow`)
+
+### Quorum inside a part
+
+A profile or a part may set `quorum: 2`. The part first runs exactly as before, with its role, tools, notes and
+worktree. A second, independent, text-only call goes to the profile's `second_model` (default `weak`) with the same
+task but without the first answer, so the two answers do not copy each other. If the normalized answers agree, the
+part keeps the first result and makes no further call. If they differ, the profile's `decider_model` (default `main`)
+is called once with both answers; its text becomes the part result.
+
+The cluster state now carries `quorum: {"agreed": N, "escalated": N}`, `cluster_status` prints both counters, the
+memory holds a `## quorum · PART` block with both answers and the decision, and `reports.jsonl` gets one `QUORUM`
+line per voted part. The decider and second calls are recorded in `usage.json` under `cluster:NAME:quorum`; the
+cluster and session euro budgets are checked after each call. A `.cluster` file may set `quorum=2` at profile level.
+
+Measured: `cd cli && cargo test` → 315 tests (302 unit + 13 integration), 0 failed (2026-11-26). New tests:
+- agreement: `seen == 4` calls (part, second answer, validator tool + answer), `quorum.agreed == 1`,
+  `quorum.escalated == 0`, and the second request does not contain the first answer;
+- disagreement: `seen == 5` calls, `quorum.escalated == 1`, the decider request contains both answers, and the part
+  output is the decider answer;
+- parser: `quorum` is 1 or 2, a cluster file accepts `quorum=2`, and a part can turn a profile quorum off with `1`.
+
+Open: the second answer has no tools, so it compares answer text, not a second patch. If the first answer already
+wrote files, the decider changes the answer text but cannot undo those writes. A kill during the text-only second or
+decider call is observed after the call returns; the HTTP call itself has no cancel flag in this path.
+
+### Shadow cluster
+
+A profile may set `shadow_of: MAIN`, and `penelope cluster run GOAL --profile MAIN --shadow PROFILE` names a shadow
+without editing a profile. The shadow gets the same task, runs in its own git worktree (forcing `worktree: true` when
+it has a worker or lead part), and is never merged: `run_cluster` skips `apply_worktree` for `shadow: true` and
+writes a note into its memory. A profile-declared shadow runs for every top-level profile it names; an explicit
+`--shadow` attaches to the first top-level cluster. The shadow runs after the main clusters of the same orchestration,
+not concurrently.
+
+After both runs, worker outputs are compared in profile order, and checks compare the final state plus the validator
+evidence when either side has evidence. The match rate is stored in the main cluster JSON (`match_rate`), in
+`cluster_status`, in `reports.jsonl` (`SHADOW ...`), in `<main>/shadow.txt`, and in the project file
+`.penelope/clusters/shadow.json` (last 100 runs).
+
+Measured: same `cargo test` run, 315 tests, 0 failed. New tests:
+- full match: two read-only clusters answer the same, `match_rate == 1.0`, `shadow.json` has outputs 1/1 and checks
+  2/2;
+- mismatch: outputs 0/1 and checks 2/2 give `2/3`, and the main cluster carries that rate;
+- no live file change: the main writer merges `main\n`, the shadow writer leaves `shadow\n` only in its own worktree,
+  and the live `hello.txt` stays `main\n`;
+- explicit `--shadow` without `shadow_of` runs one shadow, and `--shadow` naming the main profile is refused;
+- integration: `penelope cluster run --profile large --shadow small` prints `SHADOW ... match 100.0%` and writes
+  `shadow.json`.
+
+Open: the shadow is sequential, not concurrent, so the wall-time comparison is not measured. The shadow has no
+separate budget switch; it uses the same cluster/session budgets as the main run and costs the task a second time.
+The comparison reads text outputs and evidence, not a semantic diff of the two patches.
+
+### Routing by the score table
+
+`record_scores` now records the model setting beside every accepted/rejected result:
+`table[part][task_type]["models"][setting]`, while the old `accepted`/`rejected` numbers stay unchanged. The new
+`advise::best_model` suggests a model only with at least 3 results and 60 % accepted, best share first.
+`penelope cluster advise [NAME]` appends `Best recorded model: ...` when such a row exists.
+`penelope cluster advise NAME --apply` writes the suggested setting into
+`.penelope/clusters/profiles/NAME.json` for the next run. It refuses while a queued or running cluster uses that
+profile, and it refuses a `.cluster` profile because that file cannot carry a model. If no model row qualifies it
+switches to the other setting (`main`/`weak`). A change never touches a running cluster's loaded profile.
+
+Measured: same `cargo test` run, 315 tests, 0 failed. New tests:
+- `record_model` keeps the old totals and counts weak 1/5, main 5/5; `best_model` picks main;
+- one lucky run and a model below 60 % are not suggested;
+- `advise_apply` writes `weak -> main` and the profile reloads with `model: main`; a second call says already set;
+- `advise_apply` refuses a working cluster, leaves the profile at `weak`, and needs a name;
+- `advise_apply` refuses a `.cluster` profile and writes no `.json` override;
+- integration: `penelope cluster advise routed --apply` changes the profile file and writes no `usage.json`.
+
+Open: the score table has no reset command, and a model label from a full model object can be suggested in text but
+is only written back when it maps to a setting name (`main`, `weak` or a role).

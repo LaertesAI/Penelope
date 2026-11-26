@@ -24,6 +24,15 @@ fixed role chain.
 - The report file uses the compact line (`S:working|P:1/2|T:12s|F:backend|E:...|V:cargo test ok`). `V` is the check
   the validator ran and its result; `S:done` without a non-empty `V` is not accepted. `cluster_status` shows the tree,
   one cluster, its parts, report and memory.
+- A part may set `quorum: 2`. It runs on its model and on the profile's `second_model` (default `weak`); if the two
+  answers agree the part is done, otherwise the profile's `decider_model` (default `main`) is called once. The cluster
+  state carries `quorum.agreed` and `quorum.escalated`; the report stream gets a `QUORUM` line.
+- A profile may set `shadow_of: MAIN`, or `penelope cluster run --shadow PROFILE` names a shadow. The shadow runs on
+  the same task in its own worktree after the main clusters; its files are never merged. The match rate of outputs and
+  checks is written into the main cluster state, the report stream and `.penelope/clusters/shadow.json`.
+- `penelope cluster advise [NAME]` scores each part and task type. `--apply` writes the best recorded model setting into
+  the profile for the next run; it refuses while a cluster with that profile is running, because a running cluster keeps
+  the profile it started with.
 - Tools: `cluster_start`, `cluster_status`, `cluster_kill`. Commands: `/cluster GOAL`, `/clusters`,
   `penelope cluster run/list/status/dump/profiles/kill`.
 - A factory is a copy of a profile with a schedule (`every: "3h"` or `at: "09:30"`) and one purpose. The timer lives
@@ -67,8 +76,34 @@ Nostos calls tools, Tiresias routes, Argos judges, Aiolos compresses.
 | `tools` | `read, edit, run` | tools the workers may call; tool calls go through the routing model |
 | `stuck_after` | `3 reports` | reports without progress before the orchestrator treats the cluster as stuck |
 | `worktree` | `true` | own git worktree and branch; default true when the profile has a worker part |
+| `quorum` | `2` | independent answers per worker part: 1 (default) or 2 |
+| `second_model` | `weak` | model setting of the second quorum answer |
+| `decider_model` | `main` | model setting that decides a disagreement once |
+| `shadow_of` | `coding` | this profile runs beside `coding` on the same task; its files are never merged |
 
 A profile is a file under `.penelope/clusters/NAME.json`, so the user can keep and reuse profiles.
+
+### Quorum and shadow
+
+`quorum: 2` is a vote inside one part. The part's normal run keeps its tools and its worktree; the second answer is a
+text-only call to `second_model` with the same task. A disagreement adds exactly one `decider_model` call, which
+returns the answer the part keeps. The cluster JSON holds `quorum: {"agreed": N, "escalated": N}`, `cluster_status`
+prints it, and `reports.jsonl` gets one `QUORUM` line per voted part.
+
+`shadow_of: MAIN` (or `--shadow PROFILE`) runs a second profile on the same task. A shadow with a worker or lead part
+always gets its own worktree, even if its profile says `worktree: false`, and its patch is never applied to the live
+tree. After the main run the two are compared: worker outputs in order, the final state, and the validator evidence.
+The result is written to the main cluster JSON (`match_rate`), `status`, `reports.jsonl`, `<main>/shadow.txt` and the
+project file `.penelope/clusters/shadow.json` (last 100 runs). A profile-declared shadow runs after the main clusters
+of the same orchestration, not at the same instant.
+
+### Routing by the score table
+
+`validate()` writes accepted and rejected results per part and task type into `.penelope/clusters/scores.json`, and
+also counts which model setting produced them. `penelope cluster advise NAME` prints the parts that fail often and,
+when a model has at least 3 results and 60 % accepted, names the best recorded model. `--apply` writes that setting
+into `.penelope/clusters/profiles/NAME.json` (or the profile named by a cluster id) for the next run. It refuses a
+profile that a queued or running cluster is using: a running cluster keeps the profile it started with.
 
 ### Factories
 
@@ -156,3 +191,9 @@ a report with `S:stuck` or an unchanged `P` over `stuck_after` reports leads to 
 - The zombie watch (`stuck_after`, repeated tool calls) is stored in the profile but not enforced yet.
 - The 8 Laertes families are parts with `slot` labels; a family in training blocks its cluster instead of being
   silently replaced. A real plan endpoint is still missing.
+- A quorum's second answer is text-only: it has no tools, so it compares the part's answer, not a second patch. The
+  decider replaces the answer text but cannot undo file changes the first answer already made.
+- A shadow runs after the main clusters of the same orchestration, not at the same instant. An explicit `--shadow`
+  attaches to the first top-level cluster; profile-declared shadows run for every top-level profile they name.
+- `advise --apply` needs at least one model with 3 results and 60 % accepted before it prefers that model; without such
+  a row it switches to the other setting (`main`/`weak`). It does not edit `.cluster` files, which cannot carry a model.

@@ -79,8 +79,10 @@ penelope replay ID --model MODEL
                               re-run the stored prompts of an eval run read-only; no file changed, no command or check run
 penelope input [install|enable|status]
                               a native Wayland pointer for ScreenCodec, without ydotool
-penelope cluster run GOAL [--profile NAME] [--dry] [--sequential]
-                              ask the orchestrator for clusters and run them; --dry prints parts, model and an estimate, starts nothing
+penelope cluster run GOAL [--profile NAME] [--shadow PROFILE] [--dry] [--sequential]
+                              ask the orchestrator for clusters and run them; a shadow profile runs beside the first
+                              cluster on the same task, in its own worktree, and its files are never merged; --dry
+                              prints parts, model and an estimate, starts nothing
 penelope cluster list        the cluster tree
 penelope cluster status ID   one cluster with its parts, report and memory
 penelope cluster profiles    the parts of every profile (built-in, .json or .cluster)
@@ -88,7 +90,9 @@ penelope cluster kill ID     stop a running cluster at once
 penelope cluster dump ID     the state dump with the cause of a stuck cluster
 penelope cluster respawn ID [EXTRA]
                               kill ID and start it again with the cause from its dump (at most 2)
-penelope cluster advise [NAME]  one suggestion per part and task type the validator rejected often, worst first
+penelope cluster advise [NAME] [--apply]
+                              one suggestion per part and task type the validator rejected often, worst first;
+                              --apply writes the suggested model into the profile for the next run and refuses a running cluster
 penelope cluster profile NAME [JSON]
                               create or change a profile under .penelope/clusters/profiles
 penelope factory new NAME --profile P (--every 3h | --at HH:MM) [--goal TEXT] [--dry] [--yes]
@@ -311,10 +315,19 @@ fn main() {
                     println!("{}", clusters::respawn(&ctx, &id, &args.iter().skip(3).cloned().collect::<Vec<_>>().join(" ")));
                 }
                 "advise" => {
-                    let name = args.get(2).map(String::as_str).filter(|s| !s.trim().is_empty());
-                    match clusters::advise_text(&ctx, name) {
-                        Ok(text) => print!("{}", text),
-                        Err(e) => { loom::warn(&e); std::process::exit(2); }
+                    let apply = args.iter().skip(2).any(|a| a == "--apply");
+                    let name = args.iter().skip(2).map(String::as_str)
+                        .find(|a| !a.starts_with("--") && !a.trim().is_empty());
+                    if apply {
+                        match clusters::advise_apply(&ctx, name) {
+                            Ok(text) => print!("{}", text),
+                            Err(e) => { loom::warn(&e); std::process::exit(2); }
+                        }
+                    } else {
+                        match clusters::advise_text(&ctx, name) {
+                            Ok(text) => print!("{}", text),
+                            Err(e) => { loom::warn(&e); std::process::exit(2); }
+                        }
                     }
                 }
                 "profile" => {
@@ -334,6 +347,7 @@ fn main() {
                 }
                 "run" => {
                     let mut profile = None;
+                    let mut shadow = None;
                     let mut parallel = true;
                     let mut dry = false;
                     let mut words = Vec::new();
@@ -341,6 +355,7 @@ fn main() {
                     while i < args.len() {
                         match args[i].as_str() {
                             "--profile" => { profile = args.get(i + 1).cloned(); i += 2; }
+                            "--shadow" => { shadow = args.get(i + 1).cloned(); i += 2; }
                             "--sequential" => { parallel = false; i += 1; }
                             "--dry" => { dry = true; i += 1; }
                             other => { words.push(other.to_string()); i += 1; }
@@ -349,12 +364,17 @@ fn main() {
                     let goal = words.join(" ");
                     if dry {
                         match clusters::dry_run(&ctx, &goal, profile.as_deref()) {
-                            Ok(text) => println!("{}", text),
+                            Ok(text) => {
+                                print!("{}", text);
+                                if let Some(name) = shadow.as_deref().filter(|s| !s.trim().is_empty()) {
+                                    println!("  shadow: {} would run beside the first cluster on the same task; its files are never merged.", name);
+                                }
+                            }
                             Err(e) => { loom::warn(&e); std::process::exit(2); }
                         }
                     } else {
-                        if goal.trim().is_empty() { loom::warn("usage: penelope cluster run GOAL [--profile NAME] [--dry] [--sequential]"); std::process::exit(2); }
-                        match clusters::orchestrate(&ctx, &goal, profile.as_deref(), parallel) {
+                        if goal.trim().is_empty() { loom::warn("usage: penelope cluster run GOAL [--profile NAME] [--shadow PROFILE] [--dry] [--sequential]"); std::process::exit(2); }
+                        match clusters::orchestrate_with(&ctx, &goal, profile.as_deref(), parallel, shadow.as_deref()) {
                             Ok(text) => println!("{}", text),
                             Err(e) => { loom::warn(&e); std::process::exit(2); }
                         }
@@ -364,7 +384,7 @@ fn main() {
                     // A bare word after cluster is the goal, not a verb.
                     let goal = args[1..].join(" ");
                     if other.starts_with('-') || goal.trim().is_empty() {
-                        loom::warn("usage: penelope cluster run GOAL [--profile NAME] [--dry] | list | status [ID] | dump ID | respawn ID [EXTRA] | advise [NAME] | profile NAME [JSON] | profiles | kill ID");
+                        loom::warn("usage: penelope cluster run GOAL [--profile NAME] [--shadow PROFILE] [--dry] | list | status [ID] | dump ID | respawn ID [EXTRA] | advise [NAME] [--apply] | profile NAME [JSON] | profiles | kill ID");
                         std::process::exit(2);
                     }
                     match clusters::orchestrate(&ctx, &goal, None, true) {
@@ -1074,9 +1094,11 @@ mod tests {
     fn help_names_the_eval_and_replay_commands() {
         assert!(HELP.contains("penelope eval TASKS.jsonl --setup large|large-subagents|cluster|all"), "{}", HELP);
         assert!(HELP.contains("penelope replay ID --model MODEL"), "{}", HELP);
-        assert!(HELP.contains("penelope cluster run GOAL [--profile NAME] [--dry] [--sequential]"), "{}", HELP);
-        assert!(HELP.contains("--dry prints parts, model and an estimate, starts nothing"), "{}", HELP);
+        assert!(HELP.contains("penelope cluster run GOAL [--profile NAME] [--shadow PROFILE] [--dry] [--sequential]"), "{}", HELP);
+        assert!(HELP.contains("a shadow profile runs beside the first"), "{}", HELP);
+        assert!(HELP.contains("prints parts, model and an estimate, starts nothing"), "{}", HELP);
         assert!(HELP.contains("penelope cluster advise [NAME]"), "{}", HELP);
+        assert!(HELP.contains("--apply writes the suggested model into the profile"), "{}", HELP);
         assert!(HELP.contains("(built-in, .json or .cluster)"), "{}", HELP);
         assert!(HELP.contains("penelope factory new NAME --profile P (--every 3h | --at HH:MM)"), "{}", HELP);
         assert!(HELP.contains("penelope factory list") && HELP.contains("penelope factory run NAME") && HELP.contains("penelope factory stop NAME"), "{}", HELP);

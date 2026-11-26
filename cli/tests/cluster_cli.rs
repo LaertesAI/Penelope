@@ -71,10 +71,53 @@ fn run_bin(args: &[&str]) -> (bool, String, String) {
 fn help_names_the_dry_run_and_the_cluster_file() {
     let (ok, out, err) = run_bin(&["--help"]);
     assert!(ok, "{} {}", out, err);
-    assert!(out.contains("penelope cluster run GOAL [--profile NAME] [--dry] [--sequential]"), "{}", out);
-    assert!(out.contains("--dry prints parts, model and an estimate, starts nothing"), "{}", out);
+    assert!(out.contains("penelope cluster run GOAL [--profile NAME] [--shadow PROFILE] [--dry] [--sequential]"), "{}", out);
+    assert!(out.contains("a shadow profile runs beside the first"), "{}", out);
+    assert!(out.contains("prints parts, model and an estimate, starts nothing"), "{}", out);
     assert!(out.contains("penelope cluster advise [NAME]"), "{}", out);
+    assert!(out.contains("--apply writes the suggested model into the profile"), "{}", out);
     assert!(out.contains("(built-in, .json or .cluster)"), "{}", out);
+}
+
+#[test]
+fn a_shadow_flag_runs_a_second_cluster_beside_the_main_one() {
+    let d = temp("shadow");
+    let probe = d.join("probe.txt");
+    std::fs::write(&probe, "base\n").unwrap();
+    let (address, _seen) = fake(vec![
+        (200, json!({"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "same answer"}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 2}}).to_string()),
+        (200, json!({"choices": [{"finish_reason": "tool_calls", "message": {"role": "assistant", "content": "",
+            "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "read", "arguments": json!({"path": probe.clone()}).to_string()}}]}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 2}}).to_string()),
+        (200, json!({"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "PASS: main checked"}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 2}}).to_string()),
+        (200, json!({"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "same answer"}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 2}}).to_string()),
+        (200, json!({"choices": [{"finish_reason": "tool_calls", "message": {"role": "assistant", "content": "",
+            "tool_calls": [{"id": "c2", "type": "function", "function": {"name": "read", "arguments": json!({"path": probe}).to_string()}}]}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 2}}).to_string()),
+        (200, json!({"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "PASS: shadow checked"}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 2}}).to_string()),
+    ]);
+    let root = root_with_model(&d, &address);
+    for (name, model) in [("large", "main"), ("small", "weak")] {
+        let profile = json!({
+            "name": name,
+            "workers": [{"name": "one", "role": "scout", "model": model, "task": "Answer the question."}],
+            "validator": {"name": "check", "role": "judge", "model": "judge"},
+            "max_models": 2, "max_depth": 1, "retries": 0, "worktree": false
+        });
+        std::fs::write(root.join(format!("clusters/profiles/{}.json", name)), profile.to_string()).unwrap();
+    }
+    let (ok, out, err) = run_bin(&["--root", root.to_str().unwrap(), "cluster", "run", "--profile", "large",
+                                   "--shadow", "small", "answer", "the", "question"]);
+    assert!(ok, "{} {}", out, err);
+    assert!(out.contains("SHADOW") && out.contains("match 100.0%"), "{}", out);
+    let stored: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(root.join("clusters/shadow.json")).unwrap()).unwrap();
+    assert_eq!(stored["runs"][0]["match_rate"].as_f64(), Some(1.0), "{}", stored);
+    assert_eq!(stored["runs"][0]["outputs"]["matched"].as_u64(), Some(1));
+    let _ = std::fs::remove_dir_all(&d);
 }
 
 #[test]
@@ -104,6 +147,33 @@ fn cluster_advise_prints_the_scored_suggestion_without_a_model() {
     assert!(out.contains("no cluster scores yet"), "{}", out);
     let _ = std::fs::remove_dir_all(&d);
     let _ = std::fs::remove_dir_all(&empty);
+}
+
+#[test]
+fn cluster_advise_apply_writes_the_best_model_into_the_profile() {
+    let d = temp("advise-apply");
+    let root = d.join(".penelope");
+    std::fs::create_dir_all(root.join("clusters/profiles")).unwrap();
+    let profile = json!({
+        "name": "routed",
+        "workers": [{"name": "coder-4", "role": "scout", "model": "weak", "task": "Do the task.", "task_type": "rust-fix"}],
+        "validator": {"name": "check", "role": "judge", "model": "judge"},
+        "max_models": 2, "max_depth": 1, "retries": 0, "worktree": false
+    });
+    std::fs::write(root.join("clusters/profiles/routed.json"), serde_json::to_string_pretty(&profile).unwrap()).unwrap();
+    let scores = json!({"coder-4": {"rust-fix": {
+        "accepted": 1, "rejected": 4,
+        "models": {"weak": {"accepted": 1, "rejected": 4}, "main": {"accepted": 3, "rejected": 0}}
+    }}});
+    std::fs::write(root.join("clusters/scores.json"), serde_json::to_string_pretty(&scores).unwrap()).unwrap();
+
+    let (ok, out, err) = run_bin(&["--root", root.to_str().unwrap(), "cluster", "advise", "routed", "--apply"]);
+    assert!(ok, "{} {}", out, err);
+    assert!(out.contains("weak -> main") && out.contains("next run"), "{}", out);
+    let changed: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(root.join("clusters/profiles/routed.json")).unwrap()).unwrap();
+    assert_eq!(changed["workers"][0]["model"].as_str(), Some("main"), "{}", changed);
+    assert!(!root.join("usage.json").exists(), "advise --apply must not call a model");
+    let _ = std::fs::remove_dir_all(&d);
 }
 
 #[test]

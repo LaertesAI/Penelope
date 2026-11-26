@@ -31,6 +31,8 @@ static REPORT_LOCK: Mutex<()> = Mutex::new(());
 static MEMORY_LOCK: Mutex<()> = Mutex::new(());
 /// Two clusters may finish a validation at the same moment; the score table is read, changed and written under one lock.
 static SCORE_LOCK: Mutex<()> = Mutex::new(());
+/// Shadow runs append to one `.penelope/clusters/shadow.json`; one writer at a time.
+static SHADOW_LOCK: Mutex<()> = Mutex::new(());
 /// The cancel flag of every cluster that is running in this process. `kill()` sets it at once; a watcher on the kill
 /// file reaches a cluster started by another process within 100 ms.
 static CANCELS: Mutex<Vec<(String, Arc<AtomicBool>)>> = Mutex::new(Vec::new());
@@ -77,6 +79,9 @@ pub struct Part {
     pub mcp: Vec<String>,
     /// Names of worker parts that must finish before this part starts. Empty means it may start at once.
     pub depends_on: Vec<String>,
+    /// Independent answers before this part's result is accepted. 0 inherits the profile: 1 runs once, 2 runs the
+    /// part on its model and on the profile's `second_model`. A disagreement escalates once to `decider_model`.
+    pub quorum: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -106,6 +111,15 @@ pub struct Profile {
     pub at: Option<String>,
     /// The one purpose of a factory profile. A factory uses it as the cluster goal when its registry entry has none.
     pub purpose: Option<String>,
+    /// Independent answers for every worker part that does not set its own `quorum`. 1 (default) runs once, 2 runs
+    /// the part and a second opinion; a disagreement asks the decider model once.
+    pub quorum: usize,
+    /// The model setting of the second quorum answer. Default `weak`; it may be a full model object.
+    pub second_model: Value,
+    /// The model setting that decides a disagreement. Default `main`; it is called once per disagreement.
+    pub decider_model: Value,
+    /// This profile runs as a shadow beside the profile it names: same task, own worktree, files never merged.
+    pub shadow_of: Option<String>,
 }
 
 /// A number that may arrive as `3`, `"3"` or `"3 reports"`.
@@ -170,6 +184,15 @@ pub struct Cluster {
     pub respawns: usize,
     /// The cluster this one was respawned from.
     pub respawned_from: String,
+    /// Parts that agreed with their independent second answer, and parts escalated to the decider model.
+    pub quorum_agreed: usize,
+    pub quorum_escalated: usize,
+    /// A shadow cluster runs beside a main cluster. Its files are never merged into the live tree.
+    pub shadow: bool,
+    /// The main cluster id when this cluster is a shadow; empty otherwise.
+    pub shadow_of: String,
+    /// The match of a shadow run against its main run, 0.0 to 1.0. `None` until the pair was compared.
+    pub match_rate: Option<f64>,
     pub parts: Vec<PartRun>,
 }
 
@@ -236,7 +259,26 @@ fn part(value: &Value, fallback: &str) -> Part {
             .find_map(|key| value[*key].as_array())
             .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.trim().to_string())).filter(|s| !s.is_empty()).collect())
             .unwrap_or_default(),
+        quorum: count_of(&value["quorum"]).unwrap_or(0).min(2),
     }
+}
+
+/// A model setting may be a name such as `weak` or a full setting object. It is not resolved here, so a broken
+/// setting fails at the part that really needs it.
+fn model_setting(value: &Value, fallback: &str) -> Value {
+    if value.is_object() {
+        return value.clone();
+    }
+    match value.as_str().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(name) => json!(name),
+        None => json!(fallback),
+    }
+}
+
+/// A profile name in `before` or `shadow_of`: lower case letters, digits, `_` or `-`, at most 32 characters.
+fn profile_name_ok(name: &str) -> bool {
+    !name.is_empty() && name.len() <= 32
+        && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
 }
 
 /// A part role. `human` is a cluster-only role: it makes no model call and waits for a yes or no.
@@ -303,14 +345,39 @@ fn parse_profile(value: &Value, fallback_name: &str) -> Result<Profile, String> 
     // reads; the chain and the read-only rule are enforced before any model call.
     let before = match value["before"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
         Some(before) => {
-            let ok = !before.is_empty() && before.len() <= 32 && before.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-');
-            if !ok {
+            if !profile_name_ok(before) {
                 return Err(format!("profile {}: before {} is no profile name (lower case letters, digits, _ or -, at most 32)", name, before));
             }
             Some(before.to_string())
         }
         None => None,
     };
+    // A shadow profile runs beside the profile it names. The main run is never changed; the shadow's files are never
+    // merged. The profile must exist when the pair starts, not at parse time.
+    let shadow_of = match value["shadow_of"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(main) => {
+            if !profile_name_ok(main) {
+                return Err(format!("profile {}: shadow_of {} is no profile name (lower case letters, digits, _ or -, at most 32)", name, main));
+            }
+            if main == name {
+                return Err(format!("profile {}: shadow_of names the profile itself. A shadow runs beside another profile.", name));
+            }
+            Some(main.to_string())
+        }
+        None => None,
+    };
+    // The quorum settings are numbers and two model settings. A quorum of 2 is the only useful vote; a third answer
+    // would need a tie rule, so the profile is refused instead of silently clamping.
+    let quorum = match value.get("quorum") {
+        None | Some(Value::Null) => 1,
+        Some(v) => match count_of(v) {
+            Some(1) => 1,
+            Some(2) => 2,
+            _ => return Err(format!("profile {}: quorum is 1 or 2, got {}", name, v)),
+        },
+    };
+    let second_model = model_setting(&value["second_model"], "weak");
+    let decider_model = model_setting(&value["decider_model"], "main");
     // A factory profile carries its schedule. The two forms are exclusive and are validated here, so a timer is never
     // written from a typo. The runner only reads the fields; the schedule itself lives in the operating system.
     let every = match value.get("every") {
@@ -335,7 +402,7 @@ fn parse_profile(value: &Value, fallback_name: &str) -> Result<Profile, String> 
         return Err(format!("profile {}: use every or at, not both", name));
     }
     let purpose = value["purpose"].as_str().map(str::trim).filter(|s| !s.is_empty()).map(|s| s.chars().take(1000).collect::<String>());
-    Ok(Profile { name, workers: list, validator, max_models, max_depth, max_parallel, budget_eur, max_steps, retries, report_every, stuck_after, worktree, before, every, at, purpose })
+    Ok(Profile { name, workers: list, validator, max_models, max_depth, max_parallel, budget_eur, max_steps, retries, report_every, stuck_after, worktree, before, every, at, purpose, quorum, second_model, decider_model, shadow_of })
 }
 
 fn builtin(name: &str) -> Option<Profile> {
@@ -553,11 +620,12 @@ fn cluster_setting(key: &str, raw: &str) -> Result<Value, String> {
             if n == 0 || n > 100 { return Err(format!("NOT parsed. stuck_after is between 1 and 100, got {}.", n)); }
             Ok(json!(raw))
         }
+        "quorum" => Ok(json!(whole(1, 2)?)),
         _ => Err(format!("NOT parsed. Unknown setting {}.", key)),
     }
 }
 
-const CLUSTER_FILE_KEYS: &[&str] = &["parts", "before", "max_models", "max_depth", "max_parallel", "max_steps", "retries", "budget_eur", "report_every", "stuck_after", "worktree"];
+const CLUSTER_FILE_KEYS: &[&str] = &["parts", "before", "shadow_of", "quorum", "max_models", "max_depth", "max_parallel", "max_steps", "retries", "budget_eur", "report_every", "stuck_after", "worktree"];
 
 /// Parses one cluster file into a `Profile`:
 /// `$dev(parts=[researcher, coder*3, validator, tool], max_models=8, max_depth=3, budget_eur=2)`.
@@ -609,6 +677,14 @@ pub fn parse_cluster(text: &str) -> Result<Profile, String> {
         } else if key == "before" {
             if !valid_cluster_name(raw) {
                 return Err(format!("NOT parsed. before needs a profile name (lower case letters, digits, _ or -, at most 32), got {}.", raw));
+            }
+            settings.push((key, json!(raw)));
+        } else if key == "shadow_of" {
+            if !valid_cluster_name(raw) {
+                return Err(format!("NOT parsed. shadow_of needs a profile name (lower case letters, digits, _ or -, at most 32), got {}.", raw));
+            }
+            if name == raw {
+                return Err("NOT parsed. shadow_of names the profile itself.".to_string());
             }
             settings.push((key, json!(raw)));
         } else {
@@ -671,13 +747,20 @@ pub fn profiles_text(ctx: &Ctx) -> String {
             Ok(p) => {
                 let parts: Vec<String> = p.workers.iter().map(|w| format!("{} ({})", w.name, w.role))
                     .chain(p.validator.iter().map(|v| format!("{} (validator)", v.name))).collect();
-                out.push_str(&format!("{:<12} {} · max {} parts, depth {}, {} parallel, {} retries, report every {}s, stuck after {}{}{}{}\n  {}\n", name, parts.join(", "),
-                                      p.max_models, p.max_depth, p.max_parallel, p.retries, p.report_every, p.stuck_after,
-                                      if p.worktree { " · worktree" } else { "" },
-                                      p.before.as_deref().map(|b| format!(" · before {}", b)).unwrap_or_default(),
-                                      p.every.as_deref().map(|e| format!(" · every {}", e))
-                                          .or_else(|| p.at.as_deref().map(|a| format!(" · daily at {}", a))).unwrap_or_default(),
-                                      if p.budget_eur > 0.0 { format!("{:.2} EUR budget", p.budget_eur) } else { "no euro limit".to_string() }));
+                let quorum_parts = p.workers.iter().filter(|w| quorum_of(&p, w) >= 2).count();
+                let extra = format!("{}{}{}{}{}",
+                    if p.worktree { " · worktree" } else { "" },
+                    p.before.as_deref().map(|b| format!(" · before {}", b)).unwrap_or_default(),
+                    p.shadow_of.as_deref().map(|s| format!(" · shadow of {}", s)).unwrap_or_default(),
+                    if quorum_parts > 0 { format!(" · quorum 2 on {} parts (second {}, decider {})", quorum_parts,
+                                                  p.second_model.as_str().unwrap_or("a model setting"),
+                                                  p.decider_model.as_str().unwrap_or("a model setting")) } else { String::new() },
+                    if p.budget_eur > 0.0 { format!(" · {:.2} EUR budget", p.budget_eur) } else { " · no euro limit".to_string() });
+                out.push_str(&format!("{:<12} {} · max {} parts, depth {}, {} parallel, {} retries, report every {}s, stuck after {}{}\n  {}\n",
+                                      name, parts.join(", "), p.max_models, p.max_depth, p.max_parallel, p.retries,
+                                      p.report_every, p.stuck_after, extra,
+                                      p.every.as_deref().map(|e| format!("every {}", e))
+                                          .or_else(|| p.at.as_deref().map(|a| format!("daily at {}", a))).unwrap_or_default()));
             }
             Err(e) => out.push_str(&format!("{:<12} {}\n", name, e)),
         }
@@ -685,7 +768,8 @@ pub fn profiles_text(ctx: &Ctx) -> String {
     out.push_str("\nA profile is a file under .penelope/clusters/profiles/NAME.json or NAME.cluster. A part names a role, a slot and a\nmodel: \"main\", \"weak\", \"scout\", \"judge\", \"worker\" or a full model setting such as an OpenCode model.\n");
     out.push_str("A cluster file is one line: $dev(parts=[researcher, coder*3, validator, tool], max_models=8, max_depth=3, budget_eur=2).\nIt names built-in parts and repetitions only; it cannot carry a model, a tool or code.\n");
     out.push_str("A part with role \"human\" waits for yes or no. Without an interface set \"human\": \"yes\" or \"no\" in\nconfig.json; Penelope never assumes yes. A profile field \"before\": \"PROFILE\" sends the task through that read-only\nprompt cluster before its workers start; the prompt profile must not name a before of its own.\n");
-    out.push_str("A part may set \"task_type\" (for example \"rust-fix\"); validator results are scored per part and task type,\nwith the profile name as the default. `penelope cluster advise [NAME]` prints the parts that fail often.\n");
+    out.push_str("A part may set \"task_type\" (for example \"rust-fix\"); validator results are scored per part and task type,\nwith the profile name as the default. `penelope cluster advise [NAME]` prints the parts that fail often;\n`penelope cluster advise NAME --apply` writes the best recorded model into the profile for the next run.\n");
+    out.push_str("A part or profile may set \"quorum\": 2: the part runs twice, the second answer uses the profile's\n\"second_model\" (default weak), and a disagreement asks \"decider_model\" (default main) once. A profile with\n\"shadow_of\": \"MAIN\" runs as a shadow beside MAIN on the same task; its worktree is never merged.\n");
     out
 }
 
@@ -719,6 +803,7 @@ fn dry_cluster_text(ctx: &Ctx, p: &Profile, goal: &str, note: &str) -> String {
     let mut tokens_out = 0u64;
     let mut euro = 0.0;
     let mut unpriced = 0usize;
+    let quorum_parts = p.workers.iter().filter(|w| quorum_of(p, w) >= 2).count();
     for part in p.workers.iter().chain(p.validator.iter()) {
         let steps = if part.role == "judge" { 4 } else { p.max_steps };
         let (tin, tout, cost, model) = estimate_part(ctx, part, steps);
@@ -735,6 +820,14 @@ fn dry_cluster_text(ctx: &Ctx, p: &Profile, goal: &str, note: &str) -> String {
     out.push_str(&format!("  estimate: ~{} tokens in / {} tokens out · {:.4} EUR", tokens_in, tokens_out, euro));
     if unpriced > 0 { out.push_str(&format!(" (partial: {} parts have no price in config.json)", unpriced)); }
     out.push('\n');
+    if quorum_parts > 0 {
+        out.push_str(&format!("  quorum: {} part(s) run a second answer (model {}); a disagreement adds one decider call (model {}). The estimate does not include those calls.\n",
+                              quorum_parts, p.second_model.as_str().unwrap_or("a model setting"),
+                              p.decider_model.as_str().unwrap_or("a model setting")));
+    }
+    if let Some(main) = &p.shadow_of {
+        out.push_str(&format!("  shadow: this profile runs beside {} in its own worktree; its files are never merged.\n", main));
+    }
     out
 }
 
@@ -762,19 +855,23 @@ pub fn dry_run(ctx: &Ctx, goal: &str, hint: Option<&str>) -> Result<String, Stri
     Ok(out)
 }
 
-fn model_for_part(ctx: &Ctx, p: &Part) -> Result<Value, String> {
-    if p.model.is_object() && p.model["model"].is_string() {
-        return Ok(p.model.clone());
+fn resolve_model(ctx: &Ctx, what: &str, model: &Value, fallback_role: &str) -> Result<Value, String> {
+    if model.is_object() && model["model"].is_string() {
+        return Ok(model.clone());
     }
-    let key = p.model.as_str().unwrap_or("").trim();
-    let model = match key {
+    let key = model.as_str().unwrap_or("").trim();
+    let resolved = match key {
         "main" => Some(ctx.cfg["main"].clone()),
         "weak" => Some(ctx.cfg["weak"].clone()),
-        "" => crate::route::model_for(ctx, &p.role).cloned(),
+        "" => crate::route::model_for(ctx, fallback_role).cloned(),
         role if crate::route::role_names().iter().any(|r| *r == role) => crate::route::model_for(ctx, role).cloned(),
-        other => return Err(format!("part {} names unknown model {}; use main, weak, scout, judge, worker or a model setting", p.name, other)),
+        other => return Err(format!("{} names unknown model {}; use main, weak, scout, judge, worker or a model setting", what, other)),
     };
-    model.filter(|m| m["model"].is_string()).ok_or_else(|| format!("part {} has no model for role {}", p.name, p.role))
+    resolved.filter(|m| m["model"].is_string()).ok_or_else(|| format!("{} has no model for its role", what))
+}
+
+fn model_for_part(ctx: &Ctx, p: &Part) -> Result<Value, String> {
+    resolve_model(ctx, &format!("part {}", p.name), &p.model, &p.role)
 }
 
 fn part_model_name(p: &Part, model: &Value) -> String {
@@ -804,7 +901,9 @@ fn save(ctx: &Ctx, c: &Cluster) -> Result<(), String> {
         "output": c.output, "error": c.error, "memory": c.memory, "parts": parts,
         "evidence": c.evidence,
         "project": c.project, "worktree": c.worktree, "branch": c.branch, "cwd": c.cwd,
-        "respawns": c.respawns, "respawned_from": c.respawned_from
+        "respawns": c.respawns, "respawned_from": c.respawned_from,
+        "quorum": {"agreed": c.quorum_agreed, "escalated": c.quorum_escalated},
+        "shadow": c.shadow, "shadow_of": c.shadow_of, "match_rate": c.match_rate
     });
     let path = cluster_file(ctx, &c.id);
     let tmp = path.with_extension("json.tmp");
@@ -843,6 +942,11 @@ fn cluster_from(v: &Value) -> Cluster {
         cwd: v["cwd"].as_str().unwrap_or("").to_string(),
         respawns: v["respawns"].as_u64().unwrap_or(0) as usize,
         respawned_from: v["respawned_from"].as_str().unwrap_or("").to_string(),
+        quorum_agreed: v["quorum"]["agreed"].as_u64().unwrap_or(0) as usize,
+        quorum_escalated: v["quorum"]["escalated"].as_u64().unwrap_or(0) as usize,
+        shadow: v["shadow"].as_bool().unwrap_or(false),
+        shadow_of: v["shadow_of"].as_str().unwrap_or("").to_string(),
+        match_rate: v["match_rate"].as_f64(),
         parts: v["parts"].as_array().map(|a| a.iter().map(|p| PartRun {
             name: p["name"].as_str().unwrap_or("").to_string(), slot: p["slot"].as_str().unwrap_or("").to_string(),
             role: p["role"].as_str().unwrap_or("").to_string(), model: p["model"].as_str().unwrap_or("").to_string(),
@@ -977,14 +1081,24 @@ fn task_type_of(profile: &Profile, part: &Part) -> String {
     if part.task_type.trim().is_empty() { profile.name.clone() } else { part.task_type.trim().to_string() }
 }
 
-/// Writes the outcome of the validator into `.penelope/clusters/scores.json`, one result per worker part.
+/// The key of a part in the model column of the score table. A setting name such as `main` or `weak` can be written
+/// back into a profile; a full model object falls back to its label, which is useful in the report but not a setting.
+fn model_key_of(ctx: &Ctx, part: &Part) -> String {
+    if let Some(name) = part.model.as_str().map(str::trim).filter(|s| !s.is_empty()) {
+        return name.to_string();
+    }
+    model_for_part(ctx, part).ok().map(|m| part_model_name(part, &m)).unwrap_or_default()
+}
+
+/// Writes the outcome of the validator into `.penelope/clusters/scores.json`, one result per worker part. The model
+/// setting of the part is counted beside the totals, so `penelope cluster advise --apply` can suggest a better one.
 fn record_scores(ctx: &Ctx, profile: &Profile, accepted: bool) {
     let _guard = SCORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let path = scores_path(ctx);
     let mut table = crate::advise::load(&path).unwrap_or_else(|_| crate::advise::new_table());
     for part in profile.workers.iter().filter(|p| p.role != "human") {
         let task_type = task_type_of(profile, part);
-        crate::advise::record(&mut table, &part.name, &task_type, accepted);
+        crate::advise::record_model(&mut table, &part.name, &task_type, &model_key_of(ctx, part), accepted);
     }
     let _ = crate::advise::save(&path, &table);
 }
@@ -1479,6 +1593,88 @@ fn validator_prompt(c: &Cluster, memory: &str) -> String {
 Otherwise FAIL with the smallest exact correction.", c.task, memory.chars().take(12_000).collect::<String>())
 }
 
+/// The answers of two independent runs agree when their whitespace and letter case are the same. The compare is
+/// deliberately strict: a different sentence is a disagreement, and a nearly equal answer costs one decider call.
+fn normalized_answer(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ").trim_end_matches(['.', '!', '?']).to_lowercase()
+}
+
+fn answers_agree(first: &str, second: &str) -> bool {
+    let first = normalized_answer(first);
+    !first.is_empty() && first == normalized_answer(second)
+}
+
+/// The number of answers for a part: its own `quorum`, else the profile's. 2 is the only vote the profile parser keeps.
+fn quorum_of(profile: &Profile, part: &Part) -> usize {
+    let from_part = if part.quorum > 0 { part.quorum } else { profile.quorum };
+    from_part.clamp(1, 2)
+}
+
+/// What a quorum run did. The first answer is the normal part result; `decided` is the answer that replaces it only
+/// after an escalation.
+#[derive(Clone, Debug)]
+struct QuorumOutcome {
+    agreed: bool,
+    escalated: bool,
+    second_model: String,
+    decider_model: String,
+    second: String,
+    decided: String,
+}
+
+/// Asks one model without tools, records its cost and checks the hard budgets. Used for the second quorum answer and
+/// for the decider, so a quorum can never run without its tokens reaching `usage.json`.
+fn quorum_ask(ctx: &Ctx, c: &Cluster, model: &Value, what: &str, system: &str, task: &str,
+              limits: Limits, cancel: &AtomicBool) -> Result<(String, String), String> {
+    if cancel.load(Ordering::SeqCst) { return Err("stopped".to_string()); }
+    let name = model["model"].as_str().unwrap_or("").to_string();
+    let (text, tokens_in, tokens_out) = crate::weak::ask_count(model, system, task)
+        .map_err(|e| {
+            if cancel.load(Ordering::SeqCst) {
+                "stopped".to_string()
+            } else {
+                let shown = model["label"].as_str().or_else(|| model["model"].as_str()).unwrap_or("model");
+                format!("QUORUM: the {} {} did not answer: {}", what, shown, e)
+            }
+        })?;
+    crate::cost::record(ctx, &format!("cluster:{}:quorum", c.name), &name, tokens_in, tokens_out);
+    if let Some(stop) = limits.over(ctx) { return Err(stop); }
+    if cancel.load(Ordering::SeqCst) { return Err("stopped".to_string()); }
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        return Err(format!("QUORUM: the {} returned no text", what));
+    }
+    Ok((text, name))
+}
+
+/// The second answer and, only on a disagreement, the one decider call. The second model never sees the first answer,
+/// so the two answers are independent. The decider sees both answers and returns the result the part keeps.
+fn quorum_check(ctx: &Ctx, c: &Cluster, part: &Part, profile: &Profile, task: &str, first: &str,
+                primary: &Value, limits: Limits, cancel: &AtomicBool) -> Result<QuorumOutcome, String> {
+    let second_model = resolve_model(ctx, &format!("profile {} second_model", profile.name), &profile.second_model, "worker")?;
+    let second_system = format!("You are the second model of the Penelope cluster {} for part {} (slot {}). The cluster task: {}.\nYour focus: {}.\nYou have no tools: answer from the task and its context only. The first answer is not shown to you; give your own answer in the form the part would report.\nModel: {}.",
+                                c.name, part.name, part.slot, c.task,
+                                if part.task.is_empty() { "the whole task" } else { &part.task },
+                                part_model_name(part, &second_model));
+    let (second, second_name) = quorum_ask(ctx, c, &second_model, "second model", &second_system, task, limits, cancel)?;
+    let mut outcome = QuorumOutcome {
+        agreed: answers_agree(first, &second), escalated: false,
+        second_model: second_name, decider_model: String::new(), second: second.clone(), decided: String::new(),
+    };
+    if outcome.agreed { return Ok(outcome); }
+    let decider_model = resolve_model(ctx, &format!("profile {} decider_model", profile.name), &profile.decider_model, "worker")?;
+    let decider_system = "You are the deciding model of a Penelope cluster. Two parts answered the same task independently and disagree. \
+Decide which answer is correct, or give the correct answer yourself. You have no tools. Answer with the final result only, no explanation.";
+    let decider_task = format!("Task:\n{}\n\nFirst answer ({}):\n{}\n\nSecond answer ({}):\n{}\n\nGive the final result only.",
+                               task, part_model_name(part, primary), first.chars().take(6_000).collect::<String>(),
+                               outcome.second_model, second.chars().take(6_000).collect::<String>());
+    let (decided, decider_name) = quorum_ask(ctx, c, &decider_model, "decider model", decider_system, &decider_task, limits, cancel)?;
+    outcome.escalated = true;
+    outcome.decider_model = decider_name;
+    outcome.decided = decided;
+    Ok(outcome)
+}
+
 /// The question a human part puts to the person. An empty task asks for the whole cluster task.
 fn human_question(c: &Cluster, part: &Part) -> String {
     if part.task.trim().is_empty() {
@@ -1591,7 +1787,7 @@ fn run_workers(ctx: &Ctx, c: &mut Cluster, profile: &Profile, feedback: &str, li
             }
             continue;
         }
-        let mut jobs: Vec<(usize, Part, Value, String, String)> = Vec::new();
+        let mut jobs: Vec<(usize, Part, Value, String, String, usize)> = Vec::new();
         for i in &wave {
             let part = profile.workers[*i].clone();
             let model = match model_for_part(ctx, &part) {
@@ -1614,9 +1810,10 @@ fn run_workers(ctx: &Ctx, c: &mut Cluster, profile: &Profile, feedback: &str, li
             let task = format!("Cluster task: {}\n\nYour part: {}\n\nNotes within two links of your task note (stale notes left out):\n{}\n\nDo your part and report the evidence.",
                                c.task, if part.task.is_empty() { &c.task } else { &part.task },
                                if notes.trim().is_empty() { "(none yet)" } else { notes.trim() });
-            jobs.push((*i, part, model, system, task));
+            let quorum = quorum_of(profile, &part);
+            jobs.push((*i, part, model, system, task, quorum));
         }
-        for (i, _, _, _, _) in &jobs { pending.retain(|index| index != i); }
+        for (i, _, _, _, _, _) in &jobs { pending.retain(|index| index != i); }
         if jobs.is_empty() { continue; }
         c.done = c.done.min(c.total);
         c.updated = now();
@@ -1626,15 +1823,26 @@ fn run_workers(ctx: &Ctx, c: &mut Cluster, profile: &Profile, feedback: &str, li
         *focus.lock().unwrap_or_else(|e| e.into_inner()) = wave_focus.clone();
         report(ctx, c, &wave_focus, "");
         let mut handles = Vec::new();
-        for (i, part, model, system, task) in jobs {
+        for (i, part, model, system, task, quorum) in jobs {
             let ctx = ctx.clone();
             let snapshot = c.clone();
+            let profile_snapshot = profile.clone();
             let cancel = cancel.clone();
             let watch = watch.clone();
             let steps = profile.max_steps;
             handles.push(std::thread::spawn(move || {
                 let out = run_model(&ctx, &snapshot, &part, &system, &task, steps, &cancel, limits, &watch);
-                (i, part, model, out)
+                let (out, vote) = match out {
+                    Ok(done) if quorum >= 2 => {
+                        match quorum_check(&ctx, &snapshot, &part, &profile_snapshot, &task, &done.text,
+                                           &model, limits, &cancel) {
+                            Ok(vote) => (Ok(done), Some(vote)),
+                            Err(e) => (Err(e), None),
+                        }
+                    }
+                    other => (other, None),
+                };
+                (i, part, model, out, vote)
             }));
         }
         let mut results = Vec::new();
@@ -1644,7 +1852,7 @@ fn run_workers(ctx: &Ctx, c: &mut Cluster, profile: &Profile, feedback: &str, li
                 Err(_) => return Err("a worker part panicked".to_string()),
             }
         }
-        for (i, part, model, out) in results {
+        for (i, part, model, out, vote) in results {
             // A cancel that came from the zombie watch belongs to `stuck`, not to `killed`.
             let out = match out {
                 Err(e) if e == "stopped" => match watch.lock().unwrap_or_else(|e| e.into_inner()).cause() {
@@ -1655,12 +1863,29 @@ fn run_workers(ctx: &Ctx, c: &mut Cluster, profile: &Profile, feedback: &str, li
             };
             match out {
                 Ok(done) => {
+                    let text = vote.as_ref().map(|v| if v.escalated { v.decided.clone() } else { done.text.clone() })
+                        .unwrap_or_else(|| done.text.clone());
+                    if let Some(v) = &vote {
+                        if v.agreed { c.quorum_agreed += 1; }
+                        if v.escalated { c.quorum_escalated += 1; }
+                    }
                     c.parts[i].state = "done".to_string();
-                    c.parts[i].output = done.text.clone();
+                    c.parts[i].output = text.clone();
                     c.parts[i].error.clear();
-                    c.output.push_str(&format!("\n--- {} ({}) ---\n{}\n", part.name, part.slot, done.text));
-                    write_part_note(ctx, c, profile, &part, Some(&done.text), crate::notes::Status::Open);
-                    memory_line(ctx, c, &part, &model, &done.text, "done");
+                    c.output.push_str(&format!("\n--- {} ({}) ---\n{}\n", part.name, part.slot, text));
+                    write_part_note(ctx, c, profile, &part, Some(&text), crate::notes::Status::Open);
+                    memory_line(ctx, c, &part, &model, &text, "done");
+                    if let Some(v) = &vote {
+                        let result = if v.escalated { format!("escalated to {}", v.decider_model) } else { "agreed".to_string() };
+                        append_memory(ctx, c, &format!("\n## quorum · {}\n\nfirst answer ({}):\n{}\n\nsecond answer ({}):\n{}\n\n{}: {}\n",
+                                                      part.name, part_model_name(&part, &model),
+                                                      done.text.chars().take(4_000).collect::<String>(),
+                                                      v.second_model, v.second.chars().take(4_000).collect::<String>(),
+                                                      result, if v.escalated { &v.decided } else { &text }));
+                        stream_note(ctx, &c.id, &format!("QUORUM {} · {} · second {} · {}",
+                                                          part.name, if v.agreed { "agreed" } else { "disagree" },
+                                                          v.second_model, if v.escalated { &v.decider_model } else { "no decider call" }));
+                    }
                     c.done = (c.done + 1).min(c.total);
                     finished.push(i);
                     if let Some(stop) = limits.over(ctx) {
@@ -1936,6 +2161,8 @@ fn run_cluster_inner(ctx: &Ctx, id: &str, session_before: Option<f64>) -> Result
     c.started = if c.started == 0 { now() } else { c.started };
     c.state = "working".to_string();
     c.done = 0;
+    c.quorum_agreed = 0;
+    c.quorum_escalated = 0;
     c.total = profile.workers.len() + profile.validator.iter().count();
     c.error.clear();
     c.evidence.clear();
@@ -2013,7 +2240,11 @@ fn run_cluster_inner(ctx: &Ctx, id: &str, session_before: Option<f64>) -> Result
         }
     }
     if ok && profile.worktree {
-        if profile.validator.is_none() {
+        if c.shadow {
+            // A shadow is a measurement, not a second writer. Its worktree stays for inspection and its patch never
+            // reaches the live tree, not even after a PASS.
+            append_memory(ctx, &c, &format!("\n## shadow\n\nworktree {} was not merged into {}. A shadow only measures the main run.\n", c.worktree, c.project));
+        } else if profile.validator.is_none() {
             ok = false;
             blocked = true;
             c.error = "the worktree was not applied: a profile without a validator cannot answer PASS".to_string();
@@ -2082,7 +2313,9 @@ fn new_cluster(ctx: &Ctx, profile: &Profile, name: &str, task: &str, parent: Opt
                       parent: parent.map(str::to_string), after, depth, state: "queued".to_string(), done: 0,
                       total: parts.len(), started: now(), updated: now(), output: String::new(), error: String::new(),
                       memory: memory_path(ctx, &id).to_string_lossy().to_string(), evidence: String::new(),
-                      project, worktree, branch, cwd, respawns: 0, respawned_from: String::new(), parts };
+                      project, worktree, branch, cwd, respawns: 0, respawned_from: String::new(),
+                      quorum_agreed: 0, quorum_escalated: 0, shadow: false, shadow_of: String::new(),
+                      match_rate: None, parts };
     save(ctx, &c)?;
     let _ = fs::write(memory_path(ctx, &id), format!("# Cluster {} · {}\n\nTask: {}\n\n", name, profile.name, task));
     Ok(c)
@@ -2320,9 +2553,32 @@ fn create_plan(ctx: &Ctx, plan: &[PlanCluster]) -> Result<Vec<(String, PlanClust
 
 /// The orchestrator: make a plan, create the clusters and run them, respecting `after` and `parent`.
 pub fn orchestrate(ctx: &Ctx, goal: &str, hint: Option<&str>, parallel: bool) -> Result<String, String> {
+    orchestrate_with(ctx, goal, hint, parallel, None)
+}
+
+/// `orchestrate` with an optional shadow profile. The shadow runs after the main clusters, on the same task, in its own
+/// worktree. Its result is compared with the main run and its files are never merged.
+pub fn orchestrate_with(ctx: &Ctx, goal: &str, hint: Option<&str>, parallel: bool, shadow: Option<&str>) -> Result<String, String> {
     if goal.trim().is_empty() { return Err("NOT started. The cluster goal is empty.".to_string()); }
     let plan = plan(ctx, goal.trim(), hint);
+    // A bad explicit shadow is refused before a cluster file is written or a model is called.
+    if let Some(name) = shadow.map(str::trim).filter(|s| !s.is_empty()) {
+        profile(ctx, name).map_err(|e| format!("--shadow {}: {}", name, e))?;
+        if plan.iter().any(|p| p.parent.is_none() && p.profile == name) {
+            return Err(format!("--shadow {} is the main profile itself; name another profile.", name));
+        }
+    }
     let created = create_plan(ctx, &plan)?;
+    // Resolve the shadow pairs before the first model call, so a bad --shadow name costs nothing. A profile that names
+    // `shadow_of: P` runs beside every top-level plan cluster with profile P.
+    let explicit_target = created.iter().find(|(_, p)| p.parent.is_none()).map(|(id, _)| id.clone());
+    let mut shadow_plan: Vec<(String, Vec<String>)> = Vec::new();
+    for (id, p) in &created {
+        if p.parent.is_some() { continue; }
+        let explicit_for = if Some(id) == explicit_target.as_ref() { shadow } else { None };
+        let targets = shadow_targets(ctx, &p.profile, explicit_for)?;
+        if !targets.is_empty() { shadow_plan.push((id.clone(), targets)); }
+    }
     let mut done: Vec<String> = Vec::new();
     let mut pending: Vec<(String, PlanCluster)> = created.clone();
     // One euro baseline for the whole orchestration: every cluster also answers to the session budget.
@@ -2358,10 +2614,182 @@ pub fn orchestrate(ctx: &Ctx, goal: &str, hint: Option<&str>, parallel: bool) ->
         for (_, p) in &ready { done.push(p.name.clone()); }
         pending.retain(|(_, p)| !ready.iter().any(|(_, r)| r.name == p.name));
     }
+    let mut shadow_lines = Vec::new();
+    for (main_id, targets) in shadow_plan {
+        for name in targets {
+            match run_shadow(ctx, &main_id, &name, Some(session_before)) {
+                Ok((run, _)) => shadow_lines.push(run.line()),
+                Err(e) => shadow_lines.push(format!("SHADOW {} beside {}: NOT run: {}", name, main_id, e)),
+            }
+        }
+    }
     let ids: Vec<String> = created.iter().map(|(id, _)| id.clone()).collect();
     let summary = status_text(ctx, None);
-    Ok(format!("{} clusters started: {}\n\n{}", created.len(), ids.join(", "), summary))
+    let shadows = if shadow_lines.is_empty() { String::new() } else { format!("\n\n{}", shadow_lines.join("\n")) };
+    Ok(format!("{} clusters started: {}\n\n{}{}", created.len(), ids.join(", "), summary, shadows))
 }
+
+fn shadow_path(ctx: &Ctx) -> PathBuf {
+    base(ctx).join("shadow.json")
+}
+
+/// A role that may change files. A shadow with such a role always gets a worktree, even if its profile says otherwise,
+/// because a shadow must never reach the live tree.
+fn writes_files(p: &Profile) -> bool {
+    p.workers.iter().chain(p.validator.iter()).any(|w| matches!(w.role.as_str(), "worker" | "lead"))
+}
+
+/// Profiles that name `main` in `shadow_of`. A malformed profile file is ignored; it is not a reason to stop a run.
+fn declared_shadows(ctx: &Ctx, main: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for name in profile_names(ctx) {
+        if name == main { continue; }
+        if let Ok(p) = profile(ctx, &name) {
+            if p.shadow_of.as_deref() == Some(main) { out.push(name); }
+        }
+    }
+    out
+}
+
+/// The explicit `--shadow` profile plus every profile declared for this main profile.
+fn shadow_targets(ctx: &Ctx, main: &str, explicit: Option<&str>) -> Result<Vec<String>, String> {
+    let mut out: Vec<String> = Vec::new();
+    if let Some(name) = explicit.map(str::trim).filter(|s| !s.is_empty()) {
+        if name == main { return Err(format!("--shadow {} is the main profile itself; name another profile.", name)); }
+        profile(ctx, name).map_err(|e| format!("--shadow {}: {}", name, e))?;
+        out.push(name.to_string());
+    }
+    for name in declared_shadows(ctx, main) {
+        if !out.iter().any(|known| known == &name) { out.push(name); }
+    }
+    Ok(out)
+}
+
+/// One comparison of a main cluster and its shadow. Outputs are compared worker by worker; checks compare the verdict
+/// and, when one side has evidence, the evidence line.
+#[derive(Clone, Debug)]
+struct ShadowRun {
+    main: String,
+    shadow: String,
+    main_profile: String,
+    shadow_profile: String,
+    main_state: String,
+    shadow_state: String,
+    output_matched: usize,
+    output_total: usize,
+    check_matched: usize,
+    check_total: usize,
+    match_rate: f64,
+}
+
+impl ShadowRun {
+    fn value(&self) -> Value {
+        json!({
+            "main": self.main, "shadow": self.shadow,
+            "main_profile": self.main_profile, "shadow_profile": self.shadow_profile,
+            "main_state": self.main_state, "shadow_state": self.shadow_state,
+            "outputs": {"matched": self.output_matched, "total": self.output_total},
+            "checks": {"matched": self.check_matched, "total": self.check_total},
+            "match_rate": self.match_rate, "at": now()
+        })
+    }
+
+    fn line(&self) -> String {
+        format!("SHADOW {} · {} · match {:.1}% · outputs {}/{} · checks {}/{} · files not merged",
+                self.shadow, self.shadow_profile, self.match_rate * 100.0,
+                self.output_matched, self.output_total, self.check_matched, self.check_total)
+    }
+}
+
+/// The worker outputs in profile order. The validator is left out; it is compared through the verdict and evidence.
+fn compared_outputs(ctx: &Ctx, c: &Cluster) -> Vec<String> {
+    let count = profile(ctx, &c.profile).map(|p| p.workers.len()).unwrap_or(c.parts.len());
+    c.parts.iter().take(count).filter(|p| p.role != "human").map(|p| p.output.clone()).collect()
+}
+
+fn compare_shadows(ctx: &Ctx, main: &Cluster, shadow: &Cluster) -> ShadowRun {
+    let first = compared_outputs(ctx, main);
+    let second = compared_outputs(ctx, shadow);
+    let output_total = first.len().max(second.len());
+    let output_matched = (0..output_total).filter(|i| {
+        i < &first.len() && i < &second.len() && answers_agree(&first[*i], &second[*i])
+    }).count();
+    let mut check_total = 1;
+    let mut check_matched = usize::from(main.state == shadow.state);
+    if !main.evidence.trim().is_empty() || !shadow.evidence.trim().is_empty() {
+        check_total += 1;
+        if normalized_answer(&main.evidence) == normalized_answer(&shadow.evidence) { check_matched += 1; }
+    }
+    let total = output_total + check_total;
+    let matched = output_matched + check_matched;
+    ShadowRun {
+        main: main.id.clone(), shadow: shadow.id.clone(),
+        main_profile: main.profile.clone(), shadow_profile: shadow.profile.clone(),
+        main_state: main.state.clone(), shadow_state: shadow.state.clone(),
+        output_matched, output_total, check_matched, check_total,
+        match_rate: if total == 0 { 0.0 } else { matched as f64 / total as f64 },
+    }
+}
+
+fn shadow_detail(run: &ShadowRun) -> String {
+    format!("Shadow run\n\nmain: {} · state {}\nshadow: {} · state {}\nmatch rate: {:.1}% ({}/{} comparisons)\noutputs: {}/{}\nchecks: {}/{}\n\nThe shadow worked in its own worktree. Its files were not merged into the live tree.\n",
+            run.main, run.main_state, run.shadow, run.shadow_state, run.match_rate * 100.0,
+            run.output_matched + run.check_matched, run.output_total + run.check_total,
+            run.output_matched, run.output_total, run.check_matched, run.check_total)
+}
+
+/// Appends one run to `.penelope/clusters/shadow.json`, the evidence the owner reads across projects.
+fn record_shadow(ctx: &Ctx, run: &ShadowRun) -> Result<(), String> {
+    let _guard = SHADOW_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let path = shadow_path(ctx);
+    let mut table = fs::read_to_string(&path).ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({"runs": []}));
+    if !table["runs"].is_array() { table["runs"] = json!([]); }
+    table["updated"] = json!(now());
+    if let Some(runs) = table["runs"].as_array_mut() {
+        runs.push(run.value());
+        while runs.len() > 100 { runs.remove(0); }
+    }
+    fs::create_dir_all(base(ctx)).map_err(|e| format!("cannot make {}: {}", base(ctx).display(), e))?;
+    fs::write(&path, serde_json::to_string_pretty(&table).unwrap())
+        .map_err(|e| format!("cannot write {}: {}", path.display(), e))
+}
+
+/// Runs one shadow profile beside a finished main cluster, compares the two and records the match rate. The shadow is
+/// a top-level sibling, not a child: it does not change the main tree's max_models and it never merges a patch.
+fn run_shadow(ctx: &Ctx, main_id: &str, shadow_name: &str, session_before: Option<f64>) -> Result<(ShadowRun, Cluster), String> {
+    let main = load(ctx, main_id)?;
+    let mut p = profile(ctx, shadow_name)?;
+    if writes_files(&p) { p.worktree = true; }
+    let label = format!("{}-shadow-{}", main.name, shadow_name);
+    let mut s = new_cluster(ctx, &p, &label, &main.task, None, Vec::new(), 0)?;
+    s.shadow = true;
+    s.shadow_of = main.id.clone();
+    save(ctx, &s)?;
+    let _ = run_cluster_inner(ctx, &s.id, session_before);
+    let s = load(ctx, &s.id)?;
+    let main = load(ctx, main_id)?;
+    let run = compare_shadows(ctx, &main, &s);
+    record_shadow(ctx, &run)?;
+    let mut main = main;
+    main.match_rate = Some(run.match_rate);
+    save(ctx, &main)?;
+    let mut shadow = s;
+    shadow.match_rate = Some(run.match_rate);
+    save(ctx, &shadow)?;
+    let detail = shadow_detail(&run);
+    let dir = cluster_dir(ctx, &main.id);
+    let _ = fs::create_dir_all(&dir);
+    let _ = fs::write(dir.join("shadow.txt"), &detail);
+    append_memory(ctx, &main, &format!("\n## shadow · {}\n\n{}", shadow.name, detail));
+    append_memory(ctx, &shadow, &format!("\n## shadow match\n\n{}", detail));
+    stream_note(ctx, &main.id, &run.line());
+    stream_note(ctx, &shadow.id, &run.line());
+    Ok((run, shadow))
+}
+
 
 /// The parts a name refers to: a cluster id or name, a profile, or one part name. Used by `cluster advise NAME`.
 fn part_names_for(ctx: &Ctx, name: &str) -> Vec<String> {
@@ -2403,7 +2831,119 @@ pub fn advise_text(ctx: &Ctx, name: Option<&str>) -> Result<String, String> {
                            scope, crate::advise::MIN_RESULTS, crate::advise::MIN_REJECTED_PERCENT));
     }
     let mut out = String::new();
-    for suggestion in picked { out.push_str(&format!("{}\n", suggestion.sentence())); }
+    for suggestion in picked {
+        let mut line = suggestion.sentence();
+        if let Some(best) = crate::advise::best_model(&table, &suggestion.part, &suggestion.task_type) {
+            if let Some((accepted, total)) = crate::advise::model_acceptance(&table, &suggestion.part, &suggestion.task_type, &best) {
+                line.push_str(&format!(" Best recorded model: {} ({} of {} accepted).", best, accepted, total));
+            }
+        }
+        out.push_str(&format!("{}\n", line));
+    }
+    Ok(out)
+}
+
+/// The profile an advice name points at: a profile name, a cluster id, or the newest cluster with that name.
+fn profile_for_advice(ctx: &Ctx, name: &str) -> Result<Profile, String> {
+    if let Ok(p) = profile(ctx, name) { return Ok(p); }
+    let cluster = load(ctx, name).ok().or_else(|| {
+        let mut matches: Vec<Cluster> = list(ctx).into_iter().filter(|c| c.name == name).collect();
+        matches.sort_by_key(|c| (c.started, c.updated));
+        matches.pop()
+    });
+    match cluster {
+        Some(c) => profile(ctx, &c.profile).map_err(|e| format!("cluster {}: {}", c.id, e)),
+        None => profile(ctx, name),
+    }
+}
+
+/// One model setting a score-table key can mean. Only names the profile parser accepts are written back: `main`,
+/// `weak` or a role. A label such as `test-cluster` is mapped back to the setting that carries it.
+fn setting_for_model(ctx: &Ctx, name: &str) -> Option<String> {
+    if name == "main" || name == "weak" || crate::route::role_names().iter().any(|r| *r == name) {
+        return Some(name.to_string());
+    }
+    let mut settings: Vec<(&str, Value)> = vec![("main", ctx.cfg["main"].clone()), ("weak", ctx.cfg["weak"].clone())];
+    for role in crate::route::role_names() {
+        if let Some(model) = crate::route::model_for(ctx, role) {
+            settings.push((role, model.clone()));
+        }
+    }
+    settings.into_iter().find(|(_, model)| {
+        model["label"].as_str() == Some(name) || model["model"].as_str() == Some(name)
+    }).map(|(setting, _)| setting.to_string())
+}
+
+fn model_settings_text(ctx: &Ctx, part: &Part) -> String {
+    let key = model_key_of(ctx, part);
+    if key.is_empty() { "(no model)".to_string() } else { key }
+}
+
+/// `penelope cluster advise NAME --apply`: writes the suggested model setting into the profile for the next run.
+/// A running cluster is refused, because it would keep the profile it started with and the change would look silent.
+pub fn advise_apply(ctx: &Ctx, name: Option<&str>) -> Result<String, String> {
+    let name = name.map(str::trim).filter(|s| !s.is_empty())
+        .ok_or_else(|| "NOT applied. advise --apply needs a profile or cluster name; it never changes every profile at once.".to_string())?;
+    let p = profile_for_advice(ctx, name)?;
+    let running: Vec<String> = list(ctx).into_iter()
+        .filter(|c| c.profile == p.name && matches!(c.state.as_str(), "queued" | "working" | "validating" | "killing"))
+        .map(|c| c.id).collect();
+    if !running.is_empty() {
+        return Err(format!("NOT applied. {} running cluster(s) use profile {} ({}). A running cluster keeps the profile it started with; stop it or wait, then apply for the next run.",
+                           running.len(), p.name, running.join(", ")));
+    }
+    let path = scores_path(ctx);
+    if !path.exists() {
+        return Err(format!("NOT applied. no cluster scores yet at {}. A validator writes them after a cluster run.", path.display()));
+    }
+    let table = crate::advise::load(&path)?;
+    let all = crate::advise::suggestions(&table);
+    let picked: Vec<&crate::advise::Suggestion> = all.iter().filter(|s| {
+        p.workers.iter().any(|w| w.name == s.part && task_type_of(&p, w) == s.task_type)
+    }).collect();
+    if picked.is_empty() {
+        return Ok(format!("profile {}: no part has enough rejected results for a change. Nothing was written.\n", p.name));
+    }
+    let json_path = profile_dir(ctx).join(format!("{}.json", safe(&p.name)));
+    let cluster_path = profile_dir(ctx).join(format!("{}.cluster", safe(&p.name)));
+    if !json_path.exists() && cluster_path.exists() {
+        return Err(format!("NOT applied. profile {} is a .cluster file, which cannot carry a model. Create {}.json with the same parts and set the model there.",
+                           p.name, p.name));
+    }
+    let mut value = profile_json(&p, &p.name);
+    let mut changes: Vec<String> = Vec::new();
+    for suggestion in picked {
+        let Some(worker) = p.workers.iter().find(|w| w.name == suggestion.part) else { continue; };
+        let current = model_settings_text(ctx, worker);
+        let fallback = if current == "main" { "weak".to_string() } else { "main".to_string() };
+        let recorded = crate::advise::best_model(&table, &suggestion.part, &suggestion.task_type)
+            .and_then(|name| setting_for_model(ctx, &name));
+        let best = match recorded {
+            Some(name) if name == current => continue,
+            Some(name) => name,
+            None => fallback,
+        };
+        if best == current { continue; }
+        if let Some(workers) = value["workers"].as_array_mut() {
+            for w in workers {
+                if w["name"].as_str() == Some(suggestion.part.as_str()) {
+                    w["model"] = json!(best);
+                }
+            }
+        }
+        changes.push(format!("{}: {} -> {} · rejected {} of {} on {}",
+                             suggestion.part, current, best, suggestion.rejected, suggestion.total, suggestion.task_type));
+    }
+    if changes.is_empty() {
+        return Ok(format!("profile {}: the suggested model is already set. Nothing was written.\n", p.name));
+    }
+    let checked = parse_profile(&value, &p.name)?;
+    fs::create_dir_all(profile_dir(ctx)).map_err(|e| format!("cannot make {}: {}", profile_dir(ctx).display(), e))?;
+    fs::write(&json_path, serde_json::to_string_pretty(&value).unwrap())
+        .map_err(|e| format!("cannot write {}: {}", json_path.display(), e))?;
+    let mut out = format!("profile {}: {} change(s) for the next run\n", checked.name, changes.len());
+    for change in changes { out.push_str(&format!("  {}\n", change)); }
+    out.push_str("No running cluster was changed: a cluster reads its profile when it starts. Start a new run to use the new model.\n");
     Ok(out)
 }
 
@@ -2413,6 +2953,11 @@ pub fn status_text(ctx: &Ctx, id: Option<&str>) -> String {
         let mut out = format!("cluster {} · {} · profile {} · state {}\nTask: {}\nProgress: {}/{}\nMemory: {}\n",
                               c.id, c.name, c.profile, c.state, c.task, c.done, c.total, c.memory);
         if !c.worktree.is_empty() { out.push_str(&format!("Worktree: {} · branch {}\n", c.worktree, c.branch)); }
+        if c.shadow { out.push_str(&format!("Shadow: yes · shadow of {} · files never merged\n", if c.shadow_of.is_empty() { "?" } else { &c.shadow_of })); }
+        if let Some(rate) = c.match_rate { out.push_str(&format!("Shadow match: {:.1}%\n", rate * 100.0)); }
+        if c.quorum_agreed + c.quorum_escalated > 0 {
+            out.push_str(&format!("Quorum: {} agreed · {} escalated\n", c.quorum_agreed, c.quorum_escalated));
+        }
         if !c.error.is_empty() { out.push_str(&format!("Error: {}\n", c.error)); }
         for p in &c.parts {
             out.push_str(&format!("  {:<12} {:<10} {:<12} {:<10} {}\n", p.name, p.role, p.slot, p.state, p.model));
@@ -2533,6 +3078,7 @@ pub fn profile_json(p: &Profile, name: &str) -> Value {
         if !part.task_type.is_empty() { value["task_type"] = json!(part.task_type); }
         if !part.mcp.is_empty() { value["mcp"] = json!(part.mcp); }
         if !part.depends_on.is_empty() { value["needs"] = json!(part.depends_on); }
+        if part.quorum > 0 { value["quorum"] = json!(part.quorum); }
         value
     };
     let mut value = json!({
@@ -2540,10 +3086,12 @@ pub fn profile_json(p: &Profile, name: &str) -> Value {
         "workers": p.workers.iter().map(part_value).collect::<Vec<_>>(),
         "max_models": p.max_models, "max_depth": p.max_depth, "max_parallel": p.max_parallel,
         "budget_eur": p.budget_eur, "max_steps": p.max_steps, "retries": p.retries,
-        "report_every": p.report_every, "stuck_after": p.stuck_after, "worktree": p.worktree
+        "report_every": p.report_every, "stuck_after": p.stuck_after, "worktree": p.worktree,
+        "quorum": p.quorum, "second_model": p.second_model, "decider_model": p.decider_model
     });
     if let Some(validator) = &p.validator { value["validator"] = part_value(validator); }
     if let Some(before) = &p.before { value["before"] = json!(before); }
+    if let Some(shadow_of) = &p.shadow_of { value["shadow_of"] = json!(shadow_of); }
     if let Some(every) = &p.every { value["every"] = json!(every); }
     if let Some(at) = &p.at { value["at"] = json!(at); }
     if let Some(purpose) = &p.purpose { value["purpose"] = json!(purpose); }
@@ -2657,6 +3205,16 @@ fn stream_ask(ctx: &Ctx, id: &str, line: &str) {
     let _guard = REPORT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(dir.join("reports.jsonl")) {
         let _ = writeln!(file, "{} ASK {}", now(), line);
+    }
+}
+
+/// A report-stream entry for a quorum or shadow result. It is not a `S:` line; the cluster state stays in `report.txt`.
+fn stream_note(ctx: &Ctx, id: &str, line: &str) {
+    let dir = cluster_dir(ctx, id);
+    let _ = fs::create_dir_all(&dir);
+    let _guard = REPORT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(dir.join("reports.jsonl")) {
+        let _ = writeln!(file, "{} {}", now(), line);
     }
 }
 
@@ -3335,6 +3893,253 @@ mod tests {
     }
 
     #[test]
+    fn a_quorum_part_finishes_on_agreement_without_a_decider_call() {
+        let (mut ctx, dir) = ctx();
+        let probe = dir.join("hello.txt").to_string_lossy().to_string();
+        let (address, seen) = crate::llm::fake::serve(vec![
+            (200, text_reply("alpha")),
+            (200, text_reply("alpha")),
+            (200, tool_reply("read", json!({"path": probe}))),
+            (200, text_reply("PASS: both answers are in the memory")),
+        ]);
+        fake_models(&mut ctx, &address);
+        write_profile(&ctx, "vote", json!({
+            "name": "vote",
+            "workers": [{"name": "one", "role": "scout", "model": "main", "task": "Answer the question.", "quorum": 2}],
+            "validator": {"name": "check", "role": "judge", "model": "judge"},
+            "second_model": "weak", "decider_model": "main",
+            "max_models": 2, "max_depth": 1, "retries": 0, "worktree": false
+        }));
+        let p = profile(&ctx, "vote").unwrap();
+        assert_eq!(quorum_of(&p, &p.workers[0]), 2);
+        let c = new_cluster(&ctx, &p, "vote", "answer the question", None, Vec::new(), 0).unwrap();
+        let out = run_cluster(&ctx, &c.id).unwrap();
+        assert!(out.contains("done"), "{}", out);
+        let c = load(&ctx, &c.id).unwrap();
+        assert_eq!(c.state.as_str(), "done");
+        assert_eq!((c.quorum_agreed, c.quorum_escalated), (1, 0));
+        assert_eq!(seen.lock().unwrap().len(), 4, "an agreement asks no decider: {:?}", seen.lock().unwrap().len());
+        let bodies: Vec<String> = seen.lock().unwrap().iter().map(|s| s.body.to_string()).collect();
+        assert!(bodies[1].contains("You have no tools"), "the second answer is independent: {}", bodies[1]);
+        assert!(!bodies[1].contains("alpha"), "the second answer must not see the first: {}", bodies[1]);
+        let memory = fs::read_to_string(memory_path(&ctx, &c.id)).unwrap();
+        assert!(memory.contains("## quorum · one") && memory.contains("agreed"), "{}", memory);
+        let stream = fs::read_to_string(cluster_dir(&ctx, &c.id).join("reports.jsonl")).unwrap();
+        assert!(stream.contains("QUORUM one · agreed"), "{}", stream);
+        assert!(status_text(&ctx, Some(&c.id)).contains("Quorum: 1 agreed · 0 escalated"));
+        let stored: Value = serde_json::from_str(&fs::read_to_string(cluster_file(&ctx, &c.id)).unwrap()).unwrap();
+        assert_eq!((stored["quorum"]["agreed"].as_u64(), stored["quorum"]["escalated"].as_u64()), (Some(1), Some(0)));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_quorum_disagreement_is_decided_once_by_the_large_model() {
+        let (mut ctx, dir) = ctx();
+        let probe = dir.join("hello.txt").to_string_lossy().to_string();
+        let (address, seen) = crate::llm::fake::serve(vec![
+            (200, text_reply("alpha")),
+            (200, text_reply("beta")),
+            (200, text_reply("alpha")),
+            (200, tool_reply("read", json!({"path": probe}))),
+            (200, text_reply("PASS: the decided answer is in the memory")),
+        ]);
+        fake_models(&mut ctx, &address);
+        write_profile(&ctx, "vote2", json!({
+            "name": "vote2",
+            "workers": [{"name": "one", "role": "scout", "model": "main", "task": "Answer the question.", "quorum": 2}],
+            "validator": {"name": "check", "role": "judge", "model": "judge"},
+            "second_model": "weak", "decider_model": "main",
+            "max_models": 2, "max_depth": 1, "retries": 0, "worktree": false
+        }));
+        let p = profile(&ctx, "vote2").unwrap();
+        let c = new_cluster(&ctx, &p, "vote2", "answer the question", None, Vec::new(), 0).unwrap();
+        let out = run_cluster(&ctx, &c.id).unwrap();
+        assert!(out.contains("done"), "{}", out);
+        let c = load(&ctx, &c.id).unwrap();
+        assert_eq!(c.state.as_str(), "done");
+        assert_eq!((c.quorum_agreed, c.quorum_escalated), (0, 1));
+        assert_eq!(c.parts[0].output, "alpha", "the decider answer is the part result");
+        assert_eq!(seen.lock().unwrap().len(), 5, "one second answer and one decider call");
+        let bodies: Vec<String> = seen.lock().unwrap().iter().map(|s| s.body.to_string()).collect();
+        assert!(bodies[2].contains("alpha") && bodies[2].contains("beta"),
+                "the decider sees both answers: {}", bodies[2]);
+        let memory = fs::read_to_string(memory_path(&ctx, &c.id)).unwrap();
+        assert!(memory.contains("escalated to"), "{}", memory);
+        assert!(memory.contains("alpha") && memory.contains("beta"), "{}", memory);
+        let stream = fs::read_to_string(cluster_dir(&ctx, &c.id).join("reports.jsonl")).unwrap();
+        assert!(stream.contains("QUORUM one · disagree"), "{}", stream);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn quorum_is_one_or_two_and_a_cluster_file_can_set_it() {
+        let p = parse_cluster("$vote(parts=[scout, validator], quorum=2, worktree=false)").unwrap();
+        assert_eq!(p.quorum, 2);
+        assert_eq!(quorum_of(&p, &p.workers[0]), 2);
+        for bad in ["$vote(parts=[scout], quorum=0)", "$vote(parts=[scout], quorum=3)", "$vote(parts=[scout], quorum=two)"] {
+            assert!(parse_cluster(bad).is_err(), "{}", bad);
+        }
+        let own = parse_profile(&json!({
+            "name": "own", "quorum": 2,
+            "workers": [{"name": "one", "role": "scout", "model": "main", "quorum": 1}],
+            "worktree": false
+        }), "own").unwrap();
+        assert_eq!(quorum_of(&own, &own.workers[0]), 1, "a part may turn the profile quorum off");
+    }
+
+    #[test]
+    fn a_declared_shadow_runs_beside_the_main_cluster_and_records_a_full_match() {
+        let (mut ctx, dir) = ctx();
+        let probe = dir.join("hello.txt").to_string_lossy().to_string();
+        let (address, _seen) = crate::llm::fake::serve(vec![
+            (200, text_reply("same answer")),
+            (200, tool_reply("read", json!({"path": probe.clone()}))),
+            (200, text_reply("PASS: the main answer is checked")),
+            (200, text_reply("same answer")),
+            (200, tool_reply("read", json!({"path": probe}))),
+            (200, text_reply("PASS: the shadow answer is checked")),
+        ]);
+        fake_models(&mut ctx, &address);
+        write_profile(&ctx, "large", json!({
+            "name": "large",
+            "workers": [{"name": "one", "role": "scout", "model": "main", "task": "Answer the question."}],
+            "validator": {"name": "check", "role": "judge", "model": "judge"},
+            "max_models": 2, "max_depth": 1, "retries": 0, "worktree": false
+        }));
+        write_profile(&ctx, "small", json!({
+            "name": "small",
+            "workers": [{"name": "one", "role": "scout", "model": "weak", "task": "Answer the question."}],
+            "validator": {"name": "check", "role": "judge", "model": "judge"},
+            "shadow_of": "large", "max_models": 2, "max_depth": 1, "retries": 0, "worktree": false
+        }));
+        assert_eq!(profile(&ctx, "small").unwrap().shadow_of.as_deref(), Some("large"));
+        let said = orchestrate_with(&ctx, "answer the question", Some("large"), false, None).unwrap();
+        assert!(said.contains("SHADOW") && said.contains("match 100.0%"), "{}", said);
+        let clusters = list(&ctx);
+        assert_eq!(clusters.len(), 2, "{}", said);
+        let main = clusters.iter().find(|c| c.profile == "large").unwrap();
+        let shadow = clusters.iter().find(|c| c.shadow).expect("the shadow is stored");
+        assert_eq!((main.state.as_str(), shadow.state.as_str()), ("done", "done"));
+        assert_eq!((shadow.shadow_of.as_str(), main.match_rate, shadow.match_rate),
+                   (main.id.as_str(), Some(1.0), Some(1.0)));
+        let stored: Value = serde_json::from_str(&fs::read_to_string(shadow_path(&ctx)).unwrap()).unwrap();
+        let run = &stored["runs"][0];
+        assert_eq!((run["main"].as_str(), run["shadow"].as_str()), (Some(main.id.as_str()), Some(shadow.id.as_str())));
+        assert_eq!((run["outputs"]["matched"].as_u64(), run["outputs"]["total"].as_u64()), (Some(1), Some(1)));
+        assert_eq!((run["checks"]["matched"].as_u64(), run["checks"]["total"].as_u64()), (Some(2), Some(2)));
+        assert!((run["match_rate"].as_f64().unwrap() - 1.0).abs() < 1e-9);
+        assert!(cluster_dir(&ctx, &main.id).join("shadow.txt").is_file());
+        let memory = fs::read_to_string(memory_path(&ctx, &main.id)).unwrap();
+        assert!(memory.contains("## shadow ·") && memory.contains("not merged"), "{}", memory);
+        let stream = fs::read_to_string(cluster_dir(&ctx, &main.id).join("reports.jsonl")).unwrap();
+        assert!(stream.contains("SHADOW") && stream.contains("match 100.0%"), "{}", stream);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_shadow_that_differs_lowers_the_match_rate() {
+        let (mut ctx, dir) = ctx();
+        let probe = dir.join("hello.txt").to_string_lossy().to_string();
+        let (address, _seen) = crate::llm::fake::serve(vec![
+            (200, text_reply("alpha")),
+            (200, tool_reply("read", json!({"path": probe.clone()}))),
+            (200, text_reply("PASS: the main answer is checked")),
+            (200, text_reply("beta")),
+            (200, tool_reply("read", json!({"path": probe}))),
+            (200, text_reply("PASS: the shadow answer is checked")),
+        ]);
+        fake_models(&mut ctx, &address);
+        write_profile(&ctx, "large", json!({
+            "name": "large",
+            "workers": [{"name": "one", "role": "scout", "model": "main", "task": "Answer the question."}],
+            "validator": {"name": "check", "role": "judge", "model": "judge"},
+            "max_models": 2, "max_depth": 1, "retries": 0, "worktree": false
+        }));
+        write_profile(&ctx, "small", json!({
+            "name": "small",
+            "workers": [{"name": "one", "role": "scout", "model": "weak", "task": "Answer the question."}],
+            "validator": {"name": "check", "role": "judge", "model": "judge"},
+            "shadow_of": "large", "max_models": 2, "max_depth": 1, "retries": 0, "worktree": false
+        }));
+        let said = orchestrate_with(&ctx, "answer the question", Some("large"), false, None).unwrap();
+        assert!(said.contains("outputs 0/1") && said.contains("checks 2/2"), "{}", said);
+        let main = list(&ctx).into_iter().find(|c| c.profile == "large").unwrap();
+        let rate = main.match_rate.expect("the main cluster carries the match rate");
+        assert!((rate - 2.0 / 3.0).abs() < 1e-9, "match rate was {}", rate);
+        let stored: Value = serde_json::from_str(&fs::read_to_string(shadow_path(&ctx)).unwrap()).unwrap();
+        assert_eq!(stored["runs"][0]["outputs"]["matched"].as_u64(), Some(0));
+        assert!((stored["runs"][0]["match_rate"].as_f64().unwrap() - rate).abs() < 1e-9);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_shadow_never_merges_its_files_into_the_live_tree() {
+        let (mut ctx, dir) = ctx();
+        let (address, _seen) = crate::llm::fake::serve(vec![
+            (200, tool_reply("write", json!({"path": "hello.txt", "text": "main\n"}))),
+            (200, text_reply("main wrote hello.txt")),
+            (200, tool_reply("run", json!({"command": "cat hello.txt"}))),
+            (200, text_reply("PASS: main wrote the file")),
+            (200, tool_reply("write", json!({"path": "hello.txt", "text": "shadow\n"}))),
+            (200, text_reply("shadow wrote hello.txt")),
+            (200, tool_reply("run", json!({"command": "cat hello.txt"}))),
+            (200, text_reply("PASS: shadow wrote the file")),
+        ]);
+        fake_models(&mut ctx, &address);
+        write_profile(&ctx, "big", json!({
+            "name": "big",
+            "workers": [{"name": "coder", "role": "worker", "model": "main", "task": "Write hello.txt."}],
+            "validator": {"name": "check", "role": "judge", "model": "judge"},
+            "max_models": 2, "max_depth": 1, "retries": 0
+        }));
+        write_profile(&ctx, "little", json!({
+            "name": "little",
+            "workers": [{"name": "coder", "role": "worker", "model": "weak", "task": "Write hello.txt."}],
+            "validator": {"name": "check", "role": "judge", "model": "judge"},
+            "shadow_of": "big", "max_models": 2, "max_depth": 1, "retries": 0, "worktree": false
+        }));
+        let said = orchestrate_with(&ctx, "write hello.txt", Some("big"), false, None).unwrap();
+        assert!(said.contains("SHADOW"), "{}", said);
+        assert_eq!(fs::read_to_string(dir.join("hello.txt")).unwrap(), "main\n",
+                   "only the main cluster may reach the live tree: {}", said);
+        let shadow = list(&ctx).into_iter().find(|c| c.shadow).expect("the shadow ran");
+        assert_eq!(shadow.state.as_str(), "done");
+        assert!(!shadow.worktree.is_empty(), "a writing shadow always gets its own worktree");
+        assert_eq!(fs::read_to_string(Path::new(&shadow.worktree).join("hello.txt")).unwrap(), "shadow\n");
+        assert!(shadow.match_rate.is_some());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_orchestration_flag_runs_a_shadow_without_a_shadow_of_field() {
+        let (mut ctx, dir) = ctx();
+        let probe = dir.join("hello.txt").to_string_lossy().to_string();
+        let (address, _seen) = crate::llm::fake::serve(vec![
+            (200, text_reply("same answer")),
+            (200, tool_reply("read", json!({"path": probe.clone()}))),
+            (200, text_reply("PASS: the main answer is checked")),
+            (200, text_reply("same answer")),
+            (200, tool_reply("read", json!({"path": probe}))),
+            (200, text_reply("PASS: the shadow answer is checked")),
+        ]);
+        fake_models(&mut ctx, &address);
+        for (name, model) in [("large", "main"), ("small", "weak")] {
+            write_profile(&ctx, name, json!({
+                "name": name,
+                "workers": [{"name": "one", "role": "scout", "model": model, "task": "Answer the question."}],
+                "validator": {"name": "check", "role": "judge", "model": "judge"},
+                "max_models": 2, "max_depth": 1, "retries": 0, "worktree": false
+            }));
+        }
+        let said = orchestrate_with(&ctx, "answer the question", Some("large"), false, Some("small")).unwrap();
+        assert!(said.contains("SHADOW") && said.contains("match 100.0%"), "{}", said);
+        assert_eq!(list(&ctx).iter().filter(|c| c.shadow).count(), 1);
+        let refused = orchestrate_with(&ctx, "answer the question", Some("large"), false, Some("large")).unwrap_err();
+        assert!(refused.contains("main profile itself"), "{}", refused);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_tool_log_becomes_the_evidence_line() {
         let dir = std::env::temp_dir().join(format!("penelope-cluster-log-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
@@ -3858,6 +4663,74 @@ mod tests {
         assert_eq!(table["coder-4"]["rust-fix"]["rejected"], 0);
         let text = advise_text(&ctx, None).unwrap();
         assert!(!text.contains("was rejected"), "{}", text);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn advise_apply_writes_the_best_recorded_model_for_the_next_run() {
+        let (ctx, dir) = ctx();
+        write_profile(&ctx, "routed", json!({
+            "name": "routed",
+            "workers": [{"name": "coder-4", "role": "scout", "model": "weak", "task": "Do the task.", "task_type": "rust-fix"}],
+            "validator": {"name": "check", "role": "judge", "model": "judge"},
+            "max_models": 2, "max_depth": 1, "retries": 0, "worktree": false
+        }));
+        let scores = json!({"coder-4": {"rust-fix": {
+            "accepted": 1, "rejected": 4,
+            "models": {"weak": {"accepted": 1, "rejected": 4}, "main": {"accepted": 3, "rejected": 0}}
+        }}});
+        fs::create_dir_all(base(&ctx)).unwrap();
+        fs::write(scores_path(&ctx), scores.to_string()).unwrap();
+
+        let said = advise_apply(&ctx, Some("routed")).unwrap();
+        assert!(said.contains("weak -> main") && said.contains("rejected 4 of 5 on rust-fix"), "{}", said);
+        assert!(said.contains("next run"), "{}", said);
+        let changed = profile(&ctx, "routed").unwrap();
+        assert_eq!(changed.workers[0].model, json!("main"));
+        let text = advise_text(&ctx, Some("routed")).unwrap();
+        assert!(text.contains("Best recorded model: main (3 of 3 accepted)"), "{}", text);
+        // A second call has nothing left to change.
+        assert!(advise_apply(&ctx, Some("routed")).unwrap().contains("already set"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn advise_apply_refuses_a_running_cluster_and_leaves_its_profile_alone() {
+        let (ctx, dir) = ctx();
+        write_profile(&ctx, "busy", json!({
+            "name": "busy",
+            "workers": [{"name": "coder-4", "role": "scout", "model": "weak", "task": "Do the task.", "task_type": "rust-fix"}],
+            "validator": {"name": "check", "role": "judge", "model": "judge"},
+            "max_models": 2, "max_depth": 1, "retries": 0, "worktree": false
+        }));
+        fs::create_dir_all(base(&ctx)).unwrap();
+        fs::write(scores_path(&ctx), json!({"coder-4": {"rust-fix": {
+            "accepted": 1, "rejected": 4,
+            "models": {"weak": {"accepted": 1, "rejected": 4}, "main": {"accepted": 3, "rejected": 0}}
+        }}}).to_string()).unwrap();
+        let p = profile(&ctx, "busy").unwrap();
+        let c = new_cluster(&ctx, &p, "busy", "work", None, Vec::new(), 0).unwrap();
+        let mut c = load(&ctx, &c.id).unwrap();
+        c.state = "working".to_string();
+        save(&ctx, &c).unwrap();
+
+        let err = advise_apply(&ctx, Some("busy")).unwrap_err();
+        assert!(err.contains("running cluster") && err.contains("next run"), "{}", err);
+        assert_eq!(profile(&ctx, "busy").unwrap().workers[0].model, json!("weak"), "the profile was not touched");
+        assert!(advise_apply(&ctx, None).unwrap_err().contains("needs a profile"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn advise_apply_refuses_a_cluster_file_that_cannot_carry_a_model() {
+        let (ctx, dir) = ctx();
+        fs::create_dir_all(profile_dir(&ctx)).unwrap();
+        fs::write(profile_dir(&ctx).join("clust.cluster"), "$clust(parts=[scout, validator], worktree=false)").unwrap();
+        fs::create_dir_all(base(&ctx)).unwrap();
+        fs::write(scores_path(&ctx), json!({"scout": {"clust": {"accepted": 1, "rejected": 4}}}).to_string()).unwrap();
+        let err = advise_apply(&ctx, Some("clust")).unwrap_err();
+        assert!(err.contains(".cluster file") && err.contains("cannot carry a model"), "{}", err);
+        assert!(!profile_dir(&ctx).join("clust.json").exists(), "the refused apply wrote no profile");
         let _ = fs::remove_dir_all(&dir);
     }
 
