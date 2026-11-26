@@ -77,6 +77,9 @@ pub struct Part {
     pub mcp: Vec<String>,
     /// Names of worker parts that must finish before this part starts. Empty means it may start at once.
     pub depends_on: Vec<String>,
+    /// Independent answers before this part's result is accepted. 0 inherits the profile: 1 runs once, 2 runs the
+    /// part on its model and on the profile's `second_model`. A disagreement escalates once to `decider_model`.
+    pub quorum: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -106,6 +109,15 @@ pub struct Profile {
     pub at: Option<String>,
     /// The one purpose of a factory profile. A factory uses it as the cluster goal when its registry entry has none.
     pub purpose: Option<String>,
+    /// Independent answers for every worker part that does not set its own `quorum`. 1 (default) runs once, 2 runs
+    /// the part and a second opinion; a disagreement asks the decider model once.
+    pub quorum: usize,
+    /// The model setting of the second quorum answer. Default `weak`; it may be a full model object.
+    pub second_model: Value,
+    /// The model setting that decides a disagreement. Default `main`; it is called once per disagreement.
+    pub decider_model: Value,
+    /// This profile runs as a shadow beside the profile it names: same task, own worktree, files never merged.
+    pub shadow_of: Option<String>,
 }
 
 /// A number that may arrive as `3`, `"3"` or `"3 reports"`.
@@ -170,6 +182,15 @@ pub struct Cluster {
     pub respawns: usize,
     /// The cluster this one was respawned from.
     pub respawned_from: String,
+    /// Parts that agreed with their independent second answer, and parts escalated to the decider model.
+    pub quorum_agreed: usize,
+    pub quorum_escalated: usize,
+    /// A shadow cluster runs beside a main cluster. Its files are never merged into the live tree.
+    pub shadow: bool,
+    /// The main cluster id when this cluster is a shadow; empty otherwise.
+    pub shadow_of: String,
+    /// The match of a shadow run against its main run, 0.0 to 1.0. `None` until the pair was compared.
+    pub match_rate: Option<f64>,
     pub parts: Vec<PartRun>,
 }
 
@@ -236,7 +257,26 @@ fn part(value: &Value, fallback: &str) -> Part {
             .find_map(|key| value[*key].as_array())
             .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.trim().to_string())).filter(|s| !s.is_empty()).collect())
             .unwrap_or_default(),
+        quorum: count_of(&value["quorum"]).unwrap_or(0).min(2),
     }
+}
+
+/// A model setting may be a name such as `weak` or a full setting object. It is not resolved here, so a broken
+/// setting fails at the part that really needs it.
+fn model_setting(value: &Value, fallback: &str) -> Value {
+    if value.is_object() {
+        return value.clone();
+    }
+    match value.as_str().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(name) => json!(name),
+        None => json!(fallback),
+    }
+}
+
+/// A profile name in `before` or `shadow_of`: lower case letters, digits, `_` or `-`, at most 32 characters.
+fn profile_name_ok(name: &str) -> bool {
+    !name.is_empty() && name.len() <= 32
+        && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
 }
 
 /// A part role. `human` is a cluster-only role: it makes no model call and waits for a yes or no.
@@ -303,14 +343,39 @@ fn parse_profile(value: &Value, fallback_name: &str) -> Result<Profile, String> 
     // reads; the chain and the read-only rule are enforced before any model call.
     let before = match value["before"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
         Some(before) => {
-            let ok = !before.is_empty() && before.len() <= 32 && before.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-');
-            if !ok {
+            if !profile_name_ok(before) {
                 return Err(format!("profile {}: before {} is no profile name (lower case letters, digits, _ or -, at most 32)", name, before));
             }
             Some(before.to_string())
         }
         None => None,
     };
+    // A shadow profile runs beside the profile it names. The main run is never changed; the shadow's files are never
+    // merged. The profile must exist when the pair starts, not at parse time.
+    let shadow_of = match value["shadow_of"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(main) => {
+            if !profile_name_ok(main) {
+                return Err(format!("profile {}: shadow_of {} is no profile name (lower case letters, digits, _ or -, at most 32)", name, main));
+            }
+            if main == name {
+                return Err(format!("profile {}: shadow_of names the profile itself. A shadow runs beside another profile.", name));
+            }
+            Some(main.to_string())
+        }
+        None => None,
+    };
+    // The quorum settings are numbers and two model settings. A quorum of 2 is the only useful vote; a third answer
+    // would need a tie rule, so the profile is refused instead of silently clamping.
+    let quorum = match value.get("quorum") {
+        None | Some(Value::Null) => 1,
+        Some(v) => match count_of(v) {
+            Some(1) => 1,
+            Some(2) => 2,
+            _ => return Err(format!("profile {}: quorum is 1 or 2, got {}", name, v)),
+        },
+    };
+    let second_model = model_setting(&value["second_model"], "weak");
+    let decider_model = model_setting(&value["decider_model"], "main");
     // A factory profile carries its schedule. The two forms are exclusive and are validated here, so a timer is never
     // written from a typo. The runner only reads the fields; the schedule itself lives in the operating system.
     let every = match value.get("every") {
@@ -335,7 +400,7 @@ fn parse_profile(value: &Value, fallback_name: &str) -> Result<Profile, String> 
         return Err(format!("profile {}: use every or at, not both", name));
     }
     let purpose = value["purpose"].as_str().map(str::trim).filter(|s| !s.is_empty()).map(|s| s.chars().take(1000).collect::<String>());
-    Ok(Profile { name, workers: list, validator, max_models, max_depth, max_parallel, budget_eur, max_steps, retries, report_every, stuck_after, worktree, before, every, at, purpose })
+    Ok(Profile { name, workers: list, validator, max_models, max_depth, max_parallel, budget_eur, max_steps, retries, report_every, stuck_after, worktree, before, every, at, purpose, quorum, second_model, decider_model, shadow_of })
 }
 
 fn builtin(name: &str) -> Option<Profile> {
@@ -553,11 +618,12 @@ fn cluster_setting(key: &str, raw: &str) -> Result<Value, String> {
             if n == 0 || n > 100 { return Err(format!("NOT parsed. stuck_after is between 1 and 100, got {}.", n)); }
             Ok(json!(raw))
         }
+        "quorum" => Ok(json!(whole(1, 2)?)),
         _ => Err(format!("NOT parsed. Unknown setting {}.", key)),
     }
 }
 
-const CLUSTER_FILE_KEYS: &[&str] = &["parts", "before", "max_models", "max_depth", "max_parallel", "max_steps", "retries", "budget_eur", "report_every", "stuck_after", "worktree"];
+const CLUSTER_FILE_KEYS: &[&str] = &["parts", "before", "shadow_of", "quorum", "max_models", "max_depth", "max_parallel", "max_steps", "retries", "budget_eur", "report_every", "stuck_after", "worktree"];
 
 /// Parses one cluster file into a `Profile`:
 /// `$dev(parts=[researcher, coder*3, validator, tool], max_models=8, max_depth=3, budget_eur=2)`.
@@ -609,6 +675,14 @@ pub fn parse_cluster(text: &str) -> Result<Profile, String> {
         } else if key == "before" {
             if !valid_cluster_name(raw) {
                 return Err(format!("NOT parsed. before needs a profile name (lower case letters, digits, _ or -, at most 32), got {}.", raw));
+            }
+            settings.push((key, json!(raw)));
+        } else if key == "shadow_of" {
+            if !valid_cluster_name(raw) {
+                return Err(format!("NOT parsed. shadow_of needs a profile name (lower case letters, digits, _ or -, at most 32), got {}.", raw));
+            }
+            if name == raw {
+                return Err("NOT parsed. shadow_of names the profile itself.".to_string());
             }
             settings.push((key, json!(raw)));
         } else {
@@ -671,13 +745,20 @@ pub fn profiles_text(ctx: &Ctx) -> String {
             Ok(p) => {
                 let parts: Vec<String> = p.workers.iter().map(|w| format!("{} ({})", w.name, w.role))
                     .chain(p.validator.iter().map(|v| format!("{} (validator)", v.name))).collect();
-                out.push_str(&format!("{:<12} {} · max {} parts, depth {}, {} parallel, {} retries, report every {}s, stuck after {}{}{}{}\n  {}\n", name, parts.join(", "),
-                                      p.max_models, p.max_depth, p.max_parallel, p.retries, p.report_every, p.stuck_after,
-                                      if p.worktree { " · worktree" } else { "" },
-                                      p.before.as_deref().map(|b| format!(" · before {}", b)).unwrap_or_default(),
-                                      p.every.as_deref().map(|e| format!(" · every {}", e))
-                                          .or_else(|| p.at.as_deref().map(|a| format!(" · daily at {}", a))).unwrap_or_default(),
-                                      if p.budget_eur > 0.0 { format!("{:.2} EUR budget", p.budget_eur) } else { "no euro limit".to_string() }));
+                let quorum_parts = p.workers.iter().filter(|w| quorum_of(&p, w) >= 2).count();
+                let extra = format!("{}{}{}{}{}",
+                    if p.worktree { " · worktree" } else { "" },
+                    p.before.as_deref().map(|b| format!(" · before {}", b)).unwrap_or_default(),
+                    p.shadow_of.as_deref().map(|s| format!(" · shadow of {}", s)).unwrap_or_default(),
+                    if quorum_parts > 0 { format!(" · quorum 2 on {} parts (second {}, decider {})", quorum_parts,
+                                                  p.second_model.as_str().unwrap_or("a model setting"),
+                                                  p.decider_model.as_str().unwrap_or("a model setting")) } else { String::new() },
+                    if p.budget_eur > 0.0 { format!(" · {:.2} EUR budget", p.budget_eur) } else { " · no euro limit".to_string() });
+                out.push_str(&format!("{:<12} {} · max {} parts, depth {}, {} parallel, {} retries, report every {}s, stuck after {}{}\n  {}\n",
+                                      name, parts.join(", "), p.max_models, p.max_depth, p.max_parallel, p.retries,
+                                      p.report_every, p.stuck_after, extra,
+                                      p.every.as_deref().map(|e| format!("every {}", e))
+                                          .or_else(|| p.at.as_deref().map(|a| format!("daily at {}", a))).unwrap_or_default()));
             }
             Err(e) => out.push_str(&format!("{:<12} {}\n", name, e)),
         }
@@ -719,6 +800,7 @@ fn dry_cluster_text(ctx: &Ctx, p: &Profile, goal: &str, note: &str) -> String {
     let mut tokens_out = 0u64;
     let mut euro = 0.0;
     let mut unpriced = 0usize;
+    let quorum_parts = p.workers.iter().filter(|w| quorum_of(p, w) >= 2).count();
     for part in p.workers.iter().chain(p.validator.iter()) {
         let steps = if part.role == "judge" { 4 } else { p.max_steps };
         let (tin, tout, cost, model) = estimate_part(ctx, part, steps);
@@ -735,6 +817,14 @@ fn dry_cluster_text(ctx: &Ctx, p: &Profile, goal: &str, note: &str) -> String {
     out.push_str(&format!("  estimate: ~{} tokens in / {} tokens out · {:.4} EUR", tokens_in, tokens_out, euro));
     if unpriced > 0 { out.push_str(&format!(" (partial: {} parts have no price in config.json)", unpriced)); }
     out.push('\n');
+    if quorum_parts > 0 {
+        out.push_str(&format!("  quorum: {} part(s) run a second answer (model {}); a disagreement adds one decider call (model {}). The estimate does not include those calls.\n",
+                              quorum_parts, p.second_model.as_str().unwrap_or("a model setting"),
+                              p.decider_model.as_str().unwrap_or("a model setting")));
+    }
+    if let Some(main) = &p.shadow_of {
+        out.push_str(&format!("  shadow: this profile runs beside {} in its own worktree; its files are never merged.\n", main));
+    }
     out
 }
 
@@ -762,19 +852,23 @@ pub fn dry_run(ctx: &Ctx, goal: &str, hint: Option<&str>) -> Result<String, Stri
     Ok(out)
 }
 
-fn model_for_part(ctx: &Ctx, p: &Part) -> Result<Value, String> {
-    if p.model.is_object() && p.model["model"].is_string() {
-        return Ok(p.model.clone());
+fn resolve_model(ctx: &Ctx, what: &str, model: &Value, fallback_role: &str) -> Result<Value, String> {
+    if model.is_object() && model["model"].is_string() {
+        return Ok(model.clone());
     }
-    let key = p.model.as_str().unwrap_or("").trim();
-    let model = match key {
+    let key = model.as_str().unwrap_or("").trim();
+    let resolved = match key {
         "main" => Some(ctx.cfg["main"].clone()),
         "weak" => Some(ctx.cfg["weak"].clone()),
-        "" => crate::route::model_for(ctx, &p.role).cloned(),
+        "" => crate::route::model_for(ctx, fallback_role).cloned(),
         role if crate::route::role_names().iter().any(|r| *r == role) => crate::route::model_for(ctx, role).cloned(),
-        other => return Err(format!("part {} names unknown model {}; use main, weak, scout, judge, worker or a model setting", p.name, other)),
+        other => return Err(format!("{} names unknown model {}; use main, weak, scout, judge, worker or a model setting", what, other)),
     };
-    model.filter(|m| m["model"].is_string()).ok_or_else(|| format!("part {} has no model for role {}", p.name, p.role))
+    resolved.filter(|m| m["model"].is_string()).ok_or_else(|| format!("{} has no model for its role", what))
+}
+
+fn model_for_part(ctx: &Ctx, p: &Part) -> Result<Value, String> {
+    resolve_model(ctx, &format!("part {}", p.name), &p.model, &p.role)
 }
 
 fn part_model_name(p: &Part, model: &Value) -> String {
@@ -804,7 +898,9 @@ fn save(ctx: &Ctx, c: &Cluster) -> Result<(), String> {
         "output": c.output, "error": c.error, "memory": c.memory, "parts": parts,
         "evidence": c.evidence,
         "project": c.project, "worktree": c.worktree, "branch": c.branch, "cwd": c.cwd,
-        "respawns": c.respawns, "respawned_from": c.respawned_from
+        "respawns": c.respawns, "respawned_from": c.respawned_from,
+        "quorum": {"agreed": c.quorum_agreed, "escalated": c.quorum_escalated},
+        "shadow": c.shadow, "shadow_of": c.shadow_of, "match_rate": c.match_rate
     });
     let path = cluster_file(ctx, &c.id);
     let tmp = path.with_extension("json.tmp");
@@ -843,6 +939,11 @@ fn cluster_from(v: &Value) -> Cluster {
         cwd: v["cwd"].as_str().unwrap_or("").to_string(),
         respawns: v["respawns"].as_u64().unwrap_or(0) as usize,
         respawned_from: v["respawned_from"].as_str().unwrap_or("").to_string(),
+        quorum_agreed: v["quorum"]["agreed"].as_u64().unwrap_or(0) as usize,
+        quorum_escalated: v["quorum"]["escalated"].as_u64().unwrap_or(0) as usize,
+        shadow: v["shadow"].as_bool().unwrap_or(false),
+        shadow_of: v["shadow_of"].as_str().unwrap_or("").to_string(),
+        match_rate: v["match_rate"].as_f64(),
         parts: v["parts"].as_array().map(|a| a.iter().map(|p| PartRun {
             name: p["name"].as_str().unwrap_or("").to_string(), slot: p["slot"].as_str().unwrap_or("").to_string(),
             role: p["role"].as_str().unwrap_or("").to_string(), model: p["model"].as_str().unwrap_or("").to_string(),
@@ -1479,6 +1580,85 @@ fn validator_prompt(c: &Cluster, memory: &str) -> String {
 Otherwise FAIL with the smallest exact correction.", c.task, memory.chars().take(12_000).collect::<String>())
 }
 
+/// The answers of two independent runs agree when their whitespace and letter case are the same. The compare is
+/// deliberately strict: a different sentence is a disagreement, and a nearly equal answer costs one decider call.
+fn normalized_answer(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ").trim_end_matches(['.', '!', '?']).to_lowercase()
+}
+
+fn answers_agree(first: &str, second: &str) -> bool {
+    let first = normalized_answer(first);
+    !first.is_empty() && first == normalized_answer(second)
+}
+
+/// The number of answers for a part: its own `quorum`, else the profile's. 2 is the only vote the profile parser keeps.
+fn quorum_of(profile: &Profile, part: &Part) -> usize {
+    let from_part = if part.quorum > 0 { part.quorum } else { profile.quorum };
+    from_part.clamp(1, 2)
+}
+
+/// What a quorum run did. The first answer is the normal part result; `decided` is the answer that replaces it only
+/// after an escalation.
+#[derive(Clone, Debug)]
+struct QuorumOutcome {
+    agreed: bool,
+    escalated: bool,
+    second_model: String,
+    decider_model: String,
+    second: String,
+    decided: String,
+}
+
+/// Asks one model without tools, records its cost and checks the hard budgets. Used for the second quorum answer and
+/// for the decider, so a quorum can never run without its tokens reaching `usage.json`.
+fn quorum_ask(ctx: &Ctx, c: &Cluster, model: &Value, what: &str, system: &str, task: &str,
+              limits: Limits, cancel: &AtomicBool) -> Result<(String, String), String> {
+    if cancel.load(Ordering::SeqCst) { return Err("stopped".to_string()); }
+    let name = model["model"].as_str().unwrap_or("").to_string();
+    let (text, tokens_in, tokens_out) = crate::weak::ask_count(model, system, task)
+        .map_err(|e| {
+            if cancel.load(Ordering::SeqCst) {
+                "stopped".to_string()
+            } else {
+                let shown = model["label"].as_str().or_else(|| model["model"].as_str()).unwrap_or("model");
+                format!("QUORUM: the {} {} did not answer: {}", what, shown, e)
+            }
+        })?;
+    crate::cost::record(ctx, &format!("cluster:{}:quorum", c.name), &name, tokens_in, tokens_out);
+    if let Some(stop) = limits.over(ctx) { return Err(stop); }
+    if cancel.load(Ordering::SeqCst) { return Err("stopped".to_string()); }
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        return Err(format!("QUORUM: the {} returned no text", what));
+    }
+    Ok((text, name))
+}
+
+/// The second answer and, only on a disagreement, the one decider call. The second model never sees the first answer,
+/// so the two answers are independent. The decider sees both answers and returns the result the part keeps.
+fn quorum_check(ctx: &Ctx, c: &Cluster, part: &Part, profile: &Profile, system: &str, task: &str, first: &str,
+                primary: &Value, limits: Limits, cancel: &AtomicBool) -> Result<QuorumOutcome, String> {
+    let second_model = resolve_model(ctx, &format!("profile {} second_model", profile.name), &profile.second_model, "worker")?;
+    let second_system = format!("{}\nA second model answers the same part independently. You have no tools: answer from the task and its context only.", system);
+    let (second, second_name) = quorum_ask(ctx, c, &second_model, "second model", &second_system, task, limits, cancel)?;
+    let mut outcome = QuorumOutcome {
+        agreed: answers_agree(first, &second), escalated: false,
+        second_model: second_name, decider_model: String::new(), second: second.clone(), decided: String::new(),
+    };
+    if outcome.agreed { return Ok(outcome); }
+    let decider_model = resolve_model(ctx, &format!("profile {} decider_model", profile.name), &profile.decider_model, "worker")?;
+    let decider_system = "You are the deciding model of a Penelope cluster. Two parts answered the same task independently and disagree. \
+Decide which answer is correct, or give the correct answer yourself. You have no tools. Answer with the final result only, no explanation.";
+    let decider_task = format!("Task:\n{}\n\nFirst answer ({}):\n{}\n\nSecond answer ({}):\n{}\n\nGive the final result only.",
+                               task, part_model_name(part, primary), first.chars().take(6_000).collect::<String>(),
+                               outcome.second_model, second.chars().take(6_000).collect::<String>());
+    let (decided, decider_name) = quorum_ask(ctx, c, &decider_model, "decider model", decider_system, &decider_task, limits, cancel)?;
+    outcome.escalated = true;
+    outcome.decider_model = decider_name;
+    outcome.decided = decided;
+    Ok(outcome)
+}
+
 /// The question a human part puts to the person. An empty task asks for the whole cluster task.
 fn human_question(c: &Cluster, part: &Part) -> String {
     if part.task.trim().is_empty() {
@@ -1591,7 +1771,7 @@ fn run_workers(ctx: &Ctx, c: &mut Cluster, profile: &Profile, feedback: &str, li
             }
             continue;
         }
-        let mut jobs: Vec<(usize, Part, Value, String, String)> = Vec::new();
+        let mut jobs: Vec<(usize, Part, Value, String, String, usize)> = Vec::new();
         for i in &wave {
             let part = profile.workers[*i].clone();
             let model = match model_for_part(ctx, &part) {
@@ -1614,9 +1794,10 @@ fn run_workers(ctx: &Ctx, c: &mut Cluster, profile: &Profile, feedback: &str, li
             let task = format!("Cluster task: {}\n\nYour part: {}\n\nNotes within two links of your task note (stale notes left out):\n{}\n\nDo your part and report the evidence.",
                                c.task, if part.task.is_empty() { &c.task } else { &part.task },
                                if notes.trim().is_empty() { "(none yet)" } else { notes.trim() });
-            jobs.push((*i, part, model, system, task));
+            let quorum = quorum_of(profile, &part);
+            jobs.push((*i, part, model, system, task, quorum));
         }
-        for (i, _, _, _, _) in &jobs { pending.retain(|index| index != i); }
+        for (i, _, _, _, _, _) in &jobs { pending.retain(|index| index != i); }
         if jobs.is_empty() { continue; }
         c.done = c.done.min(c.total);
         c.updated = now();
@@ -1626,15 +1807,26 @@ fn run_workers(ctx: &Ctx, c: &mut Cluster, profile: &Profile, feedback: &str, li
         *focus.lock().unwrap_or_else(|e| e.into_inner()) = wave_focus.clone();
         report(ctx, c, &wave_focus, "");
         let mut handles = Vec::new();
-        for (i, part, model, system, task) in jobs {
+        for (i, part, model, system, task, quorum) in jobs {
             let ctx = ctx.clone();
             let snapshot = c.clone();
+            let profile_snapshot = profile.clone();
             let cancel = cancel.clone();
             let watch = watch.clone();
             let steps = profile.max_steps;
             handles.push(std::thread::spawn(move || {
                 let out = run_model(&ctx, &snapshot, &part, &system, &task, steps, &cancel, limits, &watch);
-                (i, part, model, out)
+                let (out, vote) = match out {
+                    Ok(done) if quorum >= 2 => {
+                        match quorum_check(&ctx, &snapshot, &part, &profile_snapshot, &system, &task, &done.text,
+                                           &model, limits, &cancel) {
+                            Ok(vote) => (Ok(done), Some(vote)),
+                            Err(e) => (Err(e), None),
+                        }
+                    }
+                    other => (other, None),
+                };
+                (i, part, model, out, vote)
             }));
         }
         let mut results = Vec::new();
@@ -1644,7 +1836,7 @@ fn run_workers(ctx: &Ctx, c: &mut Cluster, profile: &Profile, feedback: &str, li
                 Err(_) => return Err("a worker part panicked".to_string()),
             }
         }
-        for (i, part, model, out) in results {
+        for (i, part, model, out, vote) in results {
             // A cancel that came from the zombie watch belongs to `stuck`, not to `killed`.
             let out = match out {
                 Err(e) if e == "stopped" => match watch.lock().unwrap_or_else(|e| e.into_inner()).cause() {
@@ -1655,12 +1847,29 @@ fn run_workers(ctx: &Ctx, c: &mut Cluster, profile: &Profile, feedback: &str, li
             };
             match out {
                 Ok(done) => {
+                    let text = vote.as_ref().map(|v| if v.escalated { v.decided.clone() } else { done.text.clone() })
+                        .unwrap_or_else(|| done.text.clone());
+                    if let Some(v) = &vote {
+                        if v.agreed { c.quorum_agreed += 1; }
+                        if v.escalated { c.quorum_escalated += 1; }
+                    }
                     c.parts[i].state = "done".to_string();
-                    c.parts[i].output = done.text.clone();
+                    c.parts[i].output = text.clone();
                     c.parts[i].error.clear();
-                    c.output.push_str(&format!("\n--- {} ({}) ---\n{}\n", part.name, part.slot, done.text));
-                    write_part_note(ctx, c, profile, &part, Some(&done.text), crate::notes::Status::Open);
-                    memory_line(ctx, c, &part, &model, &done.text, "done");
+                    c.output.push_str(&format!("\n--- {} ({}) ---\n{}\n", part.name, part.slot, text));
+                    write_part_note(ctx, c, profile, &part, Some(&text), crate::notes::Status::Open);
+                    memory_line(ctx, c, &part, &model, &text, "done");
+                    if let Some(v) = &vote {
+                        let result = if v.escalated { format!("escalated to {}", v.decider_model) } else { "agreed".to_string() };
+                        append_memory(ctx, c, &format!("\n## quorum · {}\n\nfirst answer ({}):\n{}\n\nsecond answer ({}):\n{}\n\n{}: {}\n",
+                                                      part.name, part_model_name(&part, &model),
+                                                      done.text.chars().take(4_000).collect::<String>(),
+                                                      v.second_model, v.second.chars().take(4_000).collect::<String>(),
+                                                      result, if v.escalated { &v.decided } else { &text }));
+                        stream_note(ctx, &c.id, &format!("QUORUM {} · {} · second {} · {}",
+                                                          part.name, if v.agreed { "agreed" } else { "disagree" },
+                                                          v.second_model, if v.escalated { &v.decider_model } else { "no decider call" }));
+                    }
                     c.done = (c.done + 1).min(c.total);
                     finished.push(i);
                     if let Some(stop) = limits.over(ctx) {
@@ -2082,7 +2291,9 @@ fn new_cluster(ctx: &Ctx, profile: &Profile, name: &str, task: &str, parent: Opt
                       parent: parent.map(str::to_string), after, depth, state: "queued".to_string(), done: 0,
                       total: parts.len(), started: now(), updated: now(), output: String::new(), error: String::new(),
                       memory: memory_path(ctx, &id).to_string_lossy().to_string(), evidence: String::new(),
-                      project, worktree, branch, cwd, respawns: 0, respawned_from: String::new(), parts };
+                      project, worktree, branch, cwd, respawns: 0, respawned_from: String::new(),
+                      quorum_agreed: 0, quorum_escalated: 0, shadow: false, shadow_of: String::new(),
+                      match_rate: None, parts };
     save(ctx, &c)?;
     let _ = fs::write(memory_path(ctx, &id), format!("# Cluster {} · {}\n\nTask: {}\n\n", name, profile.name, task));
     Ok(c)
@@ -2413,6 +2624,11 @@ pub fn status_text(ctx: &Ctx, id: Option<&str>) -> String {
         let mut out = format!("cluster {} · {} · profile {} · state {}\nTask: {}\nProgress: {}/{}\nMemory: {}\n",
                               c.id, c.name, c.profile, c.state, c.task, c.done, c.total, c.memory);
         if !c.worktree.is_empty() { out.push_str(&format!("Worktree: {} · branch {}\n", c.worktree, c.branch)); }
+        if c.shadow { out.push_str(&format!("Shadow: yes · shadow of {} · files never merged\n", if c.shadow_of.is_empty() { "?" } else { &c.shadow_of })); }
+        if let Some(rate) = c.match_rate { out.push_str(&format!("Shadow match: {:.1}%\n", rate * 100.0)); }
+        if c.quorum_agreed + c.quorum_escalated > 0 {
+            out.push_str(&format!("Quorum: {} agreed · {} escalated\n", c.quorum_agreed, c.quorum_escalated));
+        }
         if !c.error.is_empty() { out.push_str(&format!("Error: {}\n", c.error)); }
         for p in &c.parts {
             out.push_str(&format!("  {:<12} {:<10} {:<12} {:<10} {}\n", p.name, p.role, p.slot, p.state, p.model));
@@ -2533,6 +2749,7 @@ pub fn profile_json(p: &Profile, name: &str) -> Value {
         if !part.task_type.is_empty() { value["task_type"] = json!(part.task_type); }
         if !part.mcp.is_empty() { value["mcp"] = json!(part.mcp); }
         if !part.depends_on.is_empty() { value["needs"] = json!(part.depends_on); }
+        if part.quorum > 0 { value["quorum"] = json!(part.quorum); }
         value
     };
     let mut value = json!({
@@ -2540,10 +2757,12 @@ pub fn profile_json(p: &Profile, name: &str) -> Value {
         "workers": p.workers.iter().map(part_value).collect::<Vec<_>>(),
         "max_models": p.max_models, "max_depth": p.max_depth, "max_parallel": p.max_parallel,
         "budget_eur": p.budget_eur, "max_steps": p.max_steps, "retries": p.retries,
-        "report_every": p.report_every, "stuck_after": p.stuck_after, "worktree": p.worktree
+        "report_every": p.report_every, "stuck_after": p.stuck_after, "worktree": p.worktree,
+        "quorum": p.quorum, "second_model": p.second_model, "decider_model": p.decider_model
     });
     if let Some(validator) = &p.validator { value["validator"] = part_value(validator); }
     if let Some(before) = &p.before { value["before"] = json!(before); }
+    if let Some(shadow_of) = &p.shadow_of { value["shadow_of"] = json!(shadow_of); }
     if let Some(every) = &p.every { value["every"] = json!(every); }
     if let Some(at) = &p.at { value["at"] = json!(at); }
     if let Some(purpose) = &p.purpose { value["purpose"] = json!(purpose); }
@@ -2657,6 +2876,16 @@ fn stream_ask(ctx: &Ctx, id: &str, line: &str) {
     let _guard = REPORT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(dir.join("reports.jsonl")) {
         let _ = writeln!(file, "{} ASK {}", now(), line);
+    }
+}
+
+/// A report-stream entry for a quorum or shadow result. It is not a `S:` line; the cluster state stays in `report.txt`.
+fn stream_note(ctx: &Ctx, id: &str, line: &str) {
+    let dir = cluster_dir(ctx, id);
+    let _ = fs::create_dir_all(&dir);
+    let _guard = REPORT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(dir.join("reports.jsonl")) {
+        let _ = writeln!(file, "{} {}", now(), line);
     }
 }
 
@@ -3332,6 +3561,101 @@ mod tests {
         }));
         assert!(profile(&ctx, "cycle").unwrap_err().contains("cycle"));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_quorum_part_finishes_on_agreement_without_a_decider_call() {
+        let (mut ctx, dir) = ctx();
+        let probe = dir.join("hello.txt").to_string_lossy().to_string();
+        let (address, seen) = crate::llm::fake::serve(vec![
+            (200, text_reply("alpha")),
+            (200, text_reply("alpha")),
+            (200, tool_reply("read", json!({"path": probe}))),
+            (200, text_reply("PASS: both answers are in the memory")),
+        ]);
+        fake_models(&mut ctx, &address);
+        write_profile(&ctx, "vote", json!({
+            "name": "vote",
+            "workers": [{"name": "one", "role": "scout", "model": "main", "task": "Answer the question.", "quorum": 2}],
+            "validator": {"name": "check", "role": "judge", "model": "judge"},
+            "second_model": "weak", "decider_model": "main",
+            "max_models": 2, "max_depth": 1, "retries": 0, "worktree": false
+        }));
+        let p = profile(&ctx, "vote").unwrap();
+        assert_eq!(quorum_of(&p, &p.workers[0]), 2);
+        let c = new_cluster(&ctx, &p, "vote", "answer the question", None, Vec::new(), 0).unwrap();
+        let out = run_cluster(&ctx, &c.id).unwrap();
+        assert!(out.contains("done"), "{}", out);
+        let c = load(&ctx, &c.id).unwrap();
+        assert_eq!(c.state.as_str(), "done");
+        assert_eq!((c.quorum_agreed, c.quorum_escalated), (1, 0));
+        assert_eq!(seen.lock().unwrap().len(), 4, "an agreement asks no decider: {:?}", seen.lock().unwrap().len());
+        let bodies: Vec<String> = seen.lock().unwrap().iter().map(|s| s.body.to_string()).collect();
+        assert!(bodies[1].contains("You have no tools"), "the second answer is independent: {}", bodies[1]);
+        assert!(!bodies[1].contains("alpha"), "the second answer must not see the first: {}", bodies[1]);
+        let memory = fs::read_to_string(memory_path(&ctx, &c.id)).unwrap();
+        assert!(memory.contains("## quorum · one") && memory.contains("agreed"), "{}", memory);
+        let stream = fs::read_to_string(cluster_dir(&ctx, &c.id).join("reports.jsonl")).unwrap();
+        assert!(stream.contains("QUORUM one · agreed"), "{}", stream);
+        assert!(status_text(&ctx, Some(&c.id)).contains("Quorum: 1 agreed · 0 escalated"));
+        let stored: Value = serde_json::from_str(&fs::read_to_string(cluster_file(&ctx, &c.id)).unwrap()).unwrap();
+        assert_eq!((stored["quorum"]["agreed"].as_u64(), stored["quorum"]["escalated"].as_u64()), (Some(1), Some(0)));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_quorum_disagreement_is_decided_once_by_the_large_model() {
+        let (mut ctx, dir) = ctx();
+        let probe = dir.join("hello.txt").to_string_lossy().to_string();
+        let (address, seen) = crate::llm::fake::serve(vec![
+            (200, text_reply("alpha")),
+            (200, text_reply("beta")),
+            (200, text_reply("alpha")),
+            (200, tool_reply("read", json!({"path": probe}))),
+            (200, text_reply("PASS: the decided answer is in the memory")),
+        ]);
+        fake_models(&mut ctx, &address);
+        write_profile(&ctx, "vote2", json!({
+            "name": "vote2",
+            "workers": [{"name": "one", "role": "scout", "model": "main", "task": "Answer the question.", "quorum": 2}],
+            "validator": {"name": "check", "role": "judge", "model": "judge"},
+            "second_model": "weak", "decider_model": "main",
+            "max_models": 2, "max_depth": 1, "retries": 0, "worktree": false
+        }));
+        let p = profile(&ctx, "vote2").unwrap();
+        let c = new_cluster(&ctx, &p, "vote2", "answer the question", None, Vec::new(), 0).unwrap();
+        let out = run_cluster(&ctx, &c.id).unwrap();
+        assert!(out.contains("done"), "{}", out);
+        let c = load(&ctx, &c.id).unwrap();
+        assert_eq!(c.state.as_str(), "done");
+        assert_eq!((c.quorum_agreed, c.quorum_escalated), (0, 1));
+        assert_eq!(c.parts[0].output, "alpha", "the decider answer is the part result");
+        assert_eq!(seen.lock().unwrap().len(), 5, "one second answer and one decider call");
+        let bodies: Vec<String> = seen.lock().unwrap().iter().map(|s| s.body.to_string()).collect();
+        assert!(bodies[2].contains("alpha") && bodies[2].contains("beta"),
+                "the decider sees both answers: {}", bodies[2]);
+        let memory = fs::read_to_string(memory_path(&ctx, &c.id)).unwrap();
+        assert!(memory.contains("escalated to"), "{}", memory);
+        assert!(memory.contains("alpha") && memory.contains("beta"), "{}", memory);
+        let stream = fs::read_to_string(cluster_dir(&ctx, &c.id).join("reports.jsonl")).unwrap();
+        assert!(stream.contains("QUORUM one · disagree"), "{}", stream);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn quorum_is_one_or_two_and_a_cluster_file_can_set_it() {
+        let p = parse_cluster("$vote(parts=[scout, validator], quorum=2, worktree=false)").unwrap();
+        assert_eq!(p.quorum, 2);
+        assert_eq!(quorum_of(&p, &p.workers[0]), 2);
+        for bad in ["$vote(parts=[scout], quorum=0)", "$vote(parts=[scout], quorum=3)", "$vote(parts=[scout], quorum=two)"] {
+            assert!(parse_cluster(bad).is_err(), "{}", bad);
+        }
+        let own = parse_profile(&json!({
+            "name": "own", "quorum": 2,
+            "workers": [{"name": "one", "role": "scout", "model": "main", "quorum": 1}],
+            "worktree": false
+        }), "own").unwrap();
+        assert_eq!(quorum_of(&own, &own.workers[0]), 1, "a part may turn the profile quorum off");
     }
 
     #[test]
