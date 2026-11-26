@@ -1649,3 +1649,37 @@ Open:
   deleted by hand.
 - The built-in cluster view reads all cluster state files under `.penelope/clusters`; a very large history is read on
   every opening. There is no cache.
+
+## DeepSeek phase 4.4 extension (branch `feat/app-update`)
+
+### App update and ZIP install
+
+`penelope app update NAME` and `/app update NAME` update a git-installed app. The installed folder is copied into a
+hidden staging folder below `.penelope/apps/` with its `.git`, `git pull --ff-only` runs there, then
+`plugins::check` scans the result. The live folder is replaced only after the person answers yes; `--yes` needs the
+same `apps.allow_install` and `apps.rights` agreement in `config.json` as an install. A failed pull, a refused check,
+a missing `.git` or a changed app name removes the staging copy and leaves the old app untouched. The old folder is
+moved aside during the swap and removed only after the registry records the source.
+
+`penelope app install PATH.zip` and a ZIP link (including `file://`) unpack through `files::extract_zip` into a hidden
+staging folder, run the same check, manifest and rights gate, and only then move the app into
+`.penelope/apps/NAME`. The extractor's plan refuses entries that climb out (`../`), absolute names, platform-dependent
+paths and symbolic links before anything is written. A single wrapping folder in the archive becomes the app root.
+http(s) downloads use `net::agent` (no redirects) and a 100 MB cap; the temp file is removed after unpacking.
+
+Tests: `cd cli && cargo test` → 294 unit tests + 13 integration tests, 0 failed (2026-11-26). New coverage: a local
+git update through a `file://` repo with a version change and the same config gate; a dangerous update refused with
+`install.sh:2` while the installed version stays; a clean ZIP from a path and from a `file://` URL; a ZIP with
+`../escape.txt` refused before anything is written; `/app update` in the interface waits for yes and then replaces the
+folder. No test uses the network.
+
+Open:
+
+- **No live GitHub or HTTP ZIP install was run.** The tests use local folders and `file://` repositories/archives.
+- A ZIP app has no git source, so `/app update NAME` refuses it; replace it with `/app remove NAME` and `/app install`
+  again.
+- The update copy keeps `.git` but skips `node_modules` and `target`, like the install copy. A very large `.git` can
+  exceed the 4,000-file or 100 MB copy limits; the update then fails and the old app stays.
+- A changed app name in the manifest is refused during update, so the launcher and `apps.json` keep one identity.
+- A Penelope process killed during an update can leave `.penelope/apps/.NAME-update-*` or `.NAME-backup-*`; the
+  launcher ignores hidden folders.

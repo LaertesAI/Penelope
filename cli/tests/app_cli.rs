@@ -35,9 +35,83 @@ fn help_names_the_app_commands() {
     let (ok, out, err) = run_bin(&["--help"]);
     assert!(ok, "{} {}", out, err);
     assert!(out.contains("penelope app list"), "{}", out);
-    assert!(out.contains("penelope app install LINK|DIR [--yes]"), "{}", out);
+    assert!(out.contains("penelope app install LINK|DIR|ZIP [--yes]"), "{}", out);
+    assert!(out.contains("penelope app update NAME [--yes]"), "{}", out);
     assert!(out.contains("penelope app on NAME") && out.contains("penelope app off"), "{}", out);
     assert!(out.contains("penelope app remove NAME") && out.contains("penelope app show NAME"), "{}", out);
+}
+
+fn git(repo: &Path, args: &[&str]) -> bool {
+    Command::new("git").current_dir(repo).args(args).output().map(|o| o.status.success()).unwrap_or(false)
+}
+
+fn commit_all(repo: &Path, message: &str) -> bool {
+    git(repo, &["add", "."])
+        && git(repo, &["-c", "user.email=t@e.org", "-c", "user.name=T", "commit", "-q", "-m", message])
+}
+
+fn write_zip(path: &Path, entries: &[(&str, &[u8])]) {
+    use std::io::Write;
+    let file = std::fs::File::create(path).unwrap();
+    let mut zip = zip::ZipWriter::new(file);
+    let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, data) in entries {
+        zip.start_file(*name, opts).unwrap();
+        zip.write_all(data).unwrap();
+    }
+    zip.finish().unwrap();
+}
+
+#[test]
+fn a_git_app_updates_on_the_command_line_from_a_file_repo() {
+    let d = temp("update");
+    let root = d.join(".penelope");
+    agree(&root);
+    let repo = d.join("linked");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::write(repo.join(".penelope-app.json"),
+                   json!({"name": "linked", "version": "1.0.0", "view": "clusters"}).to_string()).unwrap();
+    if !git(&repo, &["init", "-q"]) || !commit_all(&repo, "first") { return; }
+    let (ok, out, err) = run_bin(&["--root", root.to_str().unwrap(), "app", "install",
+                                   &format!("file://{}", repo.display()), "--yes"]);
+    assert!(ok, "{} {}", out, err);
+    assert!(out.contains("app linked 1.0.0 installed"), "{}", out);
+
+    std::fs::write(repo.join(".penelope-app.json"),
+                   json!({"name": "linked", "version": "1.1.0", "view": "clusters"}).to_string()).unwrap();
+    assert!(commit_all(&repo, "second"));
+    let (ok, out, err) = run_bin(&["--root", root.to_str().unwrap(), "app", "update", "linked", "--yes"]);
+    assert!(ok, "{} {}", out, err);
+    assert!(out.contains("app linked 1.0.0 -> 1.1.0 updated"), "{}", out);
+    let manifest: Value = serde_json::from_str(&std::fs::read_to_string(root.join("apps/linked/.penelope-app.json")).unwrap()).unwrap();
+    assert_eq!(manifest["version"], "1.1.0");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn a_zip_installs_on_the_command_line_and_a_traversal_zip_is_refused() {
+    let d = temp("zip");
+    let root = d.join(".penelope");
+    agree(&root);
+    let archive = d.join("zip-app.zip");
+    let manifest = json!({"name": "zip-app", "version": "1.0.0", "view": "clusters"}).to_string();
+    write_zip(&archive, &[
+        ("zip-app/.penelope-app.json", manifest.as_bytes()),
+        ("zip-app/setup.sh", b"#!/bin/sh\necho hello\n"),
+    ]);
+    let (ok, out, err) = run_bin(&["--root", root.to_str().unwrap(), "app", "install", archive.to_str().unwrap(), "--yes"]);
+    assert!(ok, "{} {}", out, err);
+    assert!(out.contains("app zip-app 1.0.0 installed") && out.contains("1 script file checked"), "{}", out);
+    assert!(root.join("apps/zip-app/setup.sh").is_file());
+
+    let evil = d.join("evil.zip");
+    write_zip(&evil, &[("../escape.txt", b"outside"), ("evil/.penelope-app.json", manifest.as_bytes())]);
+    let (ok, out, err) = run_bin(&["--root", root.to_str().unwrap(), "app", "install", evil.to_str().unwrap(), "--yes"]);
+    assert!(!ok, "{} {}", out, err);
+    assert!(err.contains("outside the target"), "{}", err);
+    assert!(!d.join("escape.txt").exists() && !root.join("apps/escape.txt").exists());
+    assert!(!root.join("apps/evil").exists());
+    let _ = std::fs::remove_dir_all(&d);
 }
 
 #[test]

@@ -118,7 +118,7 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd { name: "/cluster", help: "orchestrate clusters: /cluster GOAL, profiles, status ID, kill ID", key: "", takes_text: true },
     Cmd { name: "/clusters", help: "the cluster tree with reports and memory", key: "", takes_text: false },
     Cmd { name: "/factory", help: "factories: new NAME --profile P --every 3h|--at HH:MM, list, install, run, stop", key: "", takes_text: true },
-    Cmd { name: "/app", help: "apps: install LINK|DIR, list, on NAME, off, remove NAME, show NAME", key: "f7", takes_text: false },
+    Cmd { name: "/app", help: "apps: install LINK|DIR|ZIP, update NAME, list, on NAME, off, remove NAME, show NAME", key: "f7", takes_text: false },
     Cmd { name: "/brain", help: "the memory map as a graph; /brain write makes an Obsidian vault", key: "", takes_text: false },
     Cmd { name: "/cost", help: "tokens and euro per role and model", key: "", takes_text: false },
     Cmd { name: "/context", help: "show what @ and the memory map would send", key: "", takes_text: true },
@@ -1373,7 +1373,14 @@ impl App {
                             }
                         }
                     }
-                    "install" => self.toast("/app install LINK|DIR installs an app after a check and a yes".to_string()),
+                    "install" => self.toast("/app install LINK|DIR|ZIP installs an app after a check and a yes".to_string()),
+                    "update" if !arg.is_empty() => {
+                        match apps::prepare_update(&self.ctx, arg, false) {
+                            Ok(prepared) => self.overlay = Overlay::AppInstall { prepared },
+                            Err(e) => self.pager("Update app", e),
+                        }
+                    }
+                    "update" => self.toast("/app update NAME pulls a git app after a check and a yes".to_string()),
                     "on" if !arg.is_empty() => {
                         let report = apps::set_active(&self.ctx, arg);
                         self.refresh_side();
@@ -1402,7 +1409,7 @@ impl App {
                         None => self.toast(format!("no app named {}. /app list shows the names.", arg)),
                     },
                     "show" => self.toast("/app show NAME".to_string()),
-                    other => self.toast(format!("/app {} is none of install LINK|DIR, list, on NAME, off, remove NAME, show NAME", other)),
+                    other => self.toast(format!("/app {} is none of install LINK|DIR|ZIP, update NAME, list, on NAME, off, remove NAME, show NAME", other)),
                 }
             }
 
@@ -3042,6 +3049,39 @@ mod tests {
         a.overlay = Overlay::None;
         press(&mut a, KeyCode::F(7));
         assert!(matches!(a.overlay, Overlay::Apps { .. }), "f7 must open the launcher");
+    }
+
+    #[test]
+    fn an_app_updates_in_the_interface_only_after_a_yes() {
+        let mut a = app();
+        let repo = a.ctx.root.join("linked");
+        fs::create_dir_all(&repo).unwrap();
+        fs::write(repo.join(apps::MANIFEST), serde_json::json!({
+            "name": "linked", "version": "1.0.0", "view": "clusters"
+        }).to_string()).unwrap();
+        let git = |args: &[&str]| Command::new("git").current_dir(&repo).args(args).output();
+        if !git(&["init", "-q"]).map(|o| o.status.success()).unwrap_or(false) { return; }
+        git(&["add", "."]).unwrap();
+        let made = git(&["-c", "user.email=t@e.org", "-c", "user.name=T", "commit", "-q", "-m", "first"]).unwrap();
+        if !made.status.success() { return; }
+        apps::install(&a.ctx, &format!("file://{}", repo.display()), false).unwrap();
+
+        fs::write(repo.join(apps::MANIFEST), serde_json::json!({
+            "name": "linked", "version": "1.1.0", "view": "clusters"
+        }).to_string()).unwrap();
+        git(&["add", "."]).unwrap();
+        assert!(git(&["-c", "user.email=t@e.org", "-c", "user.name=T", "commit", "-q", "-m", "second"]).unwrap().status.success());
+
+        a.command("/app update linked");
+        assert!(matches!(a.overlay, Overlay::AppInstall { .. }), "the update must wait for a yes");
+        let question = screen(&mut a, 120, 40);
+        assert!(question.contains("Update app") && question.contains("1.0.0 -> 1.1.0"), "{}", question);
+        assert!(fs::read_to_string(a.ctx.root.join("apps/linked/.penelope-app.json")).unwrap().contains("1.0.0"),
+                "the old app must stay before the yes");
+        press(&mut a, KeyCode::Char('y'));
+        assert!(fs::read_to_string(a.ctx.root.join("apps/linked/.penelope-app.json")).unwrap().contains("1.1.0"),
+                "the yes must replace the checked copy");
+        let _ = fs::remove_dir_all(&a.ctx.root);
     }
 
     #[test]

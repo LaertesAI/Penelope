@@ -98,8 +98,10 @@ penelope factory install NAME [--dry] [--yes]
 penelope factory run NAME    run one factory now, through `cluster run`, without the interface
 penelope factory stop NAME   stop the timer and remove its unit files; the profile stays
 penelope app list            installed apps with version, view and rights
-penelope app install LINK|DIR [--yes]
-                              check the scripts, show the rights, install after a yes; --yes needs apps.allow_install
+penelope app install LINK|DIR|ZIP [--yes]
+                              copy, clone or unpack an app, check the scripts, show the rights, install after a yes; --yes needs apps.allow_install
+penelope app update NAME [--yes]
+                              pull a git app in a staging copy, check it, replace the installed folder after a yes
 penelope app on NAME         the app the launcher marks as chosen
 penelope app off             no app is the chosen one; the folders stay
 penelope app remove NAME     delete an installed app and its folder
