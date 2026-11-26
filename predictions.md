@@ -74,3 +74,29 @@ The result is added here after the run.
 Hold-out result: large 50/50, 1.1096 EUR, 345.0 s. cluster 50/50, 0.5408 EUR, 548.9 s.
 b = 0, c = 0, exact McNemar p = 1.0 on the hold-out and on all 100 pairs. The cluster is 51.3 % cheaper and
 1.59 times slower. A hit lead is not proven. Both 50-task sets are saturated for these two setups.
+
+## Next set: SWE-bench Lite, 50 tasks
+
+Selection, before any run: all 300 test rows of `princeton-nlp/SWE-bench_Lite`, sorted by SHA-256 of `instance_id`,
+first 50. The hash of the selected list is `ef59b9f230078a2efd5c554c576b4ead3ed27a55272afb1c31f721bba67dbf77`.
+Repos: django 15, sympy 14, matplotlib 4, sphinx 4, pylint 3, scikit-learn 3, pytest 2, xarray 2, seaborn 2,
+requests 1.
+
+Check: the model sees the issue text and the repo at `base_commit`, not the test patch. The check applies the
+instance's `test_patch` and runs every `FAIL_TO_PASS` and every `PASS_TO_PASS` test in a prebuilt environment. A task
+is resolved only when all of them pass. An environment that cannot start is `infra`, not a model fail, and is
+reported separately.
+
+Prediction, before any run:
+
+- large: 12 of 50 (24 %).
+- cluster: 4 of 50 (8 %).
+- Paired: large wins 8, cluster wins 0, exact McNemar p = 0.0078.
+- EUR: large about 12.5, cluster about 6.0. The repo contexts and the many steps make a task 5 to 10 times as
+  expensive as a file task. The estimate is rough and needs an owner's budget approval.
+- Time: large about 6,000 s, cluster about 7,500 s.
+- 2 to 4 tasks fail on the environment, not the model.
+- The cluster will be cheaper, not better. The gap of 8 points is the result the set is built to show.
+
+Risks: the harness is not a full SWE-bench agent. The resolved rate can be lower for both. If the environment fails
+on more than 10 tasks, stop and fix the harness before scoring.
