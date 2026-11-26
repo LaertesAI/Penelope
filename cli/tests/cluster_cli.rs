@@ -75,6 +75,7 @@ fn help_names_the_dry_run_and_the_cluster_file() {
     assert!(out.contains("a shadow profile runs beside the first"), "{}", out);
     assert!(out.contains("prints parts, model and an estimate, starts nothing"), "{}", out);
     assert!(out.contains("penelope cluster advise [NAME]"), "{}", out);
+    assert!(out.contains("--apply writes the suggested model into the profile"), "{}", out);
     assert!(out.contains("(built-in, .json or .cluster)"), "{}", out);
 }
 
@@ -146,6 +147,33 @@ fn cluster_advise_prints_the_scored_suggestion_without_a_model() {
     assert!(out.contains("no cluster scores yet"), "{}", out);
     let _ = std::fs::remove_dir_all(&d);
     let _ = std::fs::remove_dir_all(&empty);
+}
+
+#[test]
+fn cluster_advise_apply_writes_the_best_model_into_the_profile() {
+    let d = temp("advise-apply");
+    let root = d.join(".penelope");
+    std::fs::create_dir_all(root.join("clusters/profiles")).unwrap();
+    let profile = json!({
+        "name": "routed",
+        "workers": [{"name": "coder-4", "role": "scout", "model": "weak", "task": "Do the task.", "task_type": "rust-fix"}],
+        "validator": {"name": "check", "role": "judge", "model": "judge"},
+        "max_models": 2, "max_depth": 1, "retries": 0, "worktree": false
+    });
+    std::fs::write(root.join("clusters/profiles/routed.json"), serde_json::to_string_pretty(&profile).unwrap()).unwrap();
+    let scores = json!({"coder-4": {"rust-fix": {
+        "accepted": 1, "rejected": 4,
+        "models": {"weak": {"accepted": 1, "rejected": 4}, "main": {"accepted": 3, "rejected": 0}}
+    }}});
+    std::fs::write(root.join("clusters/scores.json"), serde_json::to_string_pretty(&scores).unwrap()).unwrap();
+
+    let (ok, out, err) = run_bin(&["--root", root.to_str().unwrap(), "cluster", "advise", "routed", "--apply"]);
+    assert!(ok, "{} {}", out, err);
+    assert!(out.contains("weak -> main") && out.contains("next run"), "{}", out);
+    let changed: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(root.join("clusters/profiles/routed.json")).unwrap()).unwrap();
+    assert_eq!(changed["workers"][0]["model"].as_str(), Some("main"), "{}", changed);
+    assert!(!root.join("usage.json").exists(), "advise --apply must not call a model");
+    let _ = std::fs::remove_dir_all(&d);
 }
 
 #[test]

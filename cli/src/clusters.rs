@@ -768,7 +768,8 @@ pub fn profiles_text(ctx: &Ctx) -> String {
     out.push_str("\nA profile is a file under .penelope/clusters/profiles/NAME.json or NAME.cluster. A part names a role, a slot and a\nmodel: \"main\", \"weak\", \"scout\", \"judge\", \"worker\" or a full model setting such as an OpenCode model.\n");
     out.push_str("A cluster file is one line: $dev(parts=[researcher, coder*3, validator, tool], max_models=8, max_depth=3, budget_eur=2).\nIt names built-in parts and repetitions only; it cannot carry a model, a tool or code.\n");
     out.push_str("A part with role \"human\" waits for yes or no. Without an interface set \"human\": \"yes\" or \"no\" in\nconfig.json; Penelope never assumes yes. A profile field \"before\": \"PROFILE\" sends the task through that read-only\nprompt cluster before its workers start; the prompt profile must not name a before of its own.\n");
-    out.push_str("A part may set \"task_type\" (for example \"rust-fix\"); validator results are scored per part and task type,\nwith the profile name as the default. `penelope cluster advise [NAME]` prints the parts that fail often.\n");
+    out.push_str("A part may set \"task_type\" (for example \"rust-fix\"); validator results are scored per part and task type,\nwith the profile name as the default. `penelope cluster advise [NAME]` prints the parts that fail often;\n`penelope cluster advise NAME --apply` writes the best recorded model into the profile for the next run.\n");
+    out.push_str("A part or profile may set \"quorum\": 2: the part runs twice, the second answer uses the profile's\n\"second_model\" (default weak), and a disagreement asks \"decider_model\" (default main) once. A profile with\n\"shadow_of\": \"MAIN\" runs as a shadow beside MAIN on the same task; its worktree is never merged.\n");
     out
 }
 
@@ -1080,14 +1081,24 @@ fn task_type_of(profile: &Profile, part: &Part) -> String {
     if part.task_type.trim().is_empty() { profile.name.clone() } else { part.task_type.trim().to_string() }
 }
 
-/// Writes the outcome of the validator into `.penelope/clusters/scores.json`, one result per worker part.
+/// The key of a part in the model column of the score table. A setting name such as `main` or `weak` can be written
+/// back into a profile; a full model object falls back to its label, which is useful in the report but not a setting.
+fn model_key_of(ctx: &Ctx, part: &Part) -> String {
+    if let Some(name) = part.model.as_str().map(str::trim).filter(|s| !s.is_empty()) {
+        return name.to_string();
+    }
+    model_for_part(ctx, part).ok().map(|m| part_model_name(part, &m)).unwrap_or_default()
+}
+
+/// Writes the outcome of the validator into `.penelope/clusters/scores.json`, one result per worker part. The model
+/// setting of the part is counted beside the totals, so `penelope cluster advise --apply` can suggest a better one.
 fn record_scores(ctx: &Ctx, profile: &Profile, accepted: bool) {
     let _guard = SCORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let path = scores_path(ctx);
     let mut table = crate::advise::load(&path).unwrap_or_else(|_| crate::advise::new_table());
     for part in profile.workers.iter().filter(|p| p.role != "human") {
         let task_type = task_type_of(profile, part);
-        crate::advise::record(&mut table, &part.name, &task_type, accepted);
+        crate::advise::record_model(&mut table, &part.name, &task_type, &model_key_of(ctx, part), accepted);
     }
     let _ = crate::advise::save(&path, &table);
 }
@@ -2815,7 +2826,119 @@ pub fn advise_text(ctx: &Ctx, name: Option<&str>) -> Result<String, String> {
                            scope, crate::advise::MIN_RESULTS, crate::advise::MIN_REJECTED_PERCENT));
     }
     let mut out = String::new();
-    for suggestion in picked { out.push_str(&format!("{}\n", suggestion.sentence())); }
+    for suggestion in picked {
+        let mut line = suggestion.sentence();
+        if let Some(best) = crate::advise::best_model(&table, &suggestion.part, &suggestion.task_type) {
+            if let Some((accepted, total)) = crate::advise::model_acceptance(&table, &suggestion.part, &suggestion.task_type, &best) {
+                line.push_str(&format!(" Best recorded model: {} ({} of {} accepted).", best, accepted, total));
+            }
+        }
+        out.push_str(&format!("{}\n", line));
+    }
+    Ok(out)
+}
+
+/// The profile an advice name points at: a profile name, a cluster id, or the newest cluster with that name.
+fn profile_for_advice(ctx: &Ctx, name: &str) -> Result<Profile, String> {
+    if let Ok(p) = profile(ctx, name) { return Ok(p); }
+    let cluster = load(ctx, name).ok().or_else(|| {
+        let mut matches: Vec<Cluster> = list(ctx).into_iter().filter(|c| c.name == name).collect();
+        matches.sort_by_key(|c| (c.started, c.updated));
+        matches.pop()
+    });
+    match cluster {
+        Some(c) => profile(ctx, &c.profile).map_err(|e| format!("cluster {}: {}", c.id, e)),
+        None => profile(ctx, name),
+    }
+}
+
+/// One model setting a score-table key can mean. Only names the profile parser accepts are written back: `main`,
+/// `weak` or a role. A label such as `test-cluster` is mapped back to the setting that carries it.
+fn setting_for_model(ctx: &Ctx, name: &str) -> Option<String> {
+    if name == "main" || name == "weak" || crate::route::role_names().iter().any(|r| *r == name) {
+        return Some(name.to_string());
+    }
+    let mut settings: Vec<(&str, Value)> = vec![("main", ctx.cfg["main"].clone()), ("weak", ctx.cfg["weak"].clone())];
+    for role in crate::route::role_names() {
+        if let Some(model) = crate::route::model_for(ctx, role) {
+            settings.push((role, model.clone()));
+        }
+    }
+    settings.into_iter().find(|(_, model)| {
+        model["label"].as_str() == Some(name) || model["model"].as_str() == Some(name)
+    }).map(|(setting, _)| setting.to_string())
+}
+
+fn model_settings_text(ctx: &Ctx, part: &Part) -> String {
+    let key = model_key_of(ctx, part);
+    if key.is_empty() { "(no model)".to_string() } else { key }
+}
+
+/// `penelope cluster advise NAME --apply`: writes the suggested model setting into the profile for the next run.
+/// A running cluster is refused, because it would keep the profile it started with and the change would look silent.
+pub fn advise_apply(ctx: &Ctx, name: Option<&str>) -> Result<String, String> {
+    let name = name.map(str::trim).filter(|s| !s.is_empty())
+        .ok_or_else(|| "NOT applied. advise --apply needs a profile or cluster name; it never changes every profile at once.".to_string())?;
+    let p = profile_for_advice(ctx, name)?;
+    let running: Vec<String> = list(ctx).into_iter()
+        .filter(|c| c.profile == p.name && matches!(c.state.as_str(), "queued" | "working" | "validating" | "killing"))
+        .map(|c| c.id).collect();
+    if !running.is_empty() {
+        return Err(format!("NOT applied. {} running cluster(s) use profile {} ({}). A running cluster keeps the profile it started with; stop it or wait, then apply for the next run.",
+                           running.len(), p.name, running.join(", ")));
+    }
+    let path = scores_path(ctx);
+    if !path.exists() {
+        return Err(format!("NOT applied. no cluster scores yet at {}. A validator writes them after a cluster run.", path.display()));
+    }
+    let table = crate::advise::load(&path)?;
+    let all = crate::advise::suggestions(&table);
+    let picked: Vec<&crate::advise::Suggestion> = all.iter().filter(|s| {
+        p.workers.iter().any(|w| w.name == s.part && task_type_of(&p, w) == s.task_type)
+    }).collect();
+    if picked.is_empty() {
+        return Ok(format!("profile {}: no part has enough rejected results for a change. Nothing was written.\n", p.name));
+    }
+    let json_path = profile_dir(ctx).join(format!("{}.json", safe(&p.name)));
+    let cluster_path = profile_dir(ctx).join(format!("{}.cluster", safe(&p.name)));
+    if !json_path.exists() && cluster_path.exists() {
+        return Err(format!("NOT applied. profile {} is a .cluster file, which cannot carry a model. Create {}.json with the same parts and set the model there.",
+                           p.name, p.name));
+    }
+    let mut value = profile_json(&p, &p.name);
+    let mut changes: Vec<String> = Vec::new();
+    for suggestion in picked {
+        let Some(worker) = p.workers.iter().find(|w| w.name == suggestion.part) else { continue; };
+        let current = model_settings_text(ctx, worker);
+        let fallback = if current == "main" { "weak".to_string() } else { "main".to_string() };
+        let recorded = crate::advise::best_model(&table, &suggestion.part, &suggestion.task_type)
+            .and_then(|name| setting_for_model(ctx, &name));
+        let best = match recorded {
+            Some(name) if name == current => continue,
+            Some(name) => name,
+            None => fallback,
+        };
+        if best == current { continue; }
+        if let Some(workers) = value["workers"].as_array_mut() {
+            for w in workers {
+                if w["name"].as_str() == Some(suggestion.part.as_str()) {
+                    w["model"] = json!(best);
+                }
+            }
+        }
+        changes.push(format!("{}: {} -> {} · rejected {} of {} on {}",
+                             suggestion.part, current, best, suggestion.rejected, suggestion.total, suggestion.task_type));
+    }
+    if changes.is_empty() {
+        return Ok(format!("profile {}: the suggested model is already set. Nothing was written.\n", p.name));
+    }
+    let checked = parse_profile(&value, &p.name)?;
+    fs::create_dir_all(profile_dir(ctx)).map_err(|e| format!("cannot make {}: {}", profile_dir(ctx).display(), e))?;
+    fs::write(&json_path, serde_json::to_string_pretty(&value).unwrap())
+        .map_err(|e| format!("cannot write {}: {}", json_path.display(), e))?;
+    let mut out = format!("profile {}: {} change(s) for the next run\n", checked.name, changes.len());
+    for change in changes { out.push_str(&format!("  {}\n", change)); }
+    out.push_str("No running cluster was changed: a cluster reads its profile when it starts. Start a new run to use the new model.\n");
     Ok(out)
 }
 
@@ -4535,6 +4658,61 @@ mod tests {
         assert_eq!(table["coder-4"]["rust-fix"]["rejected"], 0);
         let text = advise_text(&ctx, None).unwrap();
         assert!(!text.contains("was rejected"), "{}", text);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn advise_apply_writes_the_best_recorded_model_for_the_next_run() {
+        let (ctx, dir) = ctx();
+        write_profile(&ctx, "routed", json!({
+            "name": "routed",
+            "workers": [{"name": "coder-4", "role": "scout", "model": "weak", "task": "Do the task.", "task_type": "rust-fix"}],
+            "validator": {"name": "check", "role": "judge", "model": "judge"},
+            "max_models": 2, "max_depth": 1, "retries": 0, "worktree": false
+        }));
+        let scores = json!({"coder-4": {"rust-fix": {
+            "accepted": 1, "rejected": 4,
+            "models": {"weak": {"accepted": 1, "rejected": 4}, "main": {"accepted": 3, "rejected": 0}}
+        }}});
+        fs::create_dir_all(base(&ctx)).unwrap();
+        fs::write(scores_path(&ctx), scores.to_string()).unwrap();
+
+        let said = advise_apply(&ctx, Some("routed")).unwrap();
+        assert!(said.contains("weak -> main") && said.contains("rejected 4 of 5 on rust-fix"), "{}", said);
+        assert!(said.contains("next run"), "{}", said);
+        let changed = profile(&ctx, "routed").unwrap();
+        assert_eq!(changed.workers[0].model, json!("main"));
+        let text = advise_text(&ctx, Some("routed")).unwrap();
+        assert!(text.contains("Best recorded model: main (3 of 3 accepted)"), "{}", text);
+        // A second call has nothing left to change.
+        assert!(advise_apply(&ctx, Some("routed")).unwrap().contains("already set"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn advise_apply_refuses_a_running_cluster_and_leaves_its_profile_alone() {
+        let (ctx, dir) = ctx();
+        write_profile(&ctx, "busy", json!({
+            "name": "busy",
+            "workers": [{"name": "coder-4", "role": "scout", "model": "weak", "task": "Do the task.", "task_type": "rust-fix"}],
+            "validator": {"name": "check", "role": "judge", "model": "judge"},
+            "max_models": 2, "max_depth": 1, "retries": 0, "worktree": false
+        }));
+        fs::create_dir_all(base(&ctx)).unwrap();
+        fs::write(scores_path(&ctx), json!({"coder-4": {"rust-fix": {
+            "accepted": 1, "rejected": 4,
+            "models": {"weak": {"accepted": 1, "rejected": 4}, "main": {"accepted": 3, "rejected": 0}}
+        }}}).to_string()).unwrap();
+        let p = profile(&ctx, "busy").unwrap();
+        let c = new_cluster(&ctx, &p, "busy", "work", None, Vec::new(), 0).unwrap();
+        let mut c = load(&ctx, &c.id).unwrap();
+        c.state = "working".to_string();
+        save(&ctx, &c).unwrap();
+
+        let err = advise_apply(&ctx, Some("busy")).unwrap_err();
+        assert!(err.contains("running cluster") && err.contains("next run"), "{}", err);
+        assert_eq!(profile(&ctx, "busy").unwrap().workers[0].model, json!("weak"), "the profile was not touched");
+        assert!(advise_apply(&ctx, None).unwrap_err().contains("needs a profile"));
         let _ = fs::remove_dir_all(&dir);
     }
 

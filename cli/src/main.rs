@@ -88,7 +88,9 @@ penelope cluster kill ID     stop a running cluster at once
 penelope cluster dump ID     the state dump with the cause of a stuck cluster
 penelope cluster respawn ID [EXTRA]
                               kill ID and start it again with the cause from its dump (at most 2)
-penelope cluster advise [NAME]  one suggestion per part and task type the validator rejected often, worst first
+penelope cluster advise [NAME] [--apply]
+                              one suggestion per part and task type the validator rejected often, worst first;
+                              --apply writes the suggested model into the profile for the next run and refuses a running cluster
 penelope cluster profile NAME [JSON]
                               create or change a profile under .penelope/clusters/profiles
 penelope factory new NAME --profile P (--every 3h | --at HH:MM) [--goal TEXT] [--dry] [--yes]
@@ -308,10 +310,19 @@ fn main() {
                     println!("{}", clusters::respawn(&ctx, &id, &args.iter().skip(3).cloned().collect::<Vec<_>>().join(" ")));
                 }
                 "advise" => {
-                    let name = args.get(2).map(String::as_str).filter(|s| !s.trim().is_empty());
-                    match clusters::advise_text(&ctx, name) {
-                        Ok(text) => print!("{}", text),
-                        Err(e) => { loom::warn(&e); std::process::exit(2); }
+                    let apply = args.iter().skip(2).any(|a| a == "--apply");
+                    let name = args.iter().skip(2).map(String::as_str)
+                        .find(|a| !a.starts_with("--") && !a.trim().is_empty());
+                    if apply {
+                        match clusters::advise_apply(&ctx, name) {
+                            Ok(text) => print!("{}", text),
+                            Err(e) => { loom::warn(&e); std::process::exit(2); }
+                        }
+                    } else {
+                        match clusters::advise_text(&ctx, name) {
+                            Ok(text) => print!("{}", text),
+                            Err(e) => { loom::warn(&e); std::process::exit(2); }
+                        }
                     }
                 }
                 "profile" => {
@@ -1076,6 +1087,7 @@ mod tests {
         assert!(HELP.contains("a shadow profile runs beside the first"), "{}", HELP);
         assert!(HELP.contains("prints parts, model and an estimate, starts nothing"), "{}", HELP);
         assert!(HELP.contains("penelope cluster advise [NAME]"), "{}", HELP);
+        assert!(HELP.contains("--apply writes the suggested model into the profile"), "{}", HELP);
         assert!(HELP.contains("(built-in, .json or .cluster)"), "{}", HELP);
         assert!(HELP.contains("penelope factory new NAME --profile P (--every 3h | --at HH:MM)"), "{}", HELP);
         assert!(HELP.contains("penelope factory list") && HELP.contains("penelope factory run NAME") && HELP.contains("penelope factory stop NAME"), "{}", HELP);
