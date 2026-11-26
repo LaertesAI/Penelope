@@ -1229,6 +1229,15 @@ fn record_scores(ctx: &Ctx, profile: &Profile, accepted: bool) {
     let _ = crate::advise::save(&path, &table);
 }
 
+/// Adds one Kerkis event for a part to the score table.
+fn record_event(ctx: &Ctx, part: &str, kind: &str) {
+    let _guard = SCORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let path = scores_path(ctx);
+    let mut table = crate::advise::load(&path).unwrap_or_else(|_| crate::advise::new_table());
+    crate::advise::record_event(&mut table, part, kind);
+    let _ = crate::advise::save(&path, &table);
+}
+
 fn memory_line(ctx: &Ctx, c: &Cluster, part: &Part, model: &Value, text: &str, state: &str) {
     let _guard = MEMORY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = cluster_dir(ctx, &c.id);
@@ -1620,6 +1629,7 @@ fn run_model(ctx: &Ctx, c: &Cluster, part: &Part, system: &str, task: &str, max_
                     let args = args_with_cwd(&call.name, &call.args, &cluster_cwd);
                     let (text, ok) = crate::tools::dispatch_retry(ctx, &role, &call.name, &args);
                     if watch.lock().unwrap_or_else(|e| e.into_inner()).note_call(ctx, c, part, &call.name, &args, &text).is_some() {
+                        record_event(ctx, &part.name, "loop_kill");
                         cancel.store(true, Ordering::SeqCst);
                     }
                     checks.push(Check { name: call.name.clone(), target: check_target(&call.name, &args), ok: check_ok(&call.name, &text, ok) });

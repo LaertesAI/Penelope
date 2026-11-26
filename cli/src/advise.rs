@@ -55,6 +55,32 @@ pub fn record_model(table: &mut Value, part: &str, task_type: &str, model: &str,
     cell[key] = json!(n);
 }
 
+/// Adds one Kerkis event for a part: a gate forbids a call, the loop guard kills a call, or a part reads a source
+/// again. The counts live under `table[part]["events"][kind]` and do not change the validator scores.
+pub fn record_event(table: &mut Value, part: &str, kind: &str) {
+    let kind = kind.trim();
+    if kind.is_empty() { return; }
+    if !table.is_object() { *table = json!({}); }
+    let cell = &mut table[part]["events"][kind];
+    let n = cell.as_u64().unwrap_or(0) + 1;
+    *cell = json!(n);
+}
+
+/// The event counts of one part, for a terminal or a test.
+pub fn event_counts(table: &Value, part: &str) -> Value {
+    table[part]["events"].clone()
+}
+
+/// A union of more than 8 tools costs context and choice. The suggestion names the least used tool when usage is
+/// known, otherwise the first tool in sorted order.
+pub fn tool_advice(tools: &[String], usage: &std::collections::BTreeMap<String, u64>) -> Option<String> {
+    if tools.len() <= 8 { return None; }
+    let mut sorted = tools.to_vec();
+    sorted.sort();
+    let least = sorted.iter().min_by_key(|t| usage.get(*t).copied().unwrap_or(0)).cloned().unwrap_or_default();
+    Some(format!("the union has {} tools, more than 8; remove {} or split the cluster", tools.len(), least))
+}
+
 /// Reads the table from a file. A missing file is an empty table. A file that is not a JSON object is an error.
 pub fn load(path: &Path) -> Result<Value, String> {
     if !path.exists() {
@@ -99,6 +125,7 @@ pub fn suggestions(table: &Value) -> Vec<Suggestion> {
     let mut found: Vec<(f64, Suggestion)> = Vec::new();
     for (part, types) in table.as_object().into_iter().flatten() {
         for (task_type, cell) in types.as_object().into_iter().flatten() {
+            if task_type == "events" { continue; }
             let accepted = cell["accepted"].as_u64().unwrap_or(0);
             let rejected = cell["rejected"].as_u64().unwrap_or(0);
             let total = accepted + rejected;
@@ -157,6 +184,27 @@ mod tests {
         for _ in 0..rejected {
             record(table, part, task, false);
         }
+    }
+
+    #[test]
+    fn kerkis_events_are_counted_per_part_and_do_not_change_scores() {
+        let mut t = new_table();
+        record_event(&mut t, "coding-3", "gate_forbid");
+        record_event(&mut t, "coding-3", "gate_forbid");
+        record_event(&mut t, "coding-3", "loop_kill");
+        assert_eq!(event_counts(&t, "coding-3")["gate_forbid"], 2);
+        assert_eq!(event_counts(&t, "coding-3")["loop_kill"], 1);
+        fill(&mut t, "coding-3", "rust-fix", 1, 4);
+        assert_eq!(suggestions(&t).len(), 1, "the events key must not become a task type");
+    }
+
+    #[test]
+    fn a_union_above_eight_tools_gets_one_removal() {
+        let tools: Vec<String> = (1..=10).map(|i| format!("tool{}", i)).collect();
+        assert!(tool_advice(&tools[..8], &std::collections::BTreeMap::new()).is_none());
+        let mut usage = std::collections::BTreeMap::new();
+        usage.insert("tool7".to_string(), 9);
+        assert!(tool_advice(&tools, &usage).unwrap().contains("remove tool1"), "{}", tool_advice(&tools, &usage).unwrap());
     }
 
     #[test]
