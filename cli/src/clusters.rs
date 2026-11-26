@@ -1649,10 +1649,13 @@ fn quorum_ask(ctx: &Ctx, c: &Cluster, model: &Value, what: &str, system: &str, t
 
 /// The second answer and, only on a disagreement, the one decider call. The second model never sees the first answer,
 /// so the two answers are independent. The decider sees both answers and returns the result the part keeps.
-fn quorum_check(ctx: &Ctx, c: &Cluster, part: &Part, profile: &Profile, system: &str, task: &str, first: &str,
+fn quorum_check(ctx: &Ctx, c: &Cluster, part: &Part, profile: &Profile, task: &str, first: &str,
                 primary: &Value, limits: Limits, cancel: &AtomicBool) -> Result<QuorumOutcome, String> {
     let second_model = resolve_model(ctx, &format!("profile {} second_model", profile.name), &profile.second_model, "worker")?;
-    let second_system = format!("{}\nA second model answers the same part independently. You have no tools: answer from the task and its context only.", system);
+    let second_system = format!("You are the second model of the Penelope cluster {} for part {} (slot {}). The cluster task: {}.\nYour focus: {}.\nYou have no tools: answer from the task and its context only. The first answer is not shown to you; give your own answer in the form the part would report.\nModel: {}.",
+                                c.name, part.name, part.slot, c.task,
+                                if part.task.is_empty() { "the whole task" } else { &part.task },
+                                part_model_name(part, &second_model));
     let (second, second_name) = quorum_ask(ctx, c, &second_model, "second model", &second_system, task, limits, cancel)?;
     let mut outcome = QuorumOutcome {
         agreed: answers_agree(first, &second), escalated: false,
@@ -1831,7 +1834,7 @@ fn run_workers(ctx: &Ctx, c: &mut Cluster, profile: &Profile, feedback: &str, li
                 let out = run_model(&ctx, &snapshot, &part, &system, &task, steps, &cancel, limits, &watch);
                 let (out, vote) = match out {
                     Ok(done) if quorum >= 2 => {
-                        match quorum_check(&ctx, &snapshot, &part, &profile_snapshot, &system, &task, &done.text,
+                        match quorum_check(&ctx, &snapshot, &part, &profile_snapshot, &task, &done.text,
                                            &model, limits, &cancel) {
                             Ok(vote) => (Ok(done), Some(vote)),
                             Err(e) => (Err(e), None),
