@@ -284,11 +284,17 @@ fn safe_name(text: &str) -> String {
 }
 
 fn task_text(task: &Task, workdir: &Path) -> String {
+    // A SWE-bench task must not show the check: the check applies the test patch, and the model may not read the tests.
+    let check = if task.base_commit.is_empty() {
+        format!("The check command that judges the result is `{}`.", task.check)
+    } else {
+        "The check runs the project's tests after you stop. Do not run the check yourself; the tests are not part of the working tree.".to_string()
+    };
     format!("This is an automated evaluation task. The project is at {}. Ignore any other working directory named in \
 your system prompt; for this task it is {}. Work only inside that folder. The file and run tools use it as their \
-working directory; if you set cwd, use that path. The check command that judges the result is `{}`. Do not start a \
-cluster or a subagent of your own; do the task here and then stop.\n\nTask: {}",
-            workdir.display(), workdir.display(), task.check, task.prompt)
+working directory; if you set cwd, use that path. {} Do not start a cluster or a subagent of your own; do the task \
+here and then stop.\n\nTask: {}",
+            workdir.display(), workdir.display(), check, task.prompt)
 }
 
 #[derive(Default)]
@@ -819,6 +825,18 @@ mod tests {
         fs::write(&bad, "{\"id\":\"x\",\"prompt\":\"do it\",\"setup\":{\"repo\":\".\",\"cwd\":\"../out\"},\"check\":\"true\"}\n").unwrap();
         assert!(parse_tasks(&bad).unwrap_err().contains("may not leave"));
         let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_swebench_task_does_not_show_the_check_command() {
+        let base = Task { id: "x".into(), prompt: "Do it".into(), repo: std::path::PathBuf::from("."),
+                          cwd: String::new(), copy: false, check: "python3 secret_check.py".into(),
+                          check_timeout_seconds: 5, max_steps: 1, base_commit: "a".repeat(40) };
+        let text = task_text(&base, Path::new("/tmp/x"));
+        assert!(!text.contains("secret_check.py"), "{}", text);
+        assert!(text.contains("Do not run the check"), "{}", text);
+        let file = Task { base_commit: String::new(), ..base };
+        assert!(task_text(&file, Path::new("/tmp/x")).contains("secret_check.py"));
     }
 
     #[test]
