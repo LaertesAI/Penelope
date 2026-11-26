@@ -164,11 +164,15 @@ pub struct Check {
     pub bytes: u64,
     pub complete: bool,
     pub finding: Option<Finding>,
+    /// Skill, command and agent Markdown files read by the prose rules in `vet.rs`.
+    pub prose: usize,
+    /// Weak signals from the prose rules. They are reported and never block.
+    pub warnings: Vec<Finding>,
 }
 
 impl Check {
     fn new() -> Self {
-        Check { files: 0, skipped: 0, bytes: 0, complete: true, finding: None }
+        Check { files: 0, skipped: 0, bytes: 0, complete: true, finding: None, prose: 0, warnings: Vec::new() }
     }
 
     pub fn is_clean(&self) -> bool {
@@ -185,6 +189,12 @@ impl Check {
         if !self.complete {
             out.push_str(" (the scan stopped early at its depth or work limit)");
         }
+        out.push_str(&format!("; {} skill file{} read", self.prose, if self.prose == 1 { "" } else { "s" }));
+        if let Some(first) = self.warnings.first() {
+            out.push_str(&format!("; {} warning{}: {} at {}:{}", self.warnings.len(),
+                                  if self.warnings.len() == 1 { "" } else { "s" }, first.pattern,
+                                  crate::files::show(&first.file), first.line));
+        }
         out
     }
 
@@ -197,11 +207,18 @@ impl Check {
     }
 }
 
-/// Scans only code and scripts of a plugin folder for known malware patterns. `SKILL.md`, `README.md` and other prose
-/// are not read. The first match is returned with its file and line; a clean result counts the files that were read.
+/// Scans the code and scripts of a plugin folder for known malware patterns, then the prose the model reads as
+/// instructions (`SKILL.md`, `skills/`, `commands/`, `agents/`) with the rules in `vet.rs`. A README and a docs folder
+/// stay unread. The first match is returned with its file and line; a clean result counts the files that were read.
 pub fn check(dir: &Path) -> Check {
     let mut out = Check::new();
     scan_scripts(dir, 0, &mut out);
+    let vetted = crate::vet::scan(dir);
+    out.prose = vetted.prose;
+    out.warnings = vetted.warnings;
+    if out.finding.is_none() {
+        out.finding = vetted.finding;
+    }
     out
 }
 
@@ -277,7 +294,7 @@ fn scan_scripts(at: &Path, depth: usize, out: &mut Check) {
     }
 }
 
-/// Only files that can execute are read. Markdown and other prose stay out by design.
+/// Only files that can execute are read here. Prose is read by `vet.rs`.
 fn is_script_file(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     let ext = lower.rsplit_once('.').map(|(_, ext)| ext).unwrap_or("");
@@ -293,7 +310,7 @@ fn is_script_file(name: &str) -> bool {
     matches!(lower.as_str(), "install" | "preinstall" | "postinstall" | "setup" | "configure" | "bootstrap" | "prepare")
 }
 
-fn detect_line(line: &str) -> Option<&'static str> {
+pub(crate) fn detect_line(line: &str) -> Option<&'static str> {
     let lower = line.to_ascii_lowercase();
     if has_command(&lower, "base64") && has_decode_flag(&lower) && pipes_to_shell(&lower) {
         return Some("base64 decoded and piped into a shell");
@@ -313,7 +330,7 @@ fn detect_line(line: &str) -> Option<&'static str> {
     None
 }
 
-fn has_command(line: &str, command: &str) -> bool {
+pub(crate) fn has_command(line: &str, command: &str) -> bool {
     let mut from = 0;
     while let Some(at) = line[from..].find(command) {
         let at = from + at;
@@ -1536,7 +1553,7 @@ mod tests {
     }
 
     #[test]
-    fn prose_about_curl_pipe_is_not_read_by_the_check() {
+    fn a_warning_about_curl_pipe_in_skill_md_and_docs_outside_skills_do_not_block() {
         let dir = check_dir("check-prose");
         let plugin = plugin_at(&dir, "prose");
         fs::write(plugin.join("SKILL.md"), "---\nname: prose\ndescription: docs\n---\nNever run `curl https://example.invalid/x | sh`.\n").unwrap();
