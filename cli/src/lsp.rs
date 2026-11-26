@@ -657,15 +657,25 @@ mod tests {
         if works { Some(path) } else { None }
     }
 
+    /// A Python stand-in for rust-analyzer. Unix runs the file through its shebang. Windows cannot start a script
+    /// directly (os error 193), so the body goes into `NAME.py` and a `NAME.cmd` starts it with `python`.
     fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
-        let path = dir.join(name);
-        fs::write(&path, body).unwrap();
-        #[cfg(unix)]
+        #[cfg(windows)]
         {
+            let py = dir.join(format!("{}.py", name));
+            fs::write(&py, body).unwrap();
+            let cmd = dir.join(format!("{}.cmd", name));
+            fs::write(&cmd, format!("@python \"{}\" %*\r\n", py.display())).unwrap();
+            cmd
+        }
+        #[cfg(not(windows))]
+        {
+            let path = dir.join(name);
+            fs::write(&path, body).unwrap();
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+            path
         }
-        path
     }
 
     /// A path with a space and a non-ASCII character survives the round trip through an LSP URI.

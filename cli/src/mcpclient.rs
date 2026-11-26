@@ -616,6 +616,10 @@ mod tests {
         dir
     }
 
+    /// The fake servers are Python scripts. Windows cannot run a file by its #! line, so every test starts the
+    /// interpreter with the script as its argument. Windows installs the interpreter as python, Unix as python3.
+    const PYTHON: &str = if cfg!(windows) { "python" } else { "python3" };
+
     fn server_script(dir: &Path, body: &str) -> PathBuf {
         let script = dir.join("server");
         fs::write(&script, body).unwrap();
@@ -736,8 +740,8 @@ for line in sys.stdin:
         let script = server_script(dir, BRIEF_SERVER);
         let ctx = crate::config::load(&dir.join(".penelope"));
         let config = json!({"servers": {"brief": {
-            "command": script.display().to_string(),
-            "args": [],
+            "command": PYTHON,
+            "args": [script.display().to_string()],
             "allow": true,
             "env": env.unwrap_or_else(|| json!({}))
         }}});
@@ -892,7 +896,7 @@ for line in sys.stdin:
         let dir = temp("state");
         let script = server_script(&dir, STATE_SERVER);
         let ctx = crate::config::load(&dir.join(".penelope"));
-        assert!(crate::plugins::mcp_add(&ctx, "state", &script.display().to_string(), &[], true).contains("state added"));
+        assert!(crate::plugins::mcp_add(&ctx, "state", PYTHON, &[script.display().to_string()], true).contains("state added"));
         assert_eq!(probe(&ctx, "state").unwrap().len(), 4);
         let first = call(&ctx, "state", "count", &json!({})).unwrap();
         let second = call(&ctx, "state", "count", &json!({})).unwrap();
@@ -910,16 +914,17 @@ for line in sys.stdin:
         fs::create_dir_all(&work).unwrap();
         let ctx = crate::config::load(&dir.join(".penelope"));
         let config = json!({"servers": {"envtest": {
-            "command": script.display().to_string(),
-            "args": [],
+            "command": PYTHON,
+            "args": [script.display().to_string()],
             "env": {"PENELOPE_TEST_ENV": "arrived"},
             "cwd": work.display().to_string(),
             "allow": true
         }}});
         fs::write(dir.join(".penelope/mcp.json"), serde_json::to_string_pretty(&config).unwrap()).unwrap();
         let out = call(&ctx, "envtest", "where", &json!({})).unwrap();
-        let want = fs::canonicalize(&work).unwrap();
-        assert!(out.contains(&format!("cwd:{}", want.display())), "{}", out);
+        // Both sides are canonicalized: Windows reports C:\Users\RUNNER~1 to Python and \\?\C:\Users\runneradmin here.
+        let got = out.split("cwd:").nth(1).and_then(|r| r.split(" env:").next()).unwrap_or("");
+        assert_eq!(fs::canonicalize(got).ok(), fs::canonicalize(&work).ok(), "{}", out);
         assert!(out.contains("env:arrived"), "{}", out);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -929,7 +934,7 @@ for line in sys.stdin:
         let dir = temp("tools");
         let script = server_script(&dir, STATE_SERVER);
         let ctx = crate::config::load(&dir.join(".penelope"));
-        assert!(crate::plugins::mcp_add(&ctx, "guard", &script.display().to_string(), &[], true).contains("added"));
+        assert!(crate::plugins::mcp_add(&ctx, "guard", PYTHON, &[script.display().to_string()], true).contains("added"));
         assert_eq!(call(&ctx, "guard", "danger", &json!({})).unwrap(), "danger ran");
         assert!(crate::plugins::mcp_set_tool_allow(&ctx, "guard", "danger", false).contains("denied"));
         let refused = call(&ctx, "guard", "danger", &json!({})).unwrap_err();
@@ -947,7 +952,7 @@ for line in sys.stdin:
     fn a_dead_server_returns_a_clear_error() {
         let dir = temp("dead");
         let ctx = crate::config::load(&dir.join(".penelope"));
-        assert!(crate::plugins::mcp_add(&ctx, "dead", "/bin/sh", &["-c".to_string(), "exit 7".to_string()], true).contains("added"));
+        assert!(crate::plugins::mcp_add(&ctx, "dead", PYTHON, &["-c".to_string(), "raise SystemExit(7)".to_string()], true).contains("added"));
         let first = call(&ctx, "dead", "echo", &json!({})).unwrap_err();
         assert!(first.contains("dead"), "{}", first);
         assert!(first.to_lowercase().contains("stopped") || first.to_lowercase().contains("did not answer"), "{}", first);
@@ -967,7 +972,7 @@ for line in sys.stdin:
 "#);
         let ctx = crate::config::load(&dir.join(".penelope"));
         let config = json!({"servers": {"slow": {
-            "command": script.display().to_string(), "args": [], "allow": true, "timeout": 1
+            "command": PYTHON, "args": [script.display().to_string()], "allow": true, "timeout": 1
         }}});
         fs::write(dir.join(".penelope/mcp.json"), serde_json::to_string_pretty(&config).unwrap()).unwrap();
         let started = Instant::now();
@@ -982,7 +987,7 @@ for line in sys.stdin:
         let dir = temp("content");
         let script = server_script(&dir, STATE_SERVER);
         let ctx = crate::config::load(&dir.join(".penelope"));
-        assert!(crate::plugins::mcp_add(&ctx, "content", &script.display().to_string(), &[], true).contains("added"));
+        assert!(crate::plugins::mcp_add(&ctx, "content", PYTHON, &[script.display().to_string()], true).contains("added"));
         let out = call(&ctx, "content", "media", &json!({})).unwrap();
         assert!(out.contains("the text"), "{}", out);
         assert!(out.contains("[image image/png") && out.contains("saved at"), "{}", out);
@@ -1024,7 +1029,7 @@ for line in sys.stdin:
     print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": r}), flush=True)
 "#);
         let ctx = crate::config::load(&dir.join(".penelope"));
-        let said = crate::plugins::mcp_add(&ctx, "echo", &script.display().to_string(), &[], false);
+        let said = crate::plugins::mcp_add(&ctx, "echo", PYTHON, &[script.display().to_string()], false);
         assert!(said.contains("echo added"), "{}", said);
         assert_eq!(probe(&ctx, "echo").unwrap()[0].name, "echo");
         assert!(call(&ctx, "echo", "echo", &json!({"text": "hi"})).unwrap_err().contains("denied"));
@@ -1057,7 +1062,7 @@ for line in sys.stdin:
         let plugin = dir.join("demo");
         fs::create_dir_all(plugin.join(".claude-plugin")).unwrap();
         fs::write(plugin.join(".claude-plugin/plugin.json"), r#"{"name": "demo.mcp"}"#).unwrap();
-        fs::write(plugin.join(".mcp.json"), json!({"mcpServers": {"echo": {"command": script.display().to_string()}}}).to_string()).unwrap();
+        fs::write(plugin.join(".mcp.json"), json!({"mcpServers": {"echo": {"command": PYTHON, "args": [script.display().to_string()]}}}).to_string()).unwrap();
         let ctx = crate::config::load(&dir.join(".penelope"));
         assert!(crate::plugins::add(&ctx, &plugin.to_string_lossy()).contains("demo.mcp"));
         let tools = probe(&ctx, "demo.mcp-echo").unwrap();

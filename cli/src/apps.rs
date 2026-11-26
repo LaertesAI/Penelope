@@ -812,7 +812,8 @@ pub fn prepare(ctx: &Ctx, target: &str, unattended: bool) -> Result<Prepared, St
         let staging = stage_zip_from_target(ctx, target, &zip_leaf(target))?;
         (staging, target.to_string())
     } else if is_remote(target) {
-        let leaf = target.trim_end_matches('/').rsplit('/').next().unwrap_or("app").trim_end_matches(".git");
+        // A file URL on Windows can hold backslashes (file://C:\work\app); the last part is the name there too.
+        let leaf = target.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or("app").trim_end_matches(".git");
         let staging = base.join(format!(".{}-clone-{}", safe(leaf), stamp()));
         if let Err(e) = git_clone(target, &staging) {
             cleanup(&staging);
@@ -1331,7 +1332,8 @@ mod tests {
         assert!(report.contains("app linked 1.0.0 -> 1.1.0 updated"), "{}", report);
         let installed = load_dir(&ctx.root.join("apps/linked")).unwrap();
         assert_eq!(installed.version, "1.1.0");
-        assert_eq!(fs::read_to_string(ctx.root.join("apps/linked/release.txt")).unwrap(), "the new file\n");
+        // git on Windows checks text out with CRLF (core.autocrlf), the content is the same.
+        assert_eq!(fs::read_to_string(ctx.root.join("apps/linked/release.txt")).unwrap().replace("\r\n", "\n"), "the new file\n");
         assert!(ctx.root.join("apps/linked/.git").is_dir(), "the update must keep the git folder");
         assert_eq!(fs::read_dir(ctx.root.join("apps")).unwrap().count(), 1, "a staging or backup folder stayed");
         let _ = fs::remove_dir_all(&root);

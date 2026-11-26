@@ -19,7 +19,8 @@ const SAFE_SUB: &[(&str, &[&str])] = &[
     ("python3", &["--version"]),
     ("rustc", &["--version"]),
 ];
-const UNSAFE_PARTS: &[&str] = &[" rm ", "sudo", ">", "|", ";", "&&", " & ", "`", "$(", " mv ", " dd ", "mkfs", "chmod", "chown", "kill", "shutdown", "reboot"];
+/// A bare & counts too: `echo a&rm x` starts rm in sh and in cmd, with or without spaces around the &.
+const UNSAFE_PARTS: &[&str] = &[" rm ", "sudo", ">", "|", ";", "&", "`", "$(", " mv ", " dd ", "mkfs", "chmod", "chown", "kill", "shutdown", "reboot"];
 
 /// True if a command may run under the policy "safe": a read-only or build command without shell operators.
 pub fn is_safe(command: &str) -> bool {
@@ -918,7 +919,7 @@ pub fn git_diff(ctx: &Ctx, path: &str, staged: bool, cwd: &str) -> String {
     if staged { command.push_str(" --cached"); }
     command.push_str(" --stat --patch");
     if !path.trim().is_empty() {
-        command.push_str(&format!(" -- {}", crate::forge::quote(path)));
+        command.push_str(&format!(" -- {}", crate::platform::shell_quote(path)));
     }
     let said = run(ctx, &command, "show the changed lines", cwd);
     if said.trim().is_empty() { "no change in the working tree".to_string() } else { said }
@@ -1387,7 +1388,9 @@ mod tests {
 
     #[test]
     fn three_failed_test_runs_stop_the_turn_and_block_the_next_change() {
-        let (ctx, dir) = test_ctx("stop", "echo boom; exit 7", 3);
+        // cmd has no `;` between commands, `&` runs the second one after the first.
+        let failing = if cfg!(windows) { "echo boom & exit 7" } else { "echo boom; exit 7" };
+        let (ctx, dir) = test_ctx("stop", failing, 3);
         let cwd = dir.to_string_lossy().to_string();
         for i in 1..=3 {
             let said = dispatch_retry(&ctx, "lead", "write", &serde_json::json!({"path": "a.txt", "text": format!("try {}\n", i), "cwd": &cwd}));
@@ -1479,6 +1482,11 @@ mod tests {
             &serde_json::json!({"path": "a.txt", "text": "two\n", "cwd": &cwd})));
         assert!(on.0.contains("profile-test-ok") && on.0.contains("tests passed"), "{}", on.0);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_ampersand_without_spaces_is_no_safe_command() {
+        assert!(is_safe("ls src") && !is_safe("echo one&rm x") && !is_safe("ls & rm x") && !is_safe("ls && rm x"));
     }
 
     #[test]
