@@ -63,6 +63,8 @@ struct Server {
     extension: Option<crate::brief::Extension>,
     /// `tools/list` as long as this process lives. It is read only when a call carries a brief.
     tools: Option<Vec<Value>>,
+    /// True when the server announced Mitos; its `tools/list` may then hold index entries without schemas.
+    mitos: bool,
 }
 
 type Cell = Arc<Mutex<Option<Server>>>;
@@ -151,13 +153,16 @@ fn spawn(name: &str, server: &Value, signature: String) -> Result<Server, String
         }
     });
     let mut live = Server { name: name.to_string(), signature, child, input: Some(input), rx, next: 0, alive: true,
-                             extension: None, tools: None };
+                             extension: None, tools: None, mitos: false };
     let hello = live.request("initialize", json!({
-        "protocolVersion": "2025-06-18", "capabilities": {},
+        "protocolVersion": "2025-06-18", "capabilities": {"experimental": {crate::mitos::EXTENSION_ID: crate::mitos::manifest()}},
         "clientInfo": {"name": "penelope", "version": env!("CARGO_PKG_VERSION")}
     }), timeout_of(server, INIT_TIMEOUT))?;
     match hello {
-        Reply::Ok(value) => live.extension = crate::brief::extension_of(&value),
+        Reply::Ok(value) => {
+            live.extension = crate::brief::extension_of(&value);
+            live.mitos = crate::mitos::announced(&value);
+        }
         Reply::Server(e) => return Err(format!("MCP server {} refused initialize: {}", name, e)),
     }
     live.notify("notifications/initialized", json!({}))?;
@@ -228,6 +233,27 @@ impl Server {
         let tools = result["tools"].as_array().cloned().unwrap_or_default();
         self.tools = Some(tools.clone());
         Ok(tools)
+    }
+
+    /// The full spec of one tool. An index entry of a Mitos server is replaced by the answer to `mitos/describe`;
+    /// every other server already sent the schema in `tools/list`.
+    fn full_tool(&mut self, name: &str, wait: Duration) -> Result<Option<Value>, String> {
+        let tools = self.tools(wait)?;
+        let Some(entry) = tools.iter().find(|t| t["name"].as_str() == Some(name)).cloned() else { return Ok(None) };
+        if !self.mitos || !crate::mitos::is_lazy(&entry) {
+            return Ok(Some(entry));
+        }
+        let answer = match self.request("mitos/describe", json!({"names": [name]}), wait)? {
+            Reply::Ok(value) => value,
+            Reply::Server(e) => return Err(format!("MCP server {} refused mitos/describe: {}", self.name, e)),
+        };
+        let Some(full) = answer["tools"].as_array().and_then(|a| a.first()).cloned() else { return Ok(Some(entry)) };
+        if let Some(cache) = self.tools.as_mut() {
+            if let Some(slot) = cache.iter_mut().find(|t| t["name"].as_str() == Some(name)) {
+                *slot = full.clone();
+            }
+        }
+        Ok(Some(full))
     }
 
     /// Closes stdin, gives a well-behaved server a moment to leave, then kills it.
@@ -303,6 +329,20 @@ pub fn probe(ctx: &Ctx, server: &str) -> Result<Vec<ToolInfo>, String> {
     }).collect())
 }
 
+/// The full argument schema of one tool, asked from a Mitos server only when needed. The model reads it before
+/// `mcp_call`, because `mcp_servers` lists names and one sentence each.
+pub fn describe(ctx: &Ctx, server: &str, tool: &str) -> Result<String, String> {
+    if !crate::agents::mcp_allowed(server) {
+        return Err(format!("NOT described. This agent run may use the MCP servers: {}.", crate::agents::mcp_scope().unwrap_or_default().join(", ")));
+    }
+    let (entry, _) = crate::plugins::server_entry(ctx, server).ok_or_else(|| format!("no MCP server named {}", server))?;
+    let spec = with_server(ctx, server, &entry, |live| live.full_tool(tool, timeout_of(&entry, LIST_TIMEOUT)))?
+        .ok_or_else(|| format!("MCP server {} has no tool named {}", server, tool))?;
+    let schema = if spec["inputSchema"].is_null() { &spec["input_schema"] } else { &spec["inputSchema"] };
+    Ok(format!("{} · {}\n{}\narguments: {}", server, tool, spec["description"].as_str().unwrap_or(""),
+               serde_json::to_string(schema).unwrap_or_default()))
+}
+
 /// True when the tool schema names a property `brief`.
 fn has_brief_property(tool: &Value) -> bool {
     let schema = if tool["inputSchema"].is_null() { &tool["input_schema"] } else { &tool["inputSchema"] };
@@ -334,8 +374,7 @@ pub fn call(ctx: &Ctx, server: &str, tool: &str, args: &Value) -> Result<String,
         if let Some(ext) = live.extension.clone() {
             let short = arguments.get("brief").filter(|brief| brief.is_object() && brief.get("items").is_none()).cloned();
             if let Some(short) = short {
-                let tools = live.tools(timeout_of(&entry, LIST_TIMEOUT))?;
-                let wanted = tools.iter().any(|t| t["name"].as_str() == Some(tool) && has_brief_property(t));
+                let wanted = live.full_tool(tool, timeout_of(&entry, LIST_TIMEOUT))?.map(|t| has_brief_property(&t)).unwrap_or(false);
                 if wanted {
                     let roots = crate::brief::allowed_roots(ctx, server);
                     let packed = crate::brief::pack(&short, &roots, &ext)
@@ -1007,6 +1046,48 @@ for line in sys.stdin:
         let png = b64_decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=").unwrap();
         assert_eq!(png.len(), 68);
         assert!(png.starts_with(&[0x89, b'P', b'N', b'G']));
+    }
+
+    /// A Mitos server sends an index; describe asks `mitos/describe` once and only for the named tool. The server
+    /// writes every method it saw into a file, so the test sees which requests went out.
+    #[test]
+    fn a_mitos_server_is_described_on_demand_and_sees_the_client_manifest() {
+        let dir = temp("mitos");
+        let seen = dir.join("seen.txt");
+        let script = server_script(&dir, &r#"#!/usr/bin/env python3
+import sys, json
+SEEN = "SEEN_PATH"
+FULL = {"name": "echo", "description": "Echo one text. It answers with the same text.", "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}}
+for line in sys.stdin:
+    m = json.loads(line)
+    if "id" not in m: continue
+    with open(SEEN, "a") as f:
+        f.write(m["method"] + " " + json.dumps(m.get("params", {}).get("capabilities", {}).get("experimental", {}).get("laertes/mitos") is not None) + "\n")
+    if m["method"] == "initialize":
+        r = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}, "experimental": {"laertes/mitos": {"version": 0}}}, "serverInfo": {"name": "mitos"}}
+    elif m["method"] == "tools/list":
+        r = {"tools": [{"name": "echo", "description": "Echo one text.", "inputSchema": {"type": "object"}}], "_meta": {"laertes/mitos": {"lazy": True}}}
+    elif m["method"] == "mitos/describe":
+        r = {"tools": [FULL]}
+    elif m["method"] == "tools/call":
+        r = {"content": [{"type": "text", "text": "mitos:" + m["params"]["arguments"].get("text", "")}], "isError": False, "_meta": {"laertes/mitos": {"l": 0}}}
+    else:
+        r = {}
+    print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": r}), flush=True)
+"#.replace("SEEN_PATH", &seen.display().to_string().replace('\\', "\\\\")));
+        let ctx = crate::config::load(&dir.join(".penelope"));
+        crate::plugins::mcp_add(&ctx, "mitos", PYTHON, &[script.display().to_string()], true);
+        assert_eq!(probe(&ctx, "mitos").unwrap()[0].input_schema, json!({"type": "object"}));
+        let described = describe(&ctx, "mitos", "echo").unwrap();
+        assert!(described.contains("\"required\":[\"text\"]"), "{}", described);
+        let again = describe(&ctx, "mitos", "echo").unwrap();
+        assert_eq!(described, again);
+        assert_eq!(call(&ctx, "mitos", "echo", &json!({"text": "hi"})).unwrap(), "mitos:hi");
+        let log = fs::read_to_string(&seen).unwrap();
+        assert!(log.starts_with("initialize true"), "the client announces Mitos: {}", log);
+        assert_eq!(log.matches("mitos/describe").count(), 1, "the full spec is cached after one describe: {}", log);
+        crate::plugins::mcp_remove(&ctx, "mitos");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     // The two tests below are the old format checks: they must keep working with one process per server.

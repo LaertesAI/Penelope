@@ -1840,3 +1840,16 @@ Open:
 - The pin compares `HEAD` only. An edit to the files of a pinned folder without a commit is not detected.
 - A registry written before this change has no `commit`; those plugins run unpinned until their next `add` or `update`.
 - The plugins screen of the TUI drops a blocked plugin; only `plugin list` names it with the reason.
+
+## Mitos version 0 (branch `feat/mitos-core`)
+
+`mitos.rs` adds an MCP extension with four parts: an index in `tools/list` for a client that announces
+`laertes/mitos`, `mitos/describe` for the full spec of named tools, a list hash in `_meta`, and the origin level `l`
+on every `tools/call` result. `penelope mcp` speaks it; the MCP client announces it, asks `mitos/describe` only when a
+brief needs the schema or the model calls `mcp_servers` with `server` and `tool`, and caches the answer. The spec is
+in `docs/MITOS.md`.
+
+Measured: the index saves 58.7 % of the bytes at 8 tools, 64.3 % at 40 and 67.8 % at 128, on Penelope's own specs.
+A flag per index entry cost 37 bytes and moved to the list's `_meta`; before that the index saved 54.4 % at 40.
+`cargo test` 371 passed, 1 ignored. Open: the bytes are not tokens of one tokenizer, and no other client speaks
+Mitos yet.
