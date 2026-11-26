@@ -212,3 +212,13 @@ Tasks: `cli/tests/data/eval/tasks50.jsonl`. Models: large = claude-sonnet-5-5, l
 
 Passed means the task's own check command exited 0 in the task folder. Tokens and euro are the delta of `.penelope/usage.json`
 during the task; euro uses the prices in `config.json` and marks an unpriced model as 0.0000 rather than guessing.
+
+Setup details:
+
+- Penelope commit `4389032` (main after PR 31), release build, eval root `/tmp/opencode/evalroot`.
+- The eval context sets `edit_policy: all` and `auto_learn: false`; `run_policy` stays at the shipped default `safe`.
+- `large`: `backend::Chat`, model `claude-sonnet-5-5`, no profile, one model with the Penelope tools.
+- `large-subagents`: `agents::run`, model `claude-sonnet-5-5` for lead, worker and judge, no cluster profile.
+- `cluster`: `clusters::orchestrate`, profile `eval-small`, worker slot `small` and validator slot `small-check`, both `haiku`.
+  The profile has one worker, one validator, `max_steps: 8`, `retries: 0`, `worktree: false`.
+- All 50 tasks ran once per setup. The sum of the per-task wall times is the wall column.
