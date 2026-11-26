@@ -119,7 +119,7 @@ Quelle: `princeton-nlp/SWE-bench_Lite`, Test-Split, 300 Zeilen. Regel: SHA-256 d
 | `cli/tests/data/eval/swebench_dev30.jsonl` | 30 Entwicklungsaufgaben | `7819859228608f74c7bc1e240c69f0d78df3614921ae69d92f004109404fe94b` |
 | `cli/tests/data/eval/swebench_holdout20.jsonl` | 20 Hold-out-Aufgaben | `626fbf6d14e0d4340bc1b7e6d741b96a5ca437ce3d5f3a18e9427d509b36be90` |
 
-Die Test-Patches und Testlisten liegen lokal in `~/.cache/penelope/swebench/specs.json` (SHA-256 `29a15b394a08983936b1d8b10b12071b935b07cfa0dfb6c505b3a299e89e991b`). Der normalisierte Hold-out-Hash über Metadaten und Specs ist `5fc3bc6df9d530fe42ca9e56b71b521b4a752df5ba854eeff05dee4eb5034a4c`. Der Hold-out läuft erst am Ende, einmal.
+Die Test-Patches, Testlisten und Versionen liegen lokal in `~/.cache/penelope/swebench/specs.json` (SHA-256 `eeb7b92eb8799a656865952451346978291e13e246538a02be35ec653859c82f`). Der normalisierte Hold-out-Hash über Metadaten und Specs ist `89d9d78d00b2da7a020654659888816ece89951e756deb787d1e4cd4982ab0db`. Der Hold-out läuft erst am Ende, einmal.
 
 Die 30 Entwicklungsaufgaben: sympy 9, django 8, matplotlib 3, pylint 2, scikit-learn 2, sphinx 2, pytest 1, xarray 1, seaborn 1, requests 1. Die 20 Hold-out-Aufgaben: django 7, sympy 5, sphinx 2, xarray 1, matplotlib 1, pytest 1, pylint 1, scikit-learn 1, seaborn 1.
 
