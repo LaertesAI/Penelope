@@ -27,6 +27,7 @@ mod llm;
 mod lsp;
 mod mcp;
 mod mcpclient;
+mod mitos;
 mod memory;
 #[allow(dead_code)]
 mod notes;
