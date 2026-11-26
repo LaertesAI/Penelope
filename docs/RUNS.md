@@ -212,3 +212,76 @@ Tasks: `cli/tests/data/eval/tasks50.jsonl`. Models: large = claude-sonnet-5-5, l
 
 Passed means the task's own check command exited 0 in the task folder. Tokens and euro are the delta of `.penelope/usage.json`
 during the task; euro uses the prices in `config.json` and marks an unpriced model as 0.0000 rather than guessing.
+
+Setup details:
+
+- Penelope commit for G2: `4389032`. Loop: `1f005b2` and `399072e`.
+- `large`: `backend::Chat`, model `claude-sonnet-5-5`, one model with the Penelope tools.
+- `large-subagents`: `agents::run`, `claude-sonnet-5-5` for lead, worker and judge, no cluster profile.
+- `cluster`: `clusters::orchestrate`, profile `eval-small`, worker slot `small` and validator slot `small-check`, both `haiku`. G2 and round 1 use the validator; round 2 sets `single_model: true` and runs one model.
+- The eval root is separate: `edit_policy: all`, `run_policy: all`, `sandbox: bwrap`. The root config is restored when the run returns.
+
+## Eval run 2026-11-26 18:54 · large
+
+`penelope eval tests/data/eval/tasks50.jsonl --setup large`
+
+Tasks: `tests/data/eval/tasks50.jsonl`. Models: large = claude-sonnet-5-5.
+
+| setup | tasks | passed | tokens in | tokens out | euro | wall | run id |
+|---|---|---|---|---|---|---|---|
+| large | 50 | 50 | 279820 | 15370 | 0.9844 | 307.8s | `large-1795718963928` |
+
+Passed means the task's own check command exited 0 in the task folder. Tokens and euro are the delta of `.penelope/usage.json`
+during the task; euro uses the prices in `config.json` and marks an unpriced model as 0.0000 rather than guessing.
+
+## Eval run 2026-11-26 19:08 · cluster
+
+`penelope eval tests/data/eval/tasks50.jsonl --setup cluster`
+
+Tasks: `tests/data/eval/tasks50.jsonl`. Models: cluster = haiku.
+
+| setup | tasks | passed | tokens in | tokens out | euro | wall | run id |
+|---|---|---|---|---|---|---|---|
+| cluster | 50 | 50 | 775310 | 74582 | 0.8451 | 818.9s | `cluster-1795719271712` |
+
+Passed means the task's own check command exited 0 in the task folder. Tokens and euro are the delta of `.penelope/usage.json`
+during the task; euro uses the prices in `config.json` and marks an unpriced model as 0.0000 rather than guessing.
+
+## Eval run 2026-11-26 19:16 · cluster
+
+`penelope eval tests/data/eval/tasks50.jsonl --setup cluster`
+
+Tasks: `tests/data/eval/tasks50.jsonl`. Models: cluster = haiku.
+
+| setup | tasks | passed | tokens in | tokens out | euro | wall | run id |
+|---|---|---|---|---|---|---|---|
+| cluster | 50 | 50 | 471876 | 44729 | 0.5119 | 372.4s | `cluster-1795720226279` |
+
+Passed means the task's own check command exited 0 in the task folder. Tokens and euro are the delta of `.penelope/usage.json`
+during the task; euro uses the prices in `config.json` and marks an unpriced model as 0.0000 rather than guessing.
+
+## Eval run 2026-11-26 19:23 · large
+
+`penelope eval tests/data/eval/holdout50.jsonl --setup large`
+
+Tasks: `tests/data/eval/holdout50.jsonl`. Models: large = claude-sonnet-5-5.
+
+| setup | tasks | passed | tokens in | tokens out | euro | wall | run id |
+|---|---|---|---|---|---|---|---|
+| large | 50 | 50 | 292812 | 21846 | 1.1096 | 345.0s | `large-1795720639847` |
+
+Passed means the task's own check command exited 0 in the task folder. Tokens and euro are the delta of `.penelope/usage.json`
+during the task; euro uses the prices in `config.json` and marks an unpriced model as 0.0000 rather than guessing.
+
+## Eval run 2026-11-26 19:32 · cluster
+
+`penelope eval tests/data/eval/holdout50.jsonl --setup cluster`
+
+Tasks: `tests/data/eval/holdout50.jsonl`. Models: cluster = haiku.
+
+| setup | tasks | passed | tokens in | tokens out | euro | wall | run id |
+|---|---|---|---|---|---|---|---|
+| cluster | 50 | 50 | 482740 | 50410 | 0.5408 | 548.9s | `cluster-1795720984833` |
+
+Passed means the task's own check command exited 0 in the task folder. Tokens and euro are the delta of `.penelope/usage.json`
+during the task; euro uses the prices in `config.json` and marks an unpriced model as 0.0000 rather than guessing.
