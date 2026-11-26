@@ -329,6 +329,15 @@ pub fn probe(ctx: &Ctx, server: &str) -> Result<Vec<ToolInfo>, String> {
     }).collect())
 }
 
+/// The tool list this process already holds for a server, or None when the server is not running or has not listed its
+/// tools yet. It starts nothing and waits for nothing, so the watcher can read it on every call.
+pub fn cached_tools(ctx: &Ctx, name: &str) -> Option<Vec<Value>> {
+    let cell = cell_for(ctx, name);
+    let slot = cell.try_lock().ok()?;
+    let server = slot.as_ref().filter(|s| s.alive)?;
+    server.tools.clone()
+}
+
 /// The full argument schema of one tool, asked from a Mitos server only when needed. The model reads it before
 /// `mcp_call`, because `mcp_servers` lists names and one sentence each.
 pub fn describe(ctx: &Ctx, server: &str, tool: &str) -> Result<String, String> {
