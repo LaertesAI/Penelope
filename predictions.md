@@ -26,7 +26,8 @@ The repo hash is SHA-256 over sorted relative path, NUL, file bytes, NUL for eve
 - Failure causes: 10 of 11 are one cause. The shipped `run_policy: safe` refuses `mv` and `rm`; the MCP
   `rename_file` is not granted. 1 of 11 is a model fallback error: script-3 gave up when `run` refused, while
   script-1, 2, 4 and 5 wrote the computed output.
-- Noise: 10 tasks, 3 repeats each. See the line below after the run.
+- Noise: 10 tasks, 3 repeats each, 0 flips. The same 5 pass and 5 fail in all three runs. The smallest real
+  improvement is 2 tasks (the brief's floor; twice the mean flip count is 0).
 - Time: 50 clusters, 903 s in the report streams. Worker 534 s (59.1 %), validator 369 s (40.9 %),
   orchestration 0 s. Mean 18.06 s per cluster.
 - Cost: 800,191 in and 118,906 out, 1.0265 EUR, 100 part calls. The validator writes 47.1 % of the output

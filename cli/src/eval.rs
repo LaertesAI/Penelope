@@ -333,6 +333,11 @@ fn eval_context(ctx: &Ctx, setup: &str) -> Ctx {
     let mut run = ctx.clone();
     // An eval is unattended: a change must happen without a person at the interface. The eval folder is a scratch copy.
     run.cfg["edit_policy"] = json!("all");
+    // The task's own check and the file actions need commands outside the read-only safe list. The sandbox keeps the
+    // rest of the machine read-only, makes only the task folder writable and cuts the network. Both setups get the
+    // same policy, so the table measures the setup and not the permission prompt.
+    run.cfg["run_policy"] = json!("all");
+    run.cfg["sandbox"] = json!("bwrap");
     run.cfg["auto_learn"] = json!(false);
     run.cfg["auto_skills"] = json!(false);
     // Every search belongs to the model under test; no hidden scout on the weak model.
@@ -799,6 +804,19 @@ mod tests {
         assert_eq!(seen.len(), 4);
         let systems: Vec<String> = seen.iter().map(|s| s.body["messages"][0]["content"].as_str().unwrap_or("").to_string()).collect();
         assert!(systems.iter().any(|s| s.contains("worker of a Penelope agent run")) && systems.iter().any(|s| s.contains("judge of a Penelope agent run")), "{:?}", systems);
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn an_eval_runs_unattended_in_the_sandbox_without_changing_the_caller() {
+        let (ctx, d) = ctx("unattended");
+        let run = eval_context(&ctx, "large");
+        assert_eq!((run.cfg["edit_policy"].as_str(), run.cfg["run_policy"].as_str(), run.cfg["sandbox"].as_str()),
+                   (Some("all"), Some("all"), Some("bwrap")));
+        assert_eq!(run.cfg["auto_learn"], json!(false));
+        assert_eq!(run.cfg["auto_skills"], json!(false));
+        assert_eq!(ctx.cfg["run_policy"].as_str(), Some("safe"), "the caller keeps its policy");
+        assert_eq!(ctx.cfg["sandbox"].as_str(), Some("off"), "the caller keeps its sandbox");
         let _ = fs::remove_dir_all(&d);
     }
 
