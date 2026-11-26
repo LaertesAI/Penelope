@@ -976,6 +976,44 @@ pub fn working(ctx: &Ctx) -> usize {
     list(ctx).iter().filter(|c| matches!(c.state.as_str(), "queued" | "working" | "validating" | "killing")).count()
 }
 
+fn error_code(error: &str) -> &'static str {
+    let e = error.to_lowercase();
+    if e.is_empty() || e == "-" { return "Ok"; }
+    if e.contains("budget") { return "Budget"; }
+    if e.contains("timeout") || e.contains("timed out") { return "Timeout"; }
+    if e.contains("loop") || e.contains("repeat") { return "NoTermination"; }
+    if e.contains("ask") && e.contains("loop") { return "AskLoop"; }
+    if e.contains("grammar") { return "StatusGrammar"; }
+    if e.contains("stale") { return "Stale"; }
+    if e.contains("permission") || e.contains("denied") { return "Permission"; }
+    if e.contains("missing") { return "MissingInput"; }
+    if e.contains("conflict") { return "Conflict"; }
+    if e.contains("network") || e.contains("connection") { return "Network"; }
+    if e.contains("not found") || e.contains("gone") { return "NotFound"; }
+    if e.contains("dependency") { return "Dependency"; }
+    if e.contains("test") || e.contains("check") || e.contains("validator") { return "Tests"; }
+    if e.contains("build") || e.contains("compile") { return "Build"; }
+    if e.contains("contract") { return "InvalidContract"; }
+    if e.contains("blocked") { return "Blocked"; }
+    if e.contains("stuck") { return "Stuck"; }
+    "Unknown"
+}
+
+fn kerkis_line(c: &Cluster, focus: &str, error: &str) -> Result<crate::proof::KerkisLine, String> {
+    let state = match c.state.as_str() {
+        "queued" | "waiting" => "waiting",
+        "working" | "validating" => "working",
+        "done" => "done",
+        "stuck" => "stuck",
+        _ => "blocked",
+    };
+    // F is a file id. A focus that is not a file id is not inventing one; f0000:0 means no file.
+    let file = if focus.starts_with('f') && focus.contains(':') { focus } else { "f0000:0" };
+    let v = if c.evidence.trim().is_empty() { "-".to_string() } else { format!("e{}", &result_hash(&c.evidence)[..8]) };
+    crate::proof::KerkisLine::new(&c.id, state, c.done, c.total, now().saturating_sub(c.started), file,
+                                  error_code(error), &v)
+}
+
 fn report(ctx: &Ctx, c: &Cluster, focus: &str, error: &str) -> String {
     let elapsed = now().saturating_sub(c.started);
     // proof::render keeps the fields and the escape rules. V is added only when the validator ran a check.
@@ -992,6 +1030,10 @@ fn report(ctx: &Ctx, c: &Cluster, focus: &str, error: &str) -> String {
     let _guard = REPORT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _ = fs::create_dir_all(&dir);
     let _ = fs::write(dir.join("report.txt"), &line);
+    // The Kerkis line is the protocol line. report.txt keeps the older form for the human view and existing consumers.
+    if let Ok(krk) = kerkis_line(c, focus, error) {
+        let _ = fs::write(dir.join("report.krk"), format!("{}\n", crate::proof::render_kerkis(&krk)));
+    }
     // The history is what the zombie watch reads: one line per report, with the time it was written.
     if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(dir.join("reports.jsonl")) {
         let _ = writeln!(file, "{} {}", now(), line.trim_end());
@@ -1300,6 +1342,16 @@ impl Limits {
     }
 }
 
+/// A stable 64-bit FNV-1a hash of a tool result, so the event log does not keep the result text.
+fn result_hash(text: &str) -> String {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in text.trim().as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    format!("{:016x}", h)
+}
+
 /// The zombie watch of one cluster. It counts reports with one `P:` and `F:` per focus and equal tool calls per part.
 /// `stuck_after` of either marks the cluster stuck; the cause goes into the dump that the next prompt names.
 struct Watch {
@@ -1338,9 +1390,11 @@ impl Watch {
         None
     }
 
-    /// Every tool call of a part goes into `calls.jsonl`. `stuck_after` equal calls in a row are a zombie.
-    fn note_call(&mut self, ctx: &Ctx, c: &Cluster, part: &Part, name: &str, args: &Value) -> Option<String> {
-        let sig = format!("{} {}", name, serde_json::to_string(args).unwrap_or_else(|_| "null".to_string()));
+    /// Every tool call of a part goes into `calls.jsonl` with a hash of the normalized result. `stuck_after` equal
+    /// name, arguments and result in a row are a zombie. The ring keeps 8 entries, so period 1 to 3 is visible.
+    fn note_call(&mut self, ctx: &Ctx, c: &Cluster, part: &Part, name: &str, args: &Value, result: &str) -> Option<String> {
+        let sig = format!("{} {} {}", name, serde_json::to_string(args).unwrap_or_else(|_| "null".to_string()),
+                          result_hash(result));
         let dir = cluster_dir(ctx, &c.id);
         let _ = fs::create_dir_all(&dir);
         if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(dir.join("calls.jsonl")) {
@@ -1350,8 +1404,9 @@ impl Watch {
         let repeated = {
             let list = self.calls.entry(part.name.clone()).or_default();
             list.push(sig.clone());
-            while list.len() > self.stuck_after { list.remove(0); }
-            list.len() >= self.stuck_after && list.iter().all(|item| item == &sig)
+            while list.len() > 8 { list.remove(0); }
+            let n = self.stuck_after.min(8);
+            list.len() >= n && list[list.len() - n..].iter().all(|item| item == &sig)
         };
         if repeated {
             let cause = format!("repeated tool call {} times: {}", self.stuck_after, sig.chars().take(200).collect::<String>());
@@ -1365,7 +1420,7 @@ impl Watch {
     fn note_checks(&mut self, ctx: &Ctx, c: &Cluster, part: &Part, checks: &[Check]) -> Option<String> {
         for check in checks {
             let args = json!({"target": check.target});
-            if let Some(cause) = self.note_call(ctx, c, part, &check.name, &args) {
+            if let Some(cause) = self.note_call(ctx, c, part, &check.name, &args, if check.ok { "ok" } else { "fail" }) {
                 return Some(cause);
             }
         }
@@ -1480,7 +1535,7 @@ fn run_model(ctx: &Ctx, c: &Cluster, part: &Part, system: &str, task: &str, max_
                     // A part works in its cluster folder. A tool call without a cwd gets the worktree, never the live tree.
                     let args = args_with_cwd(&call.name, &call.args, &cluster_cwd);
                     let (text, ok) = crate::tools::dispatch_retry(ctx, &role, &call.name, &args);
-                    if watch.lock().unwrap_or_else(|e| e.into_inner()).note_call(ctx, c, part, &call.name, &args).is_some() {
+                    if watch.lock().unwrap_or_else(|e| e.into_inner()).note_call(ctx, c, part, &call.name, &args, &text).is_some() {
                         cancel.store(true, Ordering::SeqCst);
                     }
                     checks.push(Check { name: call.name.clone(), target: check_target(&call.name, &args), ok: check_ok(&call.name, &text, ok) });
@@ -2278,9 +2333,26 @@ fn run_cluster_inner(ctx: &Ctx, id: &str, session_before: Option<f64>) -> Result
     Ok(format!("cluster {} {} · {}/{} parts · {:.4} EUR", id, c.state, c.done, c.total, budget_spent(ctx, before)))
 }
 
-fn append_memory(ctx: &Ctx, c: &Cluster, text: &str) {
+fn memory_log_path(ctx: &Ctx, id: &str) -> PathBuf {
+    cluster_dir(ctx, id).join("memory.log")
+}
+
+/// Appends one event to memory.md (the prompt view) and to memory.log (the append-only event log). `level` is the
+/// origin level L: 0 for a file, 1 for an agent, 2 for a checked tool, 3 for a person. The weakest level of a derived
+/// claim is passed by the caller; the default is 1.
+fn mem_put(ctx: &Ctx, c: &Cluster, text: &str, level: u8) -> Result<(), String> {
     let _guard = MEMORY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _ = fs::OpenOptions::new().create(true).append(true).open(memory_path(ctx, &c.id)).and_then(|mut f| f.write_all(text.as_bytes()));
+    fs::OpenOptions::new().create(true).append(true).open(memory_path(ctx, &c.id))
+        .and_then(|mut f| f.write_all(text.as_bytes()))
+        .map_err(|e| format!("cannot write memory.md: {}", e))?;
+    let event = serde_json::json!({"t": now(), "C": c.id, "L": level.min(3), "text": text});
+    fs::OpenOptions::new().create(true).append(true).open(memory_log_path(ctx, &c.id))
+        .and_then(|mut f| writeln!(f, "{}", event))
+        .map_err(|e| format!("cannot write memory.log: {}", e))
+}
+
+fn append_memory(ctx: &Ctx, c: &Cluster, text: &str) {
+    let _ = mem_put(ctx, c, text, 1);
 }
 
 fn new_cluster(ctx: &Ctx, profile: &Profile, name: &str, task: &str, parent: Option<&str>, after: Vec<String>, depth: usize) -> Result<Cluster, String> {
@@ -3061,7 +3133,8 @@ fn respawn_inner(ctx: &Ctx, id: &str, extra: &str, session_before: Option<f64>) 
     old.updated = now();
     save(ctx, &old)?;
     let profile = profile(ctx, &old.profile)?;
-    let task = format!("{}\n\nCause from the dump: {}\n{}", old.task, cause, extra.trim());
+    let task = format!("{}\n\nCause from the dump: {}\nCAUSE:{}|AT:{}|CLAIMS:-\n{}", old.task, cause,
+                       error_code(&cause), old.id, extra.trim());
     let mut new = new_cluster(ctx, &profile, &old.name, &task, old.parent.as_deref(), old.after.clone(), old.depth)?;
     new.respawns = old.respawns + 1;
     new.respawned_from = old.id.clone();
@@ -3218,6 +3291,17 @@ fn stream_note(ctx: &Ctx, id: &str, line: &str) {
     }
 }
 
+/// The fixed question codes of the Kerkis answer channel. A free question text stays in the memories.
+fn ask_code(question: &str) -> &'static str {
+    let q = question.to_lowercase();
+    if q.contains("design") || q.contains("option") || q.contains("layout") { "design_options" }
+    else if q.contains("status") || q.contains("state") || q.contains("progress") { "status" }
+    else if q.contains("file") || q.contains("path") || q.contains("where") { "file_ref" }
+    else if q.contains("test") || q.contains("check") { "test_result" }
+    else if q.contains("error") || q.contains("fail") || q.contains("why") { "failure_reason" }
+    else { "other" }
+}
+
 fn ask_inner(ctx: &Ctx, asker_id: &str, target_name: &str, question: &str) -> Result<String, String> {
     let question = question.trim();
     if question.is_empty() {
@@ -3234,8 +3318,11 @@ fn ask_inner(ctx: &Ctx, asker_id: &str, target_name: &str, question: &str) -> Re
     let (answer, source) = answer_of(&target, &before)?;
     append_memory(ctx, &asker, &format!("\n## answer from {} · {}\n\nquestion: {}\nanswer (from {}, {}): {}\n",
                                        target.name, target.id, question, target.state, source, answer));
-    let one = |text: &str| text.replace(['\n', '\r'], " ").chars().take(400).collect::<String>();
-    let event = format!("{} -> {}: Q: {} · A({}): {}", asker.id, target.id, one(question), source, one(&answer));
+    // The report stream carries codes and ids only. The question text stays in the memories, where the asking part
+    // reads it; the orchestrator sees CODE, Q, HOPS, VISITED and REF, not free text.
+    let code = ask_code(question);
+    let qid = format!("q{}", now());
+    let event = format!("{} -> {} CODE:{} Q:{} HOPS:1 VISITED:{} REF:{} L:1", asker.id, target.id, code, qid, asker.id, target.id);
     stream_ask(ctx, &asker.id, &event);
     stream_ask(ctx, &target.id, &event);
     let block = format!("\n## ask {} -> {}\n\nquestion: {}\nanswer (from {}, {}): {}\n",
@@ -3542,8 +3629,35 @@ mod tests {
         assert_eq!(r.s, "done");
         assert_eq!(r.v.as_deref(), Some("cat hello.txt ok"));
         assert!(crate::proof::accept(&r).is_ok());
+        let krk = fs::read_to_string(cluster_dir(&ctx, &c.id).join("report.krk")).unwrap();
+        let k = crate::proof::parse_kerkis(&krk).unwrap();
+        assert_eq!((k.c.as_str(), k.s.as_str()), (c.id.as_str(), "done"));
+        assert!(k.v.starts_with('e') && k.v != "-", "{}", krk);
+        assert!(crate::proof::accept_kerkis(&k).is_ok());
         let memory = fs::read_to_string(memory_path(&ctx, &c.id)).unwrap();
         assert!(memory.contains("evidence: cat hello.txt ok"), "{}", memory);
+        let log = fs::read_to_string(memory_log_path(&ctx, &c.id)).unwrap();
+        assert!(log.lines().all(|line| serde_json::from_str::<Value>(line).unwrap()["L"].as_u64() == Some(1)), "{}", log);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_watch_compares_name_arguments_and_a_hash_of_the_result() {
+        let (ctx, dir) = ctx();
+        let p = profile(&ctx, "solo").unwrap();
+        let c = new_cluster(&ctx, &p, "watch", "do the task", None, Vec::new(), 0).unwrap();
+        let part = p.workers.first().unwrap();
+        let args = json!({"command": "date"});
+        let mut watch = Watch::new(3);
+        for result in ["10:00", "10:01", "10:02", "10:03"] {
+            assert!(watch.note_call(&ctx, &c, part, "run", &args, result).is_none());
+        }
+        for _ in 0..2 {
+            assert!(watch.note_call(&ctx, &c, part, "run", &args, "10:00").is_none());
+        }
+        assert!(watch.note_call(&ctx, &c, part, "run", &args, "10:00").is_some());
+        let log = fs::read_to_string(cluster_dir(&ctx, &c.id).join("calls.jsonl")).unwrap();
+        assert!(log.contains("run") && !log.contains("10:00"), "the log keeps the hash, not the result: {}", log);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -3666,6 +3780,7 @@ mod tests {
         let stored = fs::read_to_string(cluster_dir(&ctx, &old.id).join("dump.txt")).unwrap();
         let cause = stored.lines().find_map(|line| line.strip_prefix("Cause: ")).expect("the dump names a cause").to_string();
         assert!(new.task.contains("Cause from the dump:") && new.task.contains(&cause), "{}", new.task);
+        assert!(new.task.contains("CAUSE:") && new.task.contains("AT:") && new.task.contains("CLAIMS:-"), "{}", new.task);
         let bodies: Vec<String> = seen.lock().unwrap().iter().map(|s| s.body.to_string()).collect();
         assert!(bodies.iter().any(|body| body.contains(&cause)), "the second prompt names the dump cause: {:?}", bodies);
         let _ = fs::remove_dir_all(&dir);
@@ -4180,7 +4295,8 @@ mod tests {
         assert!(asker_memory.contains("Option A") && asker_memory.contains("answer from research")
                 && asker_memory.contains("Which design should we take?"), "{}", asker_memory);
         let stream = fs::read_to_string(cluster_dir(&ctx, &asker.id).join("reports.jsonl")).unwrap();
-        assert!(stream.contains(" ASK ") && stream.contains("Which design") && stream.contains("Option A"), "{}", stream);
+        assert!(stream.contains(" ASK ") && stream.contains("CODE:design_options") && stream.contains("HOPS:1") && stream.contains("VISITED:"), "{}", stream);
+        assert!(!stream.contains("Which design") && !stream.contains("Option A"), "the report stream must not carry question or answer text: {}", stream);
         let status = status_text(&ctx, Some(&asker.id));
         assert!(status.contains("Links:") && status.contains("Which design"), "{}", status);
         assert!(seen.lock().unwrap().is_empty(), "cluster_ask must not start a model call");
@@ -4449,7 +4565,7 @@ mod tests {
         assert!(bodies.len() >= 2 && bodies[1].contains("Option A is the design"),
                 "the answer reached the worker's next request: {:?}", bodies);
         let stream = fs::read_to_string(cluster_dir(&ctx, &asker.id).join("reports.jsonl")).unwrap();
-        assert!(stream.contains(" ASK ") && stream.contains("Which design?"), "{}", stream);
+        assert!(stream.contains(" ASK ") && stream.contains("CODE:design_options") && !stream.contains("Which design?"), "{}", stream);
         let _ = fs::remove_dir_all(&dir);
     }
 
