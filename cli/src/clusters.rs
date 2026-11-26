@@ -2161,6 +2161,8 @@ fn run_cluster_inner(ctx: &Ctx, id: &str, session_before: Option<f64>) -> Result
     c.started = if c.started == 0 { now() } else { c.started };
     c.state = "working".to_string();
     c.done = 0;
+    c.quorum_agreed = 0;
+    c.quorum_escalated = 0;
     c.total = profile.workers.len() + profile.validator.iter().count();
     c.error.clear();
     c.evidence.clear();
