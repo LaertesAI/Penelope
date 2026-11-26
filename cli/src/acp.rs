@@ -339,6 +339,10 @@ fn run_turn(ctx: &Ctx, session: &Session, session_id: &str, text: &str, protocol
     let result = {
         let mut chat = session.chat.lock().unwrap_or_else(|e| e.into_inner());
         chat.turn_with(ctx, &expanded.text, &notes, &mut |event| match event {
+            backend::Event::Thinking(text) => {
+                protocol.update(session_id, json!({"sessionUpdate": "agent_thought_chunk",
+                                                   "content": {"type": "text", "text": text}}));
+            }
             backend::Event::Text(text) => {
                 emitted.push(text.trim().to_string());
                 protocol.update(session_id, json!({"sessionUpdate": "agent_message_chunk",

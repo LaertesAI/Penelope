@@ -13,6 +13,8 @@ use std::sync::Arc;
 pub enum Event {
     /// A few characters of text, as the main model writes them.
     Delta(String),
+    /// A few characters of the model's thinking, when the provider streams it. Shown while it runs, never stored.
+    Thinking(String),
     /// A finished block of text the main model wrote, also between two tool calls. It replaces the deltas before it.
     Text(String),
     ToolStart { id: String, name: String, detail: String },
@@ -310,6 +312,11 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
                             on(Event::Delta(t.to_string()));
                         }
                     }
+                    if e["type"].as_str() == Some("content_block_delta") && e["delta"]["type"].as_str() == Some("thinking_delta") {
+                        if let Some(t) = e["delta"]["thinking"].as_str().filter(|t| !t.is_empty()) {
+                            on(Event::Thinking(t.to_string()));
+                        }
+                    }
                 }
                 "result" => result = Some(v),
                 _ => {}
@@ -423,7 +430,7 @@ mod tests {
             Event::Text(t) => format!("text {}", t),
             Event::ToolStart { name, detail, .. } => format!("start {} {}", name, detail),
             Event::ToolEnd { ok, summary, .. } => format!("end {} {}", ok, summary),
-            Event::Delta(_) | Event::Masked(_) | Event::MaskedAnswer(_) => "other".to_string(),
+            Event::Delta(_) | Event::Thinking(_) | Event::Masked(_) | Event::MaskedAnswer(_) => "other".to_string(),
         })
     }
 

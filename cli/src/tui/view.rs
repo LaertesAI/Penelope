@@ -367,6 +367,49 @@ fn transcript(app: &App, w: usize) -> Vec<Line<'static>> {
             }
         }
     }
+    if let Some(since) = app.busy.filter(|_| !app.streaming) {
+        if !out.is_empty() {
+            out.push(Line::default());
+        }
+        out.extend(loom(app, w, since.elapsed().as_secs()));
+    }
+    out
+}
+
+/// What the loom says while the model works, one phase every three seconds.
+const LOOM_PHASES: [&str; 4] = ["warping the loom", "casting the shuttle", "beating the weft", "reading the pattern"];
+
+/// The waiting block under the transcript: a shuttle runs along the weft between two posts, woven thread behind it,
+/// open warp ahead. Below it the tail of the model's thinking, when the provider streams it.
+pub fn loom(app: &App, w: usize, secs: u64) -> Vec<Line<'static>> {
+    let span = w.saturating_sub(34).clamp(8, 40);
+    let step = (app.tick / 2) as usize % (2 * span);
+    let (at, right) = if step < span { (step, true) } else { (2 * span - 1 - step, false) };
+    let mut weft: Vec<Span<'static>> = vec![Span::raw("  "), Span::styled("╪", fg(ASH))];
+    for i in 0..span {
+        let span_style = if i == at {
+            Span::styled("◆", bold(SEA))
+        } else if (right && i < at) || (!right && i > at) {
+            Span::styled("═", fg(CLAY))
+        } else {
+            Span::styled("┄", fg(DIM))
+        };
+        weft.push(span_style);
+    }
+    weft.push(Span::styled("╪", fg(ASH)));
+    let working = app.mood() == Mood::Working;
+    let phase = if working { "a tool runs" } else { LOOM_PHASES[(secs / 3) as usize % LOOM_PHASES.len()] };
+    weft.push(Span::styled(format!("  {} · {}s", phase, secs), fg(ASH)));
+    let mut out = vec![Line::from(weft)];
+    let thought: String = app.thinking.split_whitespace().collect::<Vec<_>>().join(" ");
+    if !thought.is_empty() {
+        let rows = wrap_plain(&thought, w.saturating_sub(8).max(10));
+        let first = rows.len().saturating_sub(2);
+        for (i, row) in rows.into_iter().skip(first).enumerate() {
+            let lead = if i == 0 { "    ↳ " } else { "      " };
+            out.push(Line::from(vec![Span::styled(lead, fg(DIM)), Span::styled(row, fg(DIM).add_modifier(Modifier::ITALIC))]));
+        }
+    }
     out
 }
 

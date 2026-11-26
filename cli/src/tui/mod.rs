@@ -204,6 +204,8 @@ pub struct App {
     pub learning: bool,
     /// True while the last transcript item is a reply that still grows.
     streaming: bool,
+    /// The tail of the thinking the provider streamed in the current step, for the loom under the transcript.
+    pub thinking: String,
     /// Lines between the lower edge of the view and the end of the transcript.
     pub scroll: usize,
     pub page: usize,
@@ -317,7 +319,7 @@ impl App {
         let history = history[history.len().saturating_sub(200)..].to_vec();
         let mut app = App {
             ctx, items: Vec::new(), input: Vec::new(), cursor: 0, history, hist_at: None, overlay: Overlay::None, slash_sel: 0,
-            busy: None, learning: false, streaming: false, scroll: 0, page: 10, sidebar: true, tick: 0, last_key: Instant::now(), flash: None, toast: None,
+            busy: None, learning: false, streaming: false, thinking: String::new(), scroll: 0, page: 10, sidebar: true, tick: 0, last_key: Instant::now(), flash: None, toast: None,
             palette: art::Palette::DEFAULT, layout: mods::Layout::Side, keys: mods::Keys::default(), mod_name: None, mod_restore: None, mod_startup: None,
             chat: Some(Chat::new()), cancel: Arc::new(AtomicBool::new(false)), pid: Arc::new(AtomicU32::new(0)), tx, rx,
             tokens: (0, 0), turns: 0, tool_calls: 0, trail: Vec::new(), learned: Vec::new(), side: Side::default(),
@@ -871,6 +873,7 @@ impl App {
         self.cancel = chat.cancel.clone();
         self.pid = chat.pid.clone();
         self.busy = Some(Instant::now());
+        self.thinking.clear();
         self.items.push(Item::User(text.clone()));
         self.scroll = 0;
         let mut ctx = self.ctx.clone();
@@ -956,7 +959,13 @@ impl App {
                     self.trail = trail;
                     self.note("◆", "memory", way, art::SEA);
                 }
+                Msg::Turn(TurnEvent::Thinking(t)) => {
+                    self.thinking.push_str(&t);
+                    let excess = self.thinking.chars().count().saturating_sub(600);
+                    if excess > 0 { self.thinking = self.thinking.chars().skip(excess).collect(); }
+                }
                 Msg::Turn(TurnEvent::Delta(t)) => {
+                    self.thinking.clear();
                     match self.items.last_mut() {
                         Some(Item::Reply(text)) if self.streaming => text.push_str(&t),
                         _ => self.items.push(Item::Reply(t.trim_start().to_string())),
@@ -965,6 +974,7 @@ impl App {
                     self.scroll = 0;
                 }
                 Msg::Turn(TurnEvent::Text(t)) => {
+                    self.thinking.clear();
                     match self.items.last_mut() {
                         Some(Item::Reply(text)) if self.streaming => *text = t,        // the finished block replaces its pieces
                         _ => self.items.push(Item::Reply(t)),
@@ -2593,6 +2603,35 @@ mod tests {
         a.tx.send(Msg::Turn(TurnEvent::Delta("Next".into()))).unwrap();
         a.drain();
         assert!(matches!(a.items.as_slice(), [Item::Reply(t), Item::Reply(n)] if t == "Two files: a and b." && n == "Next"));
+    }
+
+    #[test]
+    fn the_loom_runs_while_the_model_thinks_and_shows_its_thinking() {
+        let mut a = app();
+        a.items.push(Item::User("why".into()));
+        a.busy = Some(Instant::now());
+        a.tx.send(Msg::Turn(TurnEvent::Thinking("The user asks why. ".into()))).unwrap();
+        a.tx.send(Msg::Turn(TurnEvent::Thinking("Check the  notes first.".into()))).unwrap();
+        a.drain();
+        assert_eq!(a.thinking, "The user asks why. Check the  notes first.");
+        let text = screen(&mut a, 120, 40);
+        assert!(text.contains("◆") && text.contains("╪") && text.contains("warping the loom"), "{}", text);
+        assert!(text.contains("The user asks why. Check the notes first."), "{}", text);
+        a.tx.send(Msg::Turn(TurnEvent::Delta("Because".into()))).unwrap();
+        a.drain();
+        assert!(a.thinking.is_empty());
+        let text = screen(&mut a, 120, 40);
+        assert!(!text.contains("warping the loom"), "the loom hides while the answer streams: {}", text);
+    }
+
+    #[test]
+    fn the_shuttle_moves_along_the_weft() {
+        let mut a = app();
+        let shuttle = |a: &App| crate::tui::view::loom(a, 80, 0)[0].spans.iter().position(|s| s.content == "◆").unwrap();
+        a.tick = 0;
+        let first = shuttle(&a);
+        a.tick = 10;
+        assert_ne!(first, shuttle(&a));
     }
 
     #[test]
