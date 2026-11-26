@@ -89,7 +89,7 @@ live run on this PC backs it.
 
 ```bash
 cd cli
-cargo test                       # 300 tests
+cargo test                       # 317 tests
 cargo build --release
 ./target/release/penelope doctor
 ./target/release/penelope work list
