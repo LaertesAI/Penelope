@@ -1,0 +1,3 @@
+cli/tests/data/eval/swebench50.json -text
+cli/tests/data/eval/swebench_dev30.jsonl -text
+cli/tests/data/eval/swebench_holdout20.jsonl -text

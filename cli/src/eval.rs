@@ -71,6 +71,8 @@ pub struct Task {
     pub check: String,
     pub check_timeout_seconds: u64,
     pub max_steps: usize,
+    /// A commit for a shared repo. A task with this field gets a git worktree at that commit instead of a copy.
+    pub base_commit: String,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -185,7 +187,11 @@ pub fn parse_tasks(path: &Path) -> Result<Vec<Task>, String> {
         }
         let timeout = v["check_timeout_seconds"].as_u64().unwrap_or(300).clamp(1, 3600);
         let max_steps = v["max_steps"].as_u64().unwrap_or(12).clamp(1, 30) as usize;
-        tasks.push(Task { id, prompt, repo, cwd, copy, check, check_timeout_seconds: timeout, max_steps });
+        let base_commit = v["base_commit"].as_str().unwrap_or("").trim().to_string();
+        if !base_commit.is_empty() && !base_commit.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(format!("task line {} ({}): base_commit is not a hex commit", line_no, id));
+        }
+        tasks.push(Task { id, prompt, repo, cwd, copy, check, check_timeout_seconds: timeout, max_steps, base_commit });
     }
     if tasks.is_empty() {
         return Err(format!("the task file {} holds no task", path.display()));
@@ -230,16 +236,37 @@ struct Workspace {
     dir: PathBuf,
     /// The root of the scratch copy, removed after the task. None when the task works in the setup folder itself.
     scratch: Option<PathBuf>,
+    /// A git worktree at a base commit: the shared repo and the worktree folder, removed with `git worktree remove`.
+    worktree: Option<(PathBuf, PathBuf)>,
 }
 
 fn prepare_workspace(ctx: &Ctx, run_id: &str, task: &Task) -> Result<Workspace, String> {
     let repo = task.repo.canonicalize().unwrap_or_else(|_| task.repo.clone());
+    if !task.base_commit.is_empty() {
+        let root = ctx.root.join("eval").join("work").join(safe_name(run_id)).join(safe_name(&task.id));
+        let _ = fs::remove_dir_all(&root);
+        if let Some(parent) = root.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("cannot make {}: {}", parent.display(), e))?;
+        }
+        let out = std::process::Command::new("git").arg("-C").arg(&repo)
+            .args(["worktree", "add", "--detach", "--force"]).arg(&root).arg(&task.base_commit)
+            .output().map_err(|e| format!("cannot start git worktree: {}", e))?;
+        if !out.status.success() {
+            return Err(format!("cannot make a worktree at {}: {}", task.base_commit,
+                               String::from_utf8_lossy(&out.stderr).trim()));
+        }
+        let dir = if task.cwd.is_empty() { root.clone() } else { root.join(&task.cwd) };
+        if !dir.is_dir() {
+            return Err(format!("worktree has no cwd {}", dir.display()));
+        }
+        return Ok(Workspace { dir, scratch: None, worktree: Some((repo, root)) });
+    }
     if !task.copy {
         let dir = if task.cwd.is_empty() { repo.clone() } else { repo.join(&task.cwd) };
         if !dir.is_dir() {
             return Err(format!("setup cwd {} is not a folder", dir.display()));
         }
-        return Ok(Workspace { dir, scratch: None });
+        return Ok(Workspace { dir, scratch: None, worktree: None });
     }
     let root = ctx.root.join("eval").join("work").join(safe_name(run_id)).join(safe_name(&task.id));
     let _ = fs::remove_dir_all(&root);
@@ -249,7 +276,7 @@ fn prepare_workspace(ctx: &Ctx, run_id: &str, task: &Task) -> Result<Workspace, 
     if !dir.is_dir() {
         return Err(format!("copied setup has no cwd {}", dir.display()));
     }
-    Ok(Workspace { dir, scratch: Some(root) })
+    Ok(Workspace { dir, scratch: Some(root), worktree: None })
 }
 
 fn safe_name(text: &str) -> String {
@@ -283,6 +310,8 @@ fn run_check(ctx: &Ctx, run_id: &str, task: &Task, dir: &Path) -> CheckRun {
         Err(e) => return CheckRun { passed: false, output: format!("cannot write the check log: {}", e) },
     };
     let mut cmd = crate::platform::shell(&task.check);
+    let penelope_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap_or(std::path::Path::new("."));
+    cmd.env("PENELOPE_ROOT", penelope_root);
     cmd.current_dir(dir).stdin(Stdio::null()).stdout(Stdio::from(out)).stderr(Stdio::from(err));
     let mut child = match cmd.spawn() {
         Ok(c) => c,
@@ -436,6 +465,10 @@ fn run_setup(ctx: &Ctx, tasks_path: &str, setup: &str, tasks: &[Task]) -> Result
         };
         let answer = with_task_cwd(&workspace.dir, || run_one(&run_ctx, setup, task, &workspace.dir));
         let check = run_check(&run_ctx, &run_id, task, &workspace.dir);
+        if let Some((repo, dir)) = &workspace.worktree {
+            let _ = std::process::Command::new("git").arg("-C").arg(repo)
+                .args(["worktree", "remove", "--force"]).arg(dir).output();
+        }
         if let Some(scratch) = &workspace.scratch {
             let _ = fs::remove_dir_all(scratch);
         }
@@ -749,6 +782,37 @@ mod tests {
         assert!(parse_tasks(&bad).unwrap_err().contains("check command is missing"));
         fs::write(&bad, "{\"id\":\"x\",\"prompt\":\"do it\",\"setup\":{\"repo\":\".\",\"cwd\":\"../out\"},\"check\":\"true\"}\n").unwrap();
         assert!(parse_tasks(&bad).unwrap_err().contains("may not leave"));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_task_with_a_base_commit_gets_a_git_worktree_at_that_commit() {
+        let (ctx, d) = ctx("worktree");
+        let repo = d.join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let run = |args: &[&str]| {
+            let out = std::process::Command::new("git").arg("-C").arg(&repo).args(args).output().unwrap();
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        };
+        run(&["init", "-q"]);
+        fs::write(repo.join("a.txt"), "one\n").unwrap();
+        run(&["add", "."]);
+        run(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "one"]);
+        let first = String::from_utf8(std::process::Command::new("git").arg("-C").arg(&repo)
+            .args(["rev-parse", "HEAD"]).output().unwrap().stdout).unwrap().trim().to_string();
+        fs::write(repo.join("a.txt"), "two\n").unwrap();
+        run(&["add", "."]);
+        run(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "two"]);
+        let task = Task { id: "wt".into(), prompt: "do it".into(), repo: repo.clone(), cwd: String::new(),
+                          copy: false, check: "true".into(), check_timeout_seconds: 5, max_steps: 1,
+                          base_commit: first };
+        let w = prepare_workspace(&ctx, "run", &task).unwrap();
+        assert_eq!(fs::read_to_string(w.dir.join("a.txt")).unwrap(), "one\n");
+        assert!(w.worktree.is_some());
+        if let Some((r, dir)) = &w.worktree {
+            let _ = std::process::Command::new("git").arg("-C").arg(r)
+                .args(["worktree", "remove", "--force"]).arg(dir).output();
+        }
         let _ = fs::remove_dir_all(&d);
     }
 
