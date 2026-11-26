@@ -331,7 +331,9 @@ for line in sys.stdin:
             fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
         }
         let mut ctx = crate::config::load(&dir.join(".penelope"));
-        ctx.cfg["screencodec"] = json!({"command": script.display().to_string(), "hosts": "", "images": ""});
+        // Windows cannot run a file by its #! line, so the interpreter starts the fake with the script as argument.
+        let python = if cfg!(windows) { "python" } else { "python3" };
+        ctx.cfg["screencodec"] = json!({"command": python, "args": script.display().to_string(), "hosts": "", "images": ""});
         ctx.cfg["cursor"] = json!({"enabled": false});
         let opened = tool(&ctx, &json!({"action": "open", "url": "https://example.org", "task": "read the page", "level": "lean"})).unwrap();
         assert_eq!(opened, "open:{\"level\": \"lean\", \"task\": \"read the page\", \"url\": \"https://example.org\"}");

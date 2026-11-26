@@ -227,6 +227,7 @@ fn unit_dir(ctx: &Ctx, f: &Factory) -> PathBuf {
     let _ = ctx;
     #[cfg(target_os = "macos")]
     {
+        let _ = f;
         crate::platform::home().join("Library/LaunchAgents")
     }
     #[cfg(windows)]
@@ -272,6 +273,7 @@ fn xml_escape(text: &str) -> String {
     text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&apos;")
 }
 
+#[allow(dead_code)]          // the Linux unit; its text is checked by a test on every host
 fn systemd_units(ctx: &Ctx, f: &Factory) -> Vec<Unit> {
     let schedule = match (&f.every, &f.at) {
         (Some(every), _) => format!("OnActiveSec={}\nOnUnitActiveSec={}\nAccuracySec=1min", every, every),
@@ -810,15 +812,22 @@ mod tests {
     #[test]
     fn a_dry_new_writes_nothing_and_prints_the_units_with_the_schedule() {
         let (ctx, dir) = ctx();
+        // The dry run prints the units of this system's scheduler: systemd, launchd or Task Scheduler.
+        #[cfg(not(any(target_os = "macos", windows)))]
+        let (unit_name, every_line, at_lines) = ("penelope-factory-tick.service", "OnUnitActiveSec=1m", vec!["OnCalendar=*-*-* 09:30:00"]);
+        #[cfg(target_os = "macos")]
+        let (unit_name, every_line, at_lines) = ("ai.laertes.penelope.factory.tick.plist", "<integer>60</integer>", vec!["<key>Hour</key>\n    <integer>09</integer>", "<integer>30</integer>"]);
+        #[cfg(windows)]
+        let (unit_name, every_line, at_lines) = ("PenelopeFactory-tick.xml", "<Interval>PT60S</Interval>", vec!["T09:30:00"]);
         let said = new_factory(&ctx, "tick", "base", Some("1m"), None, "write one line", true, false).unwrap();
         assert!(said.starts_with("Dry run"), "{}", said);
-        assert!(said.contains("penelope-factory-tick.service"), "{}", said);
-        assert!(said.contains("OnUnitActiveSec=1m"), "{}", said);
+        assert!(said.contains(unit_name), "{}", said);
+        assert!(said.contains(every_line), "{}", said);
         assert!(said.contains("cluster run --profile tick"), "{}", said);
         assert!(!dir.join(".penelope/clusters/profiles/tick.json").exists(), "a dry run wrote a profile");
         assert!(!dir.join(".penelope/factories.json").exists(), "a dry run wrote the registry");
         let at = new_factory(&ctx, "morning", "base", None, Some("09:30"), "", true, false).unwrap();
-        assert!(at.contains("OnCalendar=*-*-* 09:30:00"), "{}", at);
+        assert!(at_lines.iter().all(|l| at.contains(l)), "{}", at);
         // Both forms at once and a missing schedule are refused before anything is written.
         assert!(new_factory(&ctx, "both", "base", Some("1m"), Some("09:30"), "", true, false).unwrap_err().contains("not both"));
         fs::write(dir.join(".penelope/clusters/profiles/human.json"), r#"{
@@ -834,7 +843,8 @@ mod tests {
         let f = Factory { name: "tick".into(), base: "base".into(), profile: "tick".into(), goal: "write one line".into(),
                           every: Some("1m".into()), at: None, armed: false, installed: String::new(), created: 0,
                           runs: 0, last_run: 0, last_result: String::new() };
-        let units = units(&ctx, &f);
+        // The systemd renderer is called by name, so the check of its text runs on every host.
+        let units = systemd_units(&ctx, &f);
         let target = dir.join("units");
         let written = write_units_to(&target, &units).unwrap();
         assert_eq!(written.len(), 2);
