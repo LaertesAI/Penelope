@@ -730,9 +730,10 @@ fn apps_dialog(f: &mut Frame, app: &App, area: Rect, sel: usize, scroll: usize) 
     };
     put(f, inner, inner.x, inner.y, &clip(&summary, inner.width as usize), on(DIM, RAISED));
     if rows.is_empty() {
-        put(f, inner, inner.x, inner.y + 2, "/app install LINK|DIR     check the scripts, show the rights, install after a yes", on(ASH, RAISED));
-        put(f, inner, inner.x, inner.y + 3, "apps live in .penelope/apps/NAME/; the manifest is .penelope-app.json or app.json", on(ASH, RAISED));
-        put(f, inner, inner.x, inner.y + 4, "the first app is the cluster view: \"view\": \"clusters\"", on(ASH, RAISED));
+        put(f, inner, inner.x, inner.y + 2, "/app install LINK|DIR|ZIP  check the scripts, show the rights, install after a yes", on(ASH, RAISED));
+        put(f, inner, inner.x, inner.y + 3, "/app update NAME           pull a git app in a staging copy; replace it only after a yes", on(ASH, RAISED));
+        put(f, inner, inner.x, inner.y + 4, "apps live in .penelope/apps/NAME/; the manifest is .penelope-app.json or app.json", on(ASH, RAISED));
+        put(f, inner, inner.x, inner.y + 5, "the first app is the cluster view: \"view\": \"clusters\"", on(ASH, RAISED));
         put(f, inner, inner.x, inner.bottom().saturating_sub(1), "esc closes · f7 opens this list", on(DIM, RAISED));
         return;
     }
@@ -760,10 +761,14 @@ fn apps_dialog(f: &mut Frame, app: &App, area: Rect, sel: usize, scroll: usize) 
 }
 
 fn app_install_dialog(f: &mut Frame, area: Rect, prepared: &crate::apps::Prepared) {
-    let inner = dialog(f, area, "Install app", 96, 24);
-    put(f, inner, inner.x, inner.y,
-        &clip(&format!("The local install check is done. Nothing is installed under .penelope/apps/{} before your yes.", prepared.app.name),
-              inner.width as usize), on(PAPER, RAISED).add_modifier(Modifier::BOLD));
+    let update = prepared.update;
+    let inner = dialog(f, area, if update { "Update app" } else { "Install app" }, 96, 24);
+    let intro = if update {
+        format!("The git app was pulled and checked in a staging copy. The installed folder .penelope/apps/{} stays untouched before your yes.", prepared.app.name)
+    } else {
+        format!("The local install check is done. Nothing is installed under .penelope/apps/{} before your yes.", prepared.app.name)
+    };
+    put(f, inner, inner.x, inner.y, &clip(&intro, inner.width as usize), on(PAPER, RAISED).add_modifier(Modifier::BOLD));
     let report = prepared.report();
     let lines: Vec<&str> = report.lines().collect();
     let room = inner.height.saturating_sub(6) as usize;
@@ -772,7 +777,9 @@ fn app_install_dialog(f: &mut Frame, area: Rect, prepared: &crate::apps::Prepare
         put(f, inner, inner.x, inner.y + 2 + i as u16, &clip(line, inner.width as usize), on(colour, RAISED));
     }
     put(f, inner, inner.x, inner.bottom().saturating_sub(2), "A yes stores the checked copy and shows the rights in /app list.", on(DIM, RAISED));
-    put(f, inner, inner.x, inner.bottom().saturating_sub(1), "y or enter installs · n or esc cancels and removes the checked copy", on(CLAY, RAISED));
+    put(f, inner, inner.x, inner.bottom().saturating_sub(1),
+        if update { "y or enter updates · n or esc cancels and removes the checked copy" }
+        else { "y or enter installs · n or esc cancels and removes the checked copy" }, on(CLAY, RAISED));
 }
 
 fn api_key_dialog(f: &mut Frame, app: &App, area: Rect, label: &str, input: &[char], cursor: usize, error: &str) {

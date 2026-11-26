@@ -205,7 +205,8 @@ These packages decide whether the idea can be shown. Do them in this order.
 - Done when: a factory that writes the time into a file every minute has written 3 lines after 3 minutes.
 
 ### 4.4 Apps and a launcher — done
-- Result: `3e230e3`, PR #13. App folder/manifest/rights, install from folder/git with plugins::check and yes gate, `/app` launcher and F7, cluster-view app, path/rights gate. 289 unit + 11 integration. Open: no live GitHub install; HTML apps open in the browser and are not sandboxed; no update/ZIP; shell/fetch allowed path not live-tested; killed install can leave staging.
+- Result: `3e230e3`, PR #13. App folder/manifest/rights, install from folder/git with plugins::check and yes gate, `/app` launcher and F7, cluster-view app, path/rights gate. 289 unit + 11 integration. Open: no live GitHub install; HTML apps open in the browser and are not sandboxed; shell/fetch allowed path not live-tested; killed install can leave staging.
+- Extension `feat/app-update`: `app update NAME` pulls a git app in a staging copy and replaces the old folder only after a yes or the `--yes` config gate; ZIP install from a path or URL unpacks through `files::extract_zip` into staging. 294 unit + 13 integration. Open: no live GitHub or HTTP ZIP install; ZIP apps update by remove and install.
 - State: missing.
 - Build later: `/app install GITHUB-LINK` like a plugin, with the check of 4.1 and a list of rights per app (files,
   network, shell). First app: a view of all running clusters and their parts. No server of Laertes is needed, apps

