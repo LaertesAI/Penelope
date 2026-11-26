@@ -221,12 +221,20 @@ These packages decide whether the idea can be shown. Do them in this order.
 
 ## Phase 5: selling
 
-### 5.1 The provider Laertes (B26, B08)
+### 5.1 The provider Laertes (B26, B08) — blocked on the endpoint
+- No plan endpoint and no plan key exist yet. The placeholder still refuses a call with "no model endpoint yet". The built-in cluster profiles keep the Laertes slots and fall back to the role model of the user.
 - State: `providers.rs` holds a placeholder that returns "no model endpoint yet".
 - Build: a plan key, a model list from the endpoint, and the provider as the default of a fresh install. The built-in
   cluster profiles name the slots of Laertes: Nostos for tool calls, Argos as validator, Aiolos for shortening. A
   missing model falls back to the role model of the user.
 - Done when: `penelope models --provider laertes` lists the models of the plan with a test key against a fake endpoint.
+
+## State on 2026-11-26
+
+`main` has 300 tests (289 unit + 11 integration), 0 failed; 20/20 green runs at Phase 0. PRs #1–#13 carry the
+individual packages, #14 is the integration PR with the clean latest `main`. The cluster packages 1.1–1.10, 2.1–2.2,
+3.1, 3.2 safe core, 4.1–4.4 and the 4.5 draft are built. 2.3 (quorum, shadow cluster, routing), the full 22-check
+brief, live GitHub app install/browser sandbox, real Windows/macOS CI and the Laertes plan endpoint are still open.
 
 ## What is still open and needs the owner
 
