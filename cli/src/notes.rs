@@ -11,6 +11,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -44,6 +45,10 @@ pub struct Note {
     pub status: Status,
     pub body: String,
     pub links: Vec<String>,
+    /// Origin level L: 0 file, 1 agent, 2 checked tool, 3 person.
+    pub level: u8,
+    /// Hash of source and body at the time the note was written. An empty hash is filled by `save`.
+    pub hash: String,
 }
 
 fn parse_status(s: &str) -> Result<Status, String> {
@@ -75,6 +80,7 @@ pub fn links(text: &str) -> Vec<String> {
 /// Reads one note. `name` comes from the caller (the file name without `.md`).
 pub fn parse(name: &str, text: &str) -> Result<Note, String> {
     let (mut source, mut date, mut status) = (String::new(), String::new(), Status::Open);
+    let (mut level, mut hash) = (1u8, String::new());
     let mut body = text;
     if text.starts_with("---") {
         let mut lines = text.lines();
@@ -92,6 +98,8 @@ pub fn parse(name: &str, text: &str) -> Result<Note, String> {
                     "source" => source = v.trim().to_string(),
                     "date" => date = v.trim().to_string(),
                     "status" => status = parse_status(v).map_err(|e| format!("note {}: {}", name, e))?,
+                    "L" | "level" => level = v.trim().parse::<u8>().unwrap_or(1).min(3),
+                    "hash" => hash = v.trim().to_string(),
                     _ => {}
                 }
             }
@@ -101,7 +109,7 @@ pub fn parse(name: &str, text: &str) -> Result<Note, String> {
         }
         body = text.get(consumed.min(text.len())..).unwrap_or("");
     }
-    Ok(Note { name: name.to_string(), source, date, status, body: body.to_string(), links: links(body) })
+    Ok(Note { name: name.to_string(), source, date, status, body: body.to_string(), links: links(body), level, hash })
 }
 
 /// Loads every `*.md` file of a folder. The file name without `.md` is the note name. A file that does not parse is an error.
@@ -115,10 +123,18 @@ pub fn load_dir(dir: &Path) -> Result<Vec<Note>, String> {
         }
         let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
         let text = fs::read_to_string(&path).map_err(|e| format!("cannot read {}: {}", path.display(), e))?;
-        notes.push(parse(&name, &text)?);
+        let mut note = parse(&name, &text)?;
+        if let Ok(log) = fs::read_to_string(events_path(dir, &name)?) {
+            if let Some(status) = log.lines().rev().find_map(event_status) { note.status = status; }
+        }
+        notes.push(note);
     }
     notes.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(notes)
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
 /// The date of today in UTC as `YYYY-MM-DD`, without a clock crate.
@@ -154,24 +170,66 @@ fn file_of(dir: &Path, name: &str) -> Result<PathBuf, String> {
 
 /// The Markdown form of a note: header between two `---` lines, then the body.
 pub fn render(note: &Note) -> String {
-    format!("---\nsource: {}\ndate: {}\nstatus: {}\n---\n{}\n",
-            note.source, note.date, note.status.as_str(), note.body.trim_end_matches('\n'))
+    format!("---\nsource: {}\ndate: {}\nstatus: {}\nL: {}\nhash: {}\n---\n{}\n",
+            note.source, note.date, note.status.as_str(), note.level, note.hash,
+            note.body.trim_end_matches('\n'))
 }
 
 /// Writes one note as `<name>.md` under `dir` and creates the folder when needed.
 pub fn save(dir: &Path, note: &Note) -> Result<(), String> {
     let path = file_of(dir, &note.name)?;
+    let mut note = note.clone();
+    if note.hash.trim().is_empty() { note.hash = source_hash(&note); }
     fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {}", dir.display(), e))?;
-    fs::write(&path, render(note)).map_err(|e| format!("cannot write {}: {}", path.display(), e))
+    fs::write(&path, render(&note)).map_err(|e| format!("cannot write {}: {}", path.display(), e))
 }
 
-/// Changes only the status of an existing note and keeps source, date, body and links.
+/// A stable 64-bit FNV-1a hash of the source and body of a note.
+pub fn source_hash(note: &Note) -> String {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in note.source.bytes().chain(std::iter::once(b'\n')).chain(note.body.trim_end_matches('\n').bytes()) {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    format!("{:016x}", h)
+}
+
+fn events_path(dir: &Path, name: &str) -> Result<PathBuf, String> {
+    let path = file_of(dir, name)?;
+    Ok(path.with_extension("events.log"))
+}
+
+fn event_status(line: &str) -> Option<Status> {
+    let v: serde_json::Value = serde_json::from_str(line).ok()?;
+    parse_status(v["status"].as_str()?).ok()
+}
+
+/// Appends a status event to `<name>.events.log` instead of rewriting the note. `load_dir` overlays the last event.
+/// A note whose stored hash differs from source and body gets `stale`, because its content changed under the status.
+/// Every 200 events the note is compacted once: the current status and hash are written to the `.md`, the log is cleared.
 pub fn set_status(dir: &Path, name: &str, status: Status) -> Result<(), String> {
     let path = file_of(dir, name)?;
     let text = fs::read_to_string(&path).map_err(|e| format!("cannot read {}: {}", path.display(), e))?;
-    let mut note = parse(name, &text)?;
-    note.status = status;
-    save(dir, &note)
+    let note = parse(name, &text)?;
+    let effective = if !note.hash.is_empty() && note.hash != source_hash(&note) { Status::Stale } else { status };
+    let event = serde_json::json!({"t": now_ms(), "status": effective.as_str(), "hash": source_hash(&note), "L": note.level});
+    let log = events_path(dir, name)?;
+    fs::OpenOptions::new().create(true).append(true).open(&log)
+        .and_then(|mut f| writeln!(f, "{}", event))
+        .map_err(|e| format!("cannot write {}: {}", log.display(), e))?;
+    let count = fs::read_to_string(&log).unwrap_or_default().lines().count();
+    if count >= 200 { compact(dir, name, &note, effective)?; }
+    Ok(())
+}
+
+fn compact(dir: &Path, name: &str, note: &Note, status: Status) -> Result<(), String> {
+    let mut next = note.clone();
+    next.status = status;
+    next.hash = source_hash(&next);
+    let path = file_of(dir, name)?;
+    fs::write(&path, render(&next)).map_err(|e| format!("cannot write {}: {}", path.display(), e))?;
+    let log = events_path(dir, name)?;
+    fs::write(&log, "").map_err(|e| format!("cannot clear {}: {}", log.display(), e))
 }
 
 /// The notes at most `hops` links away from `start`, links followed both ways, stale notes left out (a stale note
@@ -350,8 +408,40 @@ mod tests {
         let notes = load_dir(&dir).unwrap();
         assert_eq!((notes[0].status, notes[0].links.clone()), (Status::Confirmed, vec!["b".to_string()]));
         let before = fs::read_to_string(dir.join("a.md")).unwrap();
-        assert!(before.contains("status: confirmed") && before.contains("see [[b]]"), "{}", before);
+        assert!(before.contains("status: open") && before.contains("see [[b]]"), "the note file is not rewritten: {}", before);
+        let events = fs::read_to_string(dir.join("a.events.log")).unwrap();
+        assert!(events.contains("\"status\":\"confirmed\""), "{}", events);
         assert!(save(&dir, &parse("../x", "x").unwrap()).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_note_with_a_changed_hash_gets_stale() {
+        let dir = std::env::temp_dir().join(format!("penelope-notes-stale-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let note = parse("a", "---\nsource: file\ndate: 2026-11-26\nstatus: open\nL: 2\nhash: wrong\n---\ntext").unwrap();
+        save(&dir, &note).unwrap();
+        // save keeps the stored hash when it is not empty, so set_status must see the mismatch.
+        set_status(&dir, "a", Status::Confirmed).unwrap();
+        let notes = load_dir(&dir).unwrap();
+        assert_eq!(notes[0].status, Status::Stale);
+        let events = fs::read_to_string(dir.join("a.events.log")).unwrap();
+        assert!(events.contains("\"status\":\"stale\"") && events.contains("\"L\":2"), "{}", events);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn two_hundred_events_compact_the_note_once() {
+        let dir = std::env::temp_dir().join(format!("penelope-notes-compact-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let note = parse("a", "---\nsource: validator\ndate: 2026-11-26\nstatus: open\n---\nsee [[b]]").unwrap();
+        save(&dir, &note).unwrap();
+        for _ in 0..200 { set_status(&dir, "a", Status::Confirmed).unwrap(); }
+        let notes = load_dir(&dir).unwrap();
+        assert_eq!(notes[0].status, Status::Confirmed);
+        let text = fs::read_to_string(dir.join("a.md")).unwrap();
+        assert!(text.contains("status: confirmed") && text.contains("hash: "), "{}", text);
+        assert_eq!(fs::read_to_string(dir.join("a.events.log")).unwrap(), "");
         let _ = fs::remove_dir_all(&dir);
     }
 
