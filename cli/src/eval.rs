@@ -329,6 +329,33 @@ fn usage_totals(ctx: &Ctx) -> (u64, u64) {
     total
 }
 
+/// The root config with the unattended policies, and the text to put back when the eval returns.
+struct EvalConfig {
+    path: PathBuf,
+    before: Option<String>,
+}
+
+impl Drop for EvalConfig {
+    fn drop(&mut self) {
+        match &self.before {
+            Some(text) => { let _ = fs::write(&self.path, text); }
+            None => { let _ = fs::remove_file(&self.path); }
+        }
+    }
+}
+
+fn widen_eval_config(ctx: &Ctx) -> Result<EvalConfig, String> {
+    let path = ctx.root.join("config.json");
+    let before = fs::read_to_string(&path).ok();
+    let mut cfg: Value = before.as_deref().and_then(|s| serde_json::from_str(s).ok()).unwrap_or_else(|| ctx.cfg.clone());
+    cfg["edit_policy"] = json!("all");
+    cfg["run_policy"] = json!("all");
+    cfg["sandbox"] = json!("bwrap");
+    fs::write(&path, serde_json::to_string_pretty(&cfg).map_err(|e| format!("cannot encode the eval config: {}", e))?)
+        .map_err(|e| format!("cannot write {}: {}", path.display(), e))?;
+    Ok(EvalConfig { path, before })
+}
+
 fn eval_context(ctx: &Ctx, setup: &str) -> Ctx {
     let mut run = ctx.clone();
     // An eval is unattended: a change must happen without a person at the interface. The eval folder is a scratch copy.
@@ -563,6 +590,10 @@ fn append_runs_doc(path: &Path, tasks_path: &str, results: &[SetupResult]) -> Re
 
 /// Runs the named setup (or all of them), prints a table and appends the measured table to `runs_path`.
 pub fn eval(ctx: &Ctx, tasks_path: &str, setup: &str, runs_path: Option<&Path>) -> Result<String, String> {
+    // A Claude CLI part reads the config file again in its MCP server. The in-memory change of eval_context is not
+    // enough for that process, so the unattended policies are written to the scratch root for the run and restored
+    // when eval returns, also on an error. The root must be a scratch root; the sandbox keeps the machine read-only.
+    let _config = widen_eval_config(ctx)?;
     let tasks = parse_tasks(Path::new(tasks_path))?;
     let list: Vec<&str> = if setup == "all" { SETUPS.to_vec() } else { vec![setup] };
     for name in &list {
@@ -804,6 +835,23 @@ mod tests {
         assert_eq!(seen.len(), 4);
         let systems: Vec<String> = seen.iter().map(|s| s.body["messages"][0]["content"].as_str().unwrap_or("").to_string()).collect();
         assert!(systems.iter().any(|s| s.contains("worker of a Penelope agent run")) && systems.iter().any(|s| s.contains("judge of a Penelope agent run")), "{:?}", systems);
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn the_eval_widens_the_root_config_and_restores_it() {
+        let (ctx, d) = ctx("config-guard");
+        let path = ctx.root.join("config.json");
+        fs::write(&path, r#"{"edit_policy":"ask","run_policy":"safe","sandbox":"off"}"#).unwrap();
+        {
+            let _guard = widen_eval_config(&ctx).unwrap();
+            let now: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!((now["edit_policy"].as_str(), now["run_policy"].as_str(), now["sandbox"].as_str()),
+                       (Some("all"), Some("all"), Some("bwrap")));
+        }
+        let after: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!((after["edit_policy"].as_str(), after["run_policy"].as_str(), after["sandbox"].as_str()),
+                   (Some("ask"), Some("safe"), Some("off")));
         let _ = fs::remove_dir_all(&d);
     }
 
