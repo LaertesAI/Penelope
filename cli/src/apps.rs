@@ -1332,7 +1332,8 @@ mod tests {
         assert!(report.contains("app linked 1.0.0 -> 1.1.0 updated"), "{}", report);
         let installed = load_dir(&ctx.root.join("apps/linked")).unwrap();
         assert_eq!(installed.version, "1.1.0");
-        assert_eq!(fs::read_to_string(ctx.root.join("apps/linked/release.txt")).unwrap(), "the new file\n");
+        // git on Windows checks text out with CRLF (core.autocrlf), the content is the same.
+        assert_eq!(fs::read_to_string(ctx.root.join("apps/linked/release.txt")).unwrap().replace("\r\n", "\n"), "the new file\n");
         assert!(ctx.root.join("apps/linked/.git").is_dir(), "the update must keep the git folder");
         assert_eq!(fs::read_dir(ctx.root.join("apps")).unwrap().count(), 1, "a staging or backup folder stayed");
         let _ = fs::remove_dir_all(&root);

@@ -1388,7 +1388,9 @@ mod tests {
 
     #[test]
     fn three_failed_test_runs_stop_the_turn_and_block_the_next_change() {
-        let (ctx, dir) = test_ctx("stop", "echo boom; exit 7", 3);
+        // cmd has no `;` between commands, `&` runs the second one after the first.
+        let failing = if cfg!(windows) { "echo boom & exit 7" } else { "echo boom; exit 7" };
+        let (ctx, dir) = test_ctx("stop", failing, 3);
         let cwd = dir.to_string_lossy().to_string();
         for i in 1..=3 {
             let said = dispatch_retry(&ctx, "lead", "write", &serde_json::json!({"path": "a.txt", "text": format!("try {}\n", i), "cwd": &cwd}));
