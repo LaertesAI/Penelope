@@ -780,7 +780,7 @@ pub fn git_diff(ctx: &Ctx, path: &str, staged: bool, cwd: &str) -> String {
     if staged { command.push_str(" --cached"); }
     command.push_str(" --stat --patch");
     if !path.trim().is_empty() {
-        command.push_str(&format!(" -- {}", crate::forge::quote(path)));
+        command.push_str(&format!(" -- {}", crate::platform::shell_quote(path)));
     }
     let said = run(ctx, &command, "show the changed lines", cwd);
     if said.trim().is_empty() { "no change in the working tree".to_string() } else { said }

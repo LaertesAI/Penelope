@@ -6,6 +6,7 @@
 
 use crate::config::Ctx;
 use serde_json::Value;
+#[cfg(all(not(windows), not(target_os = "macos")))]
 use std::process::Command;
 
 /// What this PC can use for the cursor. The first line is for `penelope doctor`.
@@ -43,9 +44,9 @@ fn run(ctx: &Ctx, x: i64, y: i64, label: &str, click: bool) -> Result<String, St
     }
     let custom = ctx.cfg["cursor"]["command"].as_str().unwrap_or("").trim().to_string();
     if !custom.is_empty() {
-        let command = custom.replace("{x}", &crate::forge::quote(&x.to_string()))
-            .replace("{y}", &crate::forge::quote(&y.to_string()))
-            .replace("{label}", &crate::forge::quote(label));
+        let command = custom.replace("{x}", &crate::platform::shell_quote(&x.to_string()))
+            .replace("{y}", &crate::platform::shell_quote(&y.to_string()))
+            .replace("{label}", &crate::platform::shell_quote(label));
         let out = crate::platform::shell(&command).output().map_err(|e| format!("NOT moved. {}", e))?;
         if !out.status.success() {
             return Err(format!("NOT moved. {} ended with {}", custom, out.status));
@@ -71,11 +72,6 @@ fn run(ctx: &Ctx, x: i64, y: i64, label: &str, click: bool) -> Result<String, St
 /// The move through the platform. On Unix the click is a second command, on Windows the script moves and clicks.
 fn platform_move(ctx: &Ctx, x: i64, y: i64, click: bool) -> Result<(i64, i64), String> {
     let _ = ctx;
-    #[cfg(windows)]
-    {
-        crate::platform::move_pointer(x, y, click)?;
-        return Ok((x, y));
-    }
     #[cfg(any(windows, target_os = "macos"))]
     {
         crate::platform::move_pointer(x, y, click)?;
@@ -136,11 +132,16 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let log = dir.join("log");
         let mut ctx = crate::config::load(&dir.join(".penelope"));
-        ctx.cfg["cursor"] = json!({"command": format!("printf '%s|%s|%s' {{x}} {{y}} {{label}} > {}", log.display())});
+        #[cfg(not(windows))]
+        let (command, label, written) = (format!("printf '%s|%s|%s' {{x}} {{y}} {{label}} > {}", log.display()), "Save; rm -rf /", "640|360|Save; rm -rf /");
+        // cmd has no printf; echo writes the quoted words as they are. The & stays inside the label and starts nothing.
+        #[cfg(windows)]
+        let (command, label, written) = (format!("echo {{x}} {{y}} {{label}}> {}", log.display()), "Save & echo injected", "\"640\" \"360\" \"Save & echo injected\"");
+        ctx.cfg["cursor"] = json!({"command": command});
         assert!(backend(&ctx).1);
-        let said = tool(&ctx, &json!({"x": 640, "y": 360, "label": "Save; rm -rf /"})).unwrap();
+        let said = tool(&ctx, &json!({"x": 640, "y": 360, "label": label})).unwrap();
         assert!(said.contains("640, 360"), "{}", said);
-        assert_eq!(fs::read_to_string(&log).unwrap(), "640|360|Save; rm -rf /");
+        assert_eq!(fs::read_to_string(&log).unwrap().trim_end(), written);
         ctx.cfg["cursor"] = json!({"enabled": false});
         assert!(tool(&ctx, &json!({"x": 1, "y": 2})).unwrap_err().contains("cursor is off"));
         let _ = fs::remove_dir_all(&dir);

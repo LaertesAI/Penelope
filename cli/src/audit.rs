@@ -117,7 +117,8 @@ mod tests {
         ctx.cfg["main"] = serde_json::json!({"kind": "openai", "base_url": "http://api.example.org/v1", "model": "x", "api_key_env": "X_KEY"});
         ctx.cfg["api_key"] = serde_json::json!("pasted");
         let text = run(&ctx);
-        assert!(text.contains("sessions/leak.txt holds 1 item"), "{}", text);
+        // The report names the file by its full path, with the separator of the system.
+        assert!(text.contains(&format!("sessions{}leak.txt holds 1 item", std::path::MAIN_SEPARATOR)), "{}", text);
         assert!(text.contains("plain http") && text.contains("holds a value in \"api_key\""), "{}", text);
         assert!(text.contains("findings") && !text.contains("sk-abcdef"), "{}", text);
         let _ = fs::remove_dir_all(&dir);

@@ -96,8 +96,9 @@ pub struct Expanded {
     pub notes: Vec<String>,
 }
 
+/// Windows paths use \ as separator (@C:\work\a.txt), so there it belongs to the path too.
 fn is_path_char(c: char) -> bool {
-    c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/' | '~' | '+' | ':')
+    c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/' | '~' | '+' | ':') || (cfg!(windows) && c == '\\')
 }
 
 /// The `@` tokens of a text. A token starts at `@` that follows a space or the start, so `a@b.c` stays an address.

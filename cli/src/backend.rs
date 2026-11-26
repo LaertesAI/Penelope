@@ -591,7 +591,7 @@ mod tests {
         }
         let mut all = Vec::new();
         files(&ctx.root, &mut all);
-        let names: Vec<String> = all.iter().map(|p| p.strip_prefix(&ctx.root).unwrap().to_string_lossy().to_string()).collect();
+        let names: Vec<String> = all.iter().map(|p| p.strip_prefix(&ctx.root).unwrap().to_string_lossy().replace('\\', "/")).collect();
         for needed in ["config.json", "sessions.json", &format!("sessions/{}.json", id), &format!("sessions/{}.history.json", id)] {
             assert!(names.iter().any(|n| n == needed), "{} is missing in {:?}", needed, names);
         }

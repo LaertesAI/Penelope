@@ -29,7 +29,7 @@ pub fn resolve(path: &str, cwd: &str) -> PathBuf {
 pub fn show(p: &Path) -> String {
     let (text, home) = (p.display().to_string(), crate::platform::home_str());
     match text.strip_prefix(&home) {
-        Some(rest) if home.len() > 1 && rest.starts_with('/') => format!("~{}", rest),
+        Some(rest) if home.len() > 1 && rest.starts_with(std::path::MAIN_SEPARATOR) => format!("~{}", rest),
         _ => text,
     }
 }
@@ -249,8 +249,10 @@ pub fn zip_plan(archive: &Path) -> Result<ZipPlan, String> {
         if entry.is_symlink() {
             return Err(format!("NOT unpacked. Entry {} is a symbolic link.", name.display()));
         }
-        if name.to_string_lossy().contains('\\') || name.to_string_lossy().contains(':') {
-            return Err(format!("NOT unpacked. Entry {} has a platform-dependent path.", name.display()));
+        // The raw name is checked: on Windows enclosed_name already turns every / into \\.
+        let raw = entry.name().map_err(|e| format!("NOT unpacked. Entry {} has no readable name: {}", i, e))?.to_string();
+        if raw.contains('\\') || raw.contains(':') {
+            return Err(format!("NOT unpacked. Entry {} has a platform-dependent path.", raw));
         }
         if entry.size() > ZIP_MAX_FILE {
             return Err(format!("NOT unpacked. Entry {} is {} MB; the limit per file is {} MB.", name.display(), entry.size() / 1_048_576, ZIP_MAX_FILE / 1_048_576));
@@ -260,7 +262,7 @@ pub fn zip_plan(archive: &Path) -> Result<ZipPlan, String> {
             return Err(format!("NOT unpacked. The unpacked size is over {} MB.", ZIP_MAX_BYTES / 1_048_576));
         }
         if entry.is_dir() { folders += 1; } else { files += 1; }
-        names.push(name.display().to_string());
+        names.push(name.to_string_lossy().replace('\\', "/"));
     }
     Ok(ZipPlan { files, folders, bytes, names })
 }
@@ -489,8 +491,9 @@ fn walk(root: &Path) -> Vec<String> {
                     stack.push(e.path());
                 }
             } else if kind.is_file() {
+                // The parts are joined with /, so a pattern such as src/**/*.rs and the output read the same on Windows.
                 if let Ok(rel) = e.path().strip_prefix(root) {
-                    out.push(rel.to_string_lossy().to_string());
+                    out.push(rel.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/"));
                 }
             }
             if out.len() >= 60_000 {

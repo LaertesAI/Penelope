@@ -725,7 +725,8 @@ pub fn prepare(ctx: &Ctx, target: &str, unattended: bool) -> Result<Prepared, St
         }
         (staging, src.display().to_string())
     } else if is_remote(target) {
-        let leaf = target.trim_end_matches('/').rsplit('/').next().unwrap_or("app").trim_end_matches(".git");
+        // A file URL on Windows can hold backslashes (file://C:\work\app); the last part is the name there too.
+        let leaf = target.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or("app").trim_end_matches(".git");
         let staging = base.join(format!(".{}-clone-{}", safe(leaf), stamp()));
         if let Err(e) = git_clone(target, &staging) {
             cleanup(&staging);
