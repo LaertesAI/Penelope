@@ -1,6 +1,6 @@
 # Penelope: features, bugs and open goals
 
-State: 2026-11-25, working tree after the 0.11.0 second pass and the first 0.12 work. Test suite: 300 tests (227 unit and 2 eval command tests).
+State: 2026-11-26, working tree after the 0.11.0 second pass and the first 0.12 work. Test suite: 310 tests (299 unit and 11 command tests).
 This is the honest list behind `README.md` and `PLAN-0.12.md`. A feature is only listed as working when a test or a
 live run on this PC backs it.
 
@@ -14,6 +14,7 @@ live run on this PC backs it.
 | Clusters | orchestrator plan, profiles from parts, parallel clusters, `after`/parent order, one memory file, validator retry, reports, kill | 5 tests, live solo cluster with Claude + haiku validator |
 | Cluster base modules | `proof` (evidence `V:`), `notes` (linked notes and status), `advise` (part scores and suggestions) | 27 tests, not wired yet |
 | Tools | read/write/edit, undo, find/grep/tree, jobs, git, clipboard, HTTP, JSON | unit tests and real changes |
+| Test loop | `test_command` after a successful write/edit (last 20 lines), stop after `test_attempts` failures, per-turn reset | 10 tests with fake commands; cluster parts opt in per profile |
 | Search | 10 sources, parallel fanout, cache, dedupe/rank, health, reranker client, SearXNG pool | live 3 engines; `search health --probe` |
 | Search ops | `search probe [--daily]`, `search instances add URL`, `search fanout on|off` | 2 tests, live 3 engines, daily marker |
 | Read | HTML → Markdown, local PDF, reader API, warnings | live PDF (24 words), reader tests |
@@ -59,7 +60,6 @@ live run on this PC backs it.
 | B18 | low | A scanned PDF still needs OCR. | `scrape.rs` | reader API or OCR |
 | B19 | low | `mcp add` has no `env`/`cwd`/remote transport. | `plugins.rs` | 0.13 |
 | B20 | low | The website account/admin views are real for login only; downloads and full admin pages are still mock. | `Laertes/website` | Website 0.12 |
-| B21 | medium | No test loop after an edit and no stop after three failed attempts. | no `test_command` runner | Add `test_command` and a bounded repair loop |
 | B22 | medium | No LSP tool; rust-analyzer is installed but not wired. | `which rust-analyzer` | `lsp` tool with diagnostics and types |
 | B23 | medium | No tree-sitter repo index; grep and tree are the only overview. | no tree-sitter dependency | Index files and symbols at start |
 | B24 | medium | The eval runner and read-only replay exist; no real 20-task run with three models has been made yet. | `eval.rs`, `docs/EVAL.md` | First real table in `docs/RUNS.md` |

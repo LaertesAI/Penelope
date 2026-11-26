@@ -3,6 +3,7 @@
 use crate::config::Ctx;
 use crate::memory::Memory;
 use crate::weak;
+use std::cell::Cell;
 use std::fs;
 use std::process::Command;
 
@@ -368,10 +369,147 @@ fn retry_loop(mut call: impl FnMut() -> Result<String, String>, name: &str, args
     (last, false)
 }
 
+/// The marker of a tool result that ends the test loop of a turn. The HTTP tool loop of `llm.rs` looks for it and asks
+/// the main model for a final answer without tools; an MCP model sees it as the result of its next call.
+pub const TEST_STOP: &str = "TEST LOOP STOPPED";
+
+thread_local! {
+    /// Failed test runs of the current user turn on this thread. A new turn resets it.
+    static TEST_FAILURES: Cell<usize> = const { Cell::new(0) };
+    /// True after `test_attempts` failed runs: no further tool call may run in this turn.
+    static TEST_STOPPED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Starts a new user turn: the test loop counts from zero again.
+pub fn begin_turn() {
+    TEST_FAILURES.with(|n| n.set(0));
+    TEST_STOPPED.with(|s| s.set(false));
+}
+
+/// True when a tool result stopped the test loop. The text may carry the result of the edit before the marker, so the
+/// marker is only read at the start or in the exact stop line; file text that happens to hold the words does not count.
+pub fn is_test_stop(text: &str) -> bool {
+    text.trim_start().starts_with(TEST_STOP) || text.contains(&format!("\n{}: STOP.", TEST_STOP))
+}
+
+fn attempts_of(v: &serde_json::Value) -> usize {
+    v["test_attempts"].as_u64().unwrap_or(3).clamp(1, 20) as usize
+}
+
+/// The test command of the current turn. `None` turns the loop off: an empty command, a role that does not write, a
+/// subagent, or a cluster part whose profile does not name `test_command` (the default there).
+fn test_settings(ctx: &Ctx, role: &str) -> Option<(String, usize)> {
+    if crate::clusters::current_cluster().is_some() {
+        return if matches!(role, "lead" | "worker") { cluster_test_settings(ctx) } else { None };
+    }
+    if role != "lead" || crate::agents::depth() > 0 {
+        return None;
+    }
+    let command = ctx.cfg["test_command"].as_str().unwrap_or("").trim().to_string();
+    if command.is_empty() {
+        return None;
+    }
+    Some((command, attempts_of(&ctx.cfg)))
+}
+
+/// A cluster part runs the test command of its profile only. The profile file is `clusters/profiles/NAME.json`; a
+/// cluster file (`.cluster`) cannot carry a command, so the loop stays off there.
+fn cluster_test_settings(ctx: &Ctx) -> Option<(String, usize)> {
+    let id = crate::clusters::current_cluster()?;
+    let safe = |s: &str| s.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' { c } else { '-' }).collect::<String>();
+    let state = ctx.root.join("clusters").join(format!("{}.json", safe(&id)));
+    let state: serde_json::Value = fs::read_to_string(state).ok().and_then(|t| serde_json::from_str(&t).ok())?;
+    let profile = state["profile"].as_str()?.trim();
+    if profile.is_empty() {
+        return None;
+    }
+    let path = ctx.root.join("clusters").join("profiles").join(format!("{}.json", safe(profile)));
+    let profile: serde_json::Value = fs::read_to_string(path).ok().and_then(|t| serde_json::from_str(&t).ok())?;
+    let command = profile["test_command"].as_str().unwrap_or("").trim().to_string();
+    if command.is_empty() {
+        return None;
+    }
+    Some((command, attempts_of(&profile)))
+}
+
+/// The last `n` lines of a text, without trailing empty lines.
+fn last_lines(text: &str, n: usize) -> String {
+    let lines: Vec<&str> = text.trim_end().lines().collect();
+    lines[lines.len().saturating_sub(n)..].join("\n")
+}
+
+/// Runs the configured test command as a normal shell command. It does not go through the tool gate, so it cannot
+/// recurse into another tool call. Returns whether it passed and the exit code with at most the last 20 lines.
+fn run_test_command(ctx: &Ctx, command: &str, cwd: &str) -> (bool, String) {
+    let cwd = if cwd.trim().is_empty() { crate::eval::task_cwd() } else { cwd.to_string() };
+    let dir = if cwd.trim().is_empty() {
+        std::env::current_dir().unwrap_or_else(|_| ctx.root.parent().map(std::path::Path::to_path_buf).unwrap_or_else(|| ctx.root.clone()))
+    } else {
+        std::path::PathBuf::from(cwd)
+    };
+    let mut cmd = crate::platform::shell(command);
+    cmd.current_dir(&dir);
+    let out = match cmd.output() {
+        Ok(o) => o,
+        Err(e) => return (false, format!("the command could not start: {}", e)),
+    };
+    let mut text = String::from_utf8_lossy(&out.stdout).to_string();
+    let err = String::from_utf8_lossy(&out.stderr);
+    if !err.trim().is_empty() {
+        if !text.is_empty() && !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push_str("[stderr]\n");
+        text.push_str(&err);
+    }
+    let text = guard(ctx, &text);
+    let tail = last_lines(&text, 20);
+    let code = out.status.code().unwrap_or(-1);
+    (out.status.success(), format!("exit code {}.{}", code,
+        if tail.is_empty() { " No output.".to_string() } else { format!("\n{}", tail) }))
+}
+
+/// After a successful `write` or `edit`: run the test command and append its last 20 lines to the tool result. A failed
+/// run counts for this turn. The run that reaches `test_attempts` turns the result into a stop; every later call in the
+/// turn is refused before it runs, so the model has to answer with the failure instead of trying another edit.
+fn after_edit(ctx: &Ctx, role: &str, name: &str, args: &serde_json::Value, text: String, ok: bool) -> (String, bool) {
+    if !ok || !matches!(name, "write" | "edit") || !text.starts_with("done") {
+        return (text, ok);
+    }
+    let Some((command, attempts)) = test_settings(ctx, role) else {
+        return (text, ok);
+    };
+    let before = TEST_FAILURES.with(|n| n.get());
+    let (passed, detail) = run_test_command(ctx, &command, args["cwd"].as_str().unwrap_or(""));
+    let mut out = format!("{}\ntest_command `{}`: {}", text, command, if passed {
+        if before == 0 { "tests passed.".to_string() } else { format!("tests passed after {} failed runs.", before) }
+    } else {
+        format!("tests FAILED on attempt {} of {}.", before + 1, attempts)
+    });
+    out.push_str(&format!("\n{}", detail));
+    if passed {
+        return (out, ok);
+    }
+    let failed = before + 1;
+    TEST_FAILURES.with(|n| n.set(failed));
+    if failed >= attempts {
+        TEST_STOPPED.with(|s| s.set(true));
+        out.push_str(&format!("\n{}: STOP. `{}` failed {} times in this turn. No tool runs for the rest of this turn. Answer with the failure, what you changed and what remains open.",
+                              TEST_STOP, command, failed));
+        return (out, false);
+    }
+    (out, ok)
+}
+
 /// Runs one tool call under a role and repeats it up to two times while the error looks transient and the tool has no
-/// second effect. This is the function every model loop uses.
+/// second effect. This is the function every model loop uses. A successful `write` or `edit` is followed by the test
+/// command of this project.
 pub fn dispatch_retry(ctx: &Ctx, role: &str, name: &str, args: &serde_json::Value) -> (String, bool) {
-    retry_loop(|| crate::route::dispatch_as(ctx, role, name, args), name, args)
+    if TEST_STOPPED.with(|s| s.get()) {
+        return (format!("{}: STOP. The test command already failed in this turn. No tool runs for the rest of this turn. Answer with the failure, what you changed and what remains open.", TEST_STOP), false);
+    }
+    let (text, ok) = retry_loop(|| crate::route::dispatch_as(ctx, role, name, args), name, args);
+    after_edit(ctx, role, name, args, text, ok)
 }
 
 /// Runs a shell command. Short output comes back as it is. Long output is stored and condensed by the weaker model.
@@ -1208,6 +1346,140 @@ mod tests {
         assert!(args.ends_with(&["/bin/sh".to_string(), "-c".to_string(), "cargo test".to_string()]));
     }
 
+
+    fn test_ctx(name: &str, command: &str, attempts: u64) -> (Ctx, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("penelope-testloop-{}-{}", name, std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let mut ctx = crate::config::load(&dir.join(".penelope"));
+        ctx.cfg["edit_policy"] = serde_json::json!("all");
+        ctx.cfg["test_command"] = serde_json::json!(command);
+        ctx.cfg["test_attempts"] = serde_json::json!(attempts);
+        begin_turn();
+        (ctx, dir)
+    }
+
+    #[test]
+    fn the_test_settings_default_to_no_command_and_three_attempts() {
+        let dir = std::env::temp_dir().join(format!("penelope-testloop-defaults-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let ctx = crate::config::load(&dir.join(".penelope"));
+        assert_eq!(ctx.cfg["test_command"], "");
+        assert_eq!(ctx.cfg["test_attempts"], 3);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_test_command_that_fails_twice_then_passes_runs_after_every_edit() {
+        let (ctx, dir) = test_ctx("retry", "sh tests.sh", 3);
+        fs::write(dir.join("tests.sh"),
+                  "n=$(cat count 2>/dev/null || echo 0)\nn=$((n + 1))\necho \"$n\" > count\nif [ \"$n\" -lt 3 ]; then\n  echo \"failure run $n\"\n  exit 1\nfi\necho \"test-output-ok\"\n").unwrap();
+        let cwd = dir.to_string_lossy().to_string();
+        let write = |text: &str| dispatch_retry(&ctx, "lead", "write", &serde_json::json!({"path": "a.txt", "text": text, "cwd": &cwd}));
+        let first = write("one\n");
+        assert!(first.0.starts_with("done: create") && first.0.contains("tests FAILED on attempt 1 of 3") && first.0.contains("failure run 1"), "{}", first.0);
+        let second = write("two\n");
+        assert!(second.0.contains("tests FAILED on attempt 2 of 3") && second.0.contains("failure run 2"), "{}", second.0);
+        let third = write("three\n");
+        assert!(third.0.contains("tests passed after 2 failed runs") && third.0.contains("test-output-ok"), "{}", third.0);
+        assert!(!third.0.contains(TEST_STOP));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn three_failed_test_runs_stop_the_turn_and_block_the_next_change() {
+        let (ctx, dir) = test_ctx("stop", "echo boom; exit 7", 3);
+        let cwd = dir.to_string_lossy().to_string();
+        for i in 1..=3 {
+            let said = dispatch_retry(&ctx, "lead", "write", &serde_json::json!({"path": "a.txt", "text": format!("try {}\n", i), "cwd": &cwd}));
+            assert!(said.0.starts_with("done"), "{}", said.0);
+            if i < 3 {
+                assert!(said.0.contains(&format!("tests FAILED on attempt {} of 3", i)) && !said.0.contains(TEST_STOP), "{}", said.0);
+            } else {
+                assert!(said.0.contains(TEST_STOP) && said.0.contains("failed 3 times") && said.0.contains("boom"), "{}", said.0);
+            }
+        }
+        let before = fs::read_to_string(dir.join("a.txt")).unwrap();
+        let blocked = dispatch_retry(&ctx, "lead", "edit", &serde_json::json!({"path": "a.txt", "old": "try 3", "new": "changed", "cwd": &cwd}));
+        assert!(blocked.0.starts_with(TEST_STOP) && !blocked.1, "{}", blocked.0);
+        assert_eq!(fs::read_to_string(dir.join("a.txt")).unwrap(), before);
+        begin_turn();
+        let fresh = dispatch_retry(&ctx, "lead", "write", &serde_json::json!({"path": "a.txt", "text": "fresh\n", "cwd": &cwd}));
+        assert!(fresh.0.starts_with("done") && fresh.0.contains("tests FAILED on attempt 1 of 3"), "{}", fresh.0);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failing_run_shows_only_the_last_twenty_lines() {
+        let (ctx, dir) = test_ctx("tail", "sh many.sh", 3);
+        fs::write(dir.join("many.sh"), "i=1\nwhile [ $i -le 25 ]; do echo \"line $i\"; i=$((i+1)); done\nexit 1\n").unwrap();
+        let cwd = dir.to_string_lossy().to_string();
+        let said = dispatch_retry(&ctx, "lead", "write", &serde_json::json!({"path": "a.txt", "text": "one\n", "cwd": &cwd})).0;
+        assert!(said.contains("line 6") && said.contains("line 25"), "{}", said);
+        assert!(!said.lines().any(|l| l.trim() == "line 1"), "{}", said);
+        assert_eq!(said.lines().filter(|l| l.trim().starts_with("line ")).count(), 20, "{}", said);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_empty_test_command_runs_nothing() {
+        let (ctx, dir) = test_ctx("empty", "", 3);
+        let cwd = dir.to_string_lossy().to_string();
+        let said = dispatch_retry(&ctx, "lead", "write", &serde_json::json!({"path": "a.txt", "text": "one\n", "cwd": &cwd})).0;
+        assert!(said.starts_with("done") && !said.contains("test_command") && !said.contains("tests "), "{}", said);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_successful_edit_returns_the_test_output() {
+        let (ctx, dir) = test_ctx("edit-output", "echo test-output-ok", 3);
+        let cwd = dir.to_string_lossy().to_string();
+        let first = dispatch_retry(&ctx, "lead", "write", &serde_json::json!({"path": "a.txt", "text": "one\n", "cwd": &cwd}));
+        assert!(first.0.contains("test-output-ok"), "{}", first.0);
+        let edited = dispatch_retry(&ctx, "lead", "edit", &serde_json::json!({"path": "a.txt", "old": "one", "new": "two", "cwd": &cwd}));
+        assert!(edited.0.starts_with("done: edit") && edited.0.contains("tests passed") && edited.0.contains("test-output-ok"), "{}", edited.0);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_edit_does_not_run_the_test_command() {
+        let (ctx, dir) = test_ctx("failed-edit", "touch ran.marker", 3);
+        fs::write(dir.join("a.txt"), "hello from the file\n").unwrap();
+        let cwd = dir.to_string_lossy().to_string();
+        let said = dispatch_retry(&ctx, "lead", "edit", &serde_json::json!({"path": "a.txt", "old": "missing", "new": "x", "cwd": &cwd}));
+        assert!(said.0.contains("does not occur") && !said.0.contains("test_command"), "{}", said.0);
+        assert!(!dir.join("ran.marker").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_read_never_runs_the_test_command() {
+        let (ctx, dir) = test_ctx("read-only", "touch ran.marker", 3);
+        fs::write(dir.join("a.txt"), "hello from the file\n").unwrap();
+        let cwd = dir.to_string_lossy().to_string();
+        let said = dispatch_retry(&ctx, "lead", "read", &serde_json::json!({"path": "a.txt", "cwd": &cwd}));
+        assert!(said.0.contains("hello from the file") && !said.0.contains("test_command"), "{}", said.0);
+        assert!(!dir.join("ran.marker").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_cluster_part_has_no_test_loop_until_its_profile_enables_one() {
+        let (ctx, dir) = test_ctx("cluster-part", "echo project-test-ok", 3);
+        let profiles = dir.join(".penelope/clusters/profiles");
+        fs::create_dir_all(&profiles).unwrap();
+        fs::write(dir.join(".penelope/clusters/c1.json"), r#"{"id":"c1","profile":"part-profile"}"#).unwrap();
+        let cwd = dir.to_string_lossy().to_string();
+        begin_turn();
+        let off = crate::clusters::with_cluster("c1", || dispatch_retry(&ctx, "worker", "write",
+            &serde_json::json!({"path": "a.txt", "text": "one\n", "cwd": &cwd})));
+        assert!(off.0.starts_with("done") && !off.0.contains("project-test-ok") && !off.0.contains("test_command"), "{}", off.0);
+        fs::write(profiles.join("part-profile.json"), r#"{"test_command":"echo profile-test-ok","test_attempts":2}"#).unwrap();
+        begin_turn();
+        let on = crate::clusters::with_cluster("c1", || dispatch_retry(&ctx, "worker", "write",
+            &serde_json::json!({"path": "a.txt", "text": "two\n", "cwd": &cwd})));
+        assert!(on.0.contains("profile-test-ok") && on.0.contains("tests passed"), "{}", on.0);
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn a_confirmed_command_is_kept_hashed_for_the_project() {

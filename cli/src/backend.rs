@@ -93,11 +93,16 @@ You have no search tools of your own, only tree and outline for a first look.",
         Some(rest) if home.len() > 1 => format!("~{}", rest),
         _ => cwd,
     };
+    let tests = match ctx.cfg["test_command"].as_str().map(str::trim).filter(|c| !c.is_empty()) {
+        Some(command) => format!(" After a successful write or edit, Penelope runs `{}` and appends the last 20 lines to the tool result. \
+When a result says TEST LOOP STOPPED, call no more tools in that turn: answer with the failure, what you changed and what remains open.", command),
+        None => String::new(),
+    };
     format!("You work inside Penelope, a small agent harness. The working directory is {cwd}. It is the project, also when a folder \
 above it holds a repository. Paths are relative to it, and ~ stands for the home folder. Rules: \
 1. Use the tool run for every shell command. Long output comes back condensed by a weaker model. Ask run_detail for raw lines only when you need them. \
 {} \
-3. Use read for a file you are about to change, then edit for a part of it or write for the whole file. A change waits for the user's yes. \
+3. Use read for a file you are about to change, then edit for a part of it or write for the whole file. A change waits for the user's yes.{tests} \
 4. For a task with three steps or more, keep the list of steps current with plan. \
 5. When the user states a rule, a preference or a fact to keep, store it with memory_note. At the start of a task, look up the topic with memory_go. \
 6. To look at a web page as it is drawn or at a picture use the tool screen, never a screenshot of the terminal. It drives ScreenCodec and moves Penelope's cursor before a click; cursor moves her pointer without a click. \
@@ -105,7 +110,7 @@ above it holds a repository. Paths are relative to it, and ~ stands for the home
 8. A rule that binds every later session goes to the shared memory: memory_note with scope global. A fact of this project stays in the project. \
 9. When a fixed command would save steps next time, write it as a tool with tool_new; a call runs through run and asks like run. \
 10. After a change, hand the claim and the command output to check. Report what passed and what is still open. \
-11. Answer briefly. Today is {today} (UTC).", look, cwd = cwd,
+11. Answer briefly. Today is {today} (UTC).", look, cwd = cwd, tests = tests,
             today = &crate::sessions::stamp(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0))[..10])
 }
 
@@ -151,6 +156,7 @@ impl Chat {
             return Err(format!("The main model is {} 1, one of the Laertes families. It is in training and cannot answer yet. \
 Choose a hosted model: penelope provider use NAME --role main.", family));
         }
+        crate::tools::begin_turn();
         self.cancel.store(false, Ordering::SeqCst);
         let (user, masked) = crate::tools::guard_count(ctx, user);
         let user = user.as_str();

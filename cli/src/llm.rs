@@ -344,6 +344,7 @@ pub fn run_loop_with(model: &Value, system: &str, history: &mut Vec<Value>, tool
             on_text(&reply.text);
         }
         let mut results = Vec::new();
+        let mut stop_text: Option<String> = None;
         for call in &reply.calls {
             let (text, ok) = if call.args.is_null() {
                 ("the arguments of this call were no valid JSON. Send the call again with a JSON object.".to_string(), false)
@@ -351,9 +352,32 @@ pub fn run_loop_with(model: &Value, system: &str, history: &mut Vec<Value>, tool
                 exec(call)
             };
             usage.steps += 1;
-            results.push((call.id.clone(), text, ok));
+            if crate::tools::is_test_stop(&text) {
+                if stop_text.is_none() {
+                    stop_text = Some(text.clone());
+                }
+                // The model gets one more answer, without tools: it explains the failure instead of trying another edit.
+                results.push((call.id.clone(), format!("{}\n\nDo not call another tool in this turn. Write the final answer now: name the test command, \
+                                                       the failure and what remains open.", text), false));
+            } else {
+                results.push((call.id.clone(), text, ok));
+            }
         }
         history.extend(result_messages(&kind, &results));
+        if let Some(stop) = stop_text {
+            let final_reply = match chat_cancel(model, system, history, &[], cancel) {
+                Ok(reply) => reply,
+                Err(e) if e == "stopped" => return Err(e),
+                Err(e) => return Ok(format!("{}\n\nThe final answer could not be written: {}", stop, e)),
+            };
+            usage.tokens_in += final_reply.tokens_in;
+            usage.tokens_out += final_reply.tokens_out;
+            history.push(final_reply.message);
+            if !final_reply.text.trim().is_empty() {
+                return Ok(final_reply.text);
+            }
+            return Ok(stop);
+        }
     }
     Err(format!("stopped after {} rounds of tool calls", rounds))
 }
@@ -373,6 +397,36 @@ mod tests {
         assert_eq!(effort(&json!({"kind": "openai", "base_url": "https://api.openai.com/v1", "model": "gpt-4o", "effort": "high"})), None);
         assert_eq!(effort(&json!({"kind": "anthropic", "model": "claude-3-5-sonnet", "effort": "high"})), None);
         assert_eq!(effort(&json!({"kind": "openai", "base_url": "https://opencode.ai/zen/go/v1", "model": "mimo-v2.6-flash", "effort": "high"})), None);
+    }
+
+    #[test]
+    fn a_test_loop_stop_ends_the_loop_with_one_answer_without_tools() {
+        std::env::set_var("PENELOPE_TEST_KEY_STOP", "test-key-stop-0123456789");
+        let (address, seen) = fake::serve(vec![
+            (200, json!({"choices": [{"finish_reason": "tool_calls", "message": {"role": "assistant", "content": null, "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "edit", "arguments": "{}"}}]}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 2}}).to_string()),
+            (200, json!({"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "Tests failed three times; the parser still fails."}}],
+                "usage": {"prompt_tokens": 20, "completion_tokens": 5}}).to_string()),
+        ]);
+        let model = json!({"kind": "openai", "base_url": format!("{}/v1", address), "model": "gpt-6.2-astra", "api_key_env": "PENELOPE_TEST_KEY_STOP"});
+        let mut history = vec![json!({"role": "user", "content": "fix it"})];
+        let tools = vec![json!({"name": "edit", "description": "", "inputSchema": {"type": "object"}})];
+        let mut usage = Usage::default();
+        let mut calls = 0;
+        let answer = run_loop(&model, "", &mut history, &tools, 4, None, &mut usage, &mut |_| {
+            calls += 1;
+            (format!("{}: STOP. `cargo test` failed 3 times.", crate::tools::TEST_STOP), false)
+        }, &mut |_| {}).unwrap();
+        assert_eq!(answer, "Tests failed three times; the parser still fails.");
+        assert_eq!(calls, 1);
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        assert!(seen[1].body.get("tools").is_none(), "{}", seen[1].body);
+        let messages = seen[1].body["messages"].as_array().unwrap();
+        let last = messages.iter().rev().find(|m| m["role"] == "tool").unwrap();
+        let result = last["content"].as_str().unwrap();
+        assert!(result.contains(crate::tools::TEST_STOP) && result.contains("Write the final answer"), "{}", result);
     }
 
     #[test]

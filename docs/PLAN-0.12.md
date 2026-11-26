@@ -181,12 +181,14 @@ Still open: white-on-white/off-screen/tiny-font detection, a link-host warning, 
 - Acceptance met by 8 auth tests, 6 account/2FA tests and a live new-address test. Recovery codes and a real mailbox are
   still open.
 
-#### G23 — Test loop after an edit
+#### G23 — Test loop after an edit (built)
 
 - `test_command` in `config.json` (for example `cargo test`) runs after `write`/`edit`; the model sees the last 20 lines.
-- A per-turn counter stops after three failed test runs and reports the exact command and failure.
-- The loop is opt-in; a project without `test_command` keeps the current behaviour.
-- Acceptance: one failing edit is repaired in a live task; the fourth failure stops instead of looping.
+- A per-turn counter stops after `test_attempts` (default three) failed test runs and reports the exact command and failure.
+- The loop is opt-in; a project without `test_command` keeps the current behaviour. A cluster part uses its profile's
+  `test_command`, so the loop stays off there by default.
+- Acceptance in tests: a command that fails twice then passes, three failures stop the turn, a read runs nothing, and
+  the HTTP loop answers once without tools after the stop. A live failing edit repair is still open.
 - Effort: M (3–5 days).
 
 #### G24 — LSP tool
