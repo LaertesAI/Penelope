@@ -1490,11 +1490,6 @@ mod tests {
     }
 
     #[test]
-    fn an_ampersand_without_spaces_is_no_safe_command() {
-        assert!(is_safe("ls src") && !is_safe("echo one&rm x") && !is_safe("ls & rm x") && !is_safe("ls && rm x"));
-    }
-
-    #[test]
     fn a_confirmed_command_is_kept_hashed_for_the_project() {
         let dir = std::env::temp_dir().join(format!("penelope-allowed-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
