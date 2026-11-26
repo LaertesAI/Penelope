@@ -345,7 +345,25 @@ pub fn extract_zip(archive: &Path, target: &Path) -> Result<Unpacked, String> {
     result
 }
 
+/// The real path of a target that may not exist yet: its nearest existing ancestor is canonicalized and the rest
+/// is joined again. The base is canonical too, so on macOS (/var is /private/var) and Windows (\\?\C:\) both
+/// sides have the same form.
+fn real_target(target: &Path) -> PathBuf {
+    let mut rest = Vec::new();
+    let mut at = target;
+    loop {
+        if let Ok(real) = std::fs::canonicalize(at) {
+            return rest.iter().rev().fold(real, |p, part| p.join(part));
+        }
+        match (at.parent(), at.file_name()) {
+            (Some(parent), Some(name)) => { rest.push(name.to_os_string()); at = parent; }
+            _ => return target.to_path_buf(),
+        }
+    }
+}
+
 fn in_workspace(base: &Path, target: &Path) -> bool {
+    let target = real_target(target);
     let Ok(rel) = target.strip_prefix(base) else { return false; };
     !rel.components().any(|c| matches!(c, Component::ParentDir))
 }
