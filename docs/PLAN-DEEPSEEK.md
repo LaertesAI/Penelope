@@ -148,7 +148,15 @@ These packages decide whether the idea can be shown. Do them in this order.
   `.penelope/clusters/scores.json`. `penelope cluster advise NAME` prints the suggestions.
 - Done when: 4 rejections of 5 for one part print one suggestion that names the part.
 
-### 2.3 Later, each as its own package
+### 2.3 Quorum, shadow and routing — done
+- Result: `d9d9c1a`, `75013b2`, `65f4cb7`. A part or profile may set `quorum: 2`; the second answer uses
+  `second_model` (default weak), a disagreement makes one `decider_model` (default main) call, and the cluster JSON
+  carries `quorum.agreed`/`quorum.escalated`. `shadow_of: MAIN` or `--shadow PROFILE` runs a shadow on the same task in
+  its own worktree, never merges it, and stores the match rate in `.penelope/clusters/shadow.json`, the cluster JSON
+  and the report stream. `validate()` records the model setting per part/task type; `penelope cluster advise NAME
+  --apply` writes the best recorded model into the profile for the next run and refuses a running cluster. 315 tests
+  (302 unit + 13 integration), 0 failed. Open: quorum's second answer has no tools; the shadow runs after the main
+  clusters, not concurrently; there is no score reset.
 - Two small models answer one step, the large model decides only on disagreement (block 6).
 - Shadow cluster: a small cluster does the same task beside the large model, Penelope shows the match rate (block 9).
 - Routing by the score table (block 10), two variants with one winner (block 11), change of a running cluster (block 12).
@@ -232,8 +240,8 @@ These packages decide whether the idea can be shown. Do them in this order.
 ## State on 2026-11-26
 
 `main` has 300 tests (289 unit + 11 integration), 0 failed; 20/20 green runs at Phase 0. PRs #1–#13 carry the
-individual packages, #14 is the integration PR with the clean latest `main`. The cluster packages 1.1–1.10, 2.1–2.2,
-3.1, 3.2 safe core, 4.1–4.4 and the 4.5 draft are built. 2.3 (quorum, shadow cluster, routing), the full 22-check
+individual packages, #14 is the integration PR with the clean latest `main`. The cluster packages 1.1–1.10, 2.1–2.3,
+3.1, 3.2 safe core, 4.1–4.4 and the 4.5 draft are built. The full 22-check
 brief, live GitHub app install/browser sandbox, real Windows/macOS CI and the Laertes plan endpoint are still open.
 
 ## What is still open and needs the owner
