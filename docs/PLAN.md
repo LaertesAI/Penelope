@@ -1,36 +1,43 @@
 # Penelope plan: remaining tools and the orchestration of subagents
 
-Written on 2026-11-24 for version 0.9.0. `ROADMAP.md` lists what is built and what is open. This file says how the
-open parts fit together, in which order they come, and how each one is measured. Nothing in this file is built yet
-unless a row says so. Version 0.10.0 built the 4 rows of tools that carry the word built.
+Written on 2026-11-24 for version 0.9.0, updated for 0.11.0. `ROADMAP.md` lists what is built and what is open. This
+file says how the open parts fit together, in which order they come, and how each one is measured. Version 0.11.0 built
+the contract layer, the eight roles, agents, the shared memory, the brain, the cost view, ScreenCodec and the cursor.
+
+> The current gap audit and the 0.11.1–1.0 sequence are in [`PLAN-0.12.md`](PLAN-0.12.md). This file keeps the
+> architecture and the older 0.13–0.15 outline.
 
 ## Where the harness stands
 
-| Part | State in 0.10.0 |
+| Part | State in 0.11.0 |
 |---|---|
-| Tools of the main model | 22: `run`, `run_detail`, `job_start`, `job_read`, `job_stop`, `fetch`, `web_search`, `read`, `write`, `edit`, `undo`, `find`, `grep`, `tree`, `outline`, `ask_user`, `scout`, `plan`, `memory_go`, `memory_note`, `memory_map`, `skill` |
-| Subagents | 1 kind: `scout`. One task, 10 read-only tools, the weaker model, the main model waits for the report |
-| Who decides | fixed rules: the setting `delegate`, the safe list for commands, `edit_policy` |
-| Learning | notes of the user (`learn`) and lessons from tool calls (`learn_tools`) under the waypoint `tools` |
-| Cost view | characters kept away by `run` and `fetch`, tasks and tokens of scouts, masked items |
+| Tools | 54 built-in tools and tools a project writes itself (`tool_new`). `spec.rs` is the only table; `route::dispatch` checks role and schema |
+| Subagents | 8 roles: lead, scout, worker, judge, tool, condenser, filter, router. An agent written with `$name(...)` runs a plan of role calls; the lead can delegate with the tool `agent` |
+| Who decides | the role gate, the fixed `delegate`, `run_policy` and `edit_policy`; a router model may choose the plan, a privacy model may redact between models |
+| Learning | `learn`, `learn_tools`, consolidation of rules and complaints into the shared memory, and `mark_used` for paths that worked |
+| Cost view | characters kept away, scout tokens, and euro per role and model from `.penelope/usage.json` |
+| Local server | `penelope serve`: search, read, embed, rerank and redact, with a token and a rate limit. `/whoami` verifies a client token. See [`SERVER.md`](SERVER.md) |
+| Plugin and MCP management | plugin add/install/update/remove/allow/deny; standalone MCP servers with add/remove/allow/list/call |
+| Login verification | `penelope auth verify [main|weak|scout]` asks the provider for its model list; Claude uses its auth status |
 
 Version 0.9.0 had three gaps. A change could not be taken back, and a long command blocked the turn. The tool `undo`
 and the 3 job tools of 0.10.0 close these 2 gaps. The third gap is open: only one helper runs at a time, and it can only read.
 
-## Part 1: the remaining tools
+## Part 1: the remaining tools (0.11.0 built most of this)
 
 Each tool is small enough for one version. The column "asks" names the question the person sees.
 
 | Tool | What it does | Who may call it | Asks | Version |
 |---|---|---|---|---|
 | `undo` | Restores the file as it was before the last `write` or `edit`. Every change first copies the old file to `.penelope/undo/N/`. | main model, command `penelope undo` | no, it only goes back | 0.10, built |
+| `unzip` | Unpacks a ZIP below the working folder: zip-slip, symlinks, 10,000 entries, 50 MB per file and 200 MB total are refused. The same extractor installs a plugin ZIP. | main model, worker | "Unpack FILE into DIR?" with the file list | 0.11, built |
 | `edit` with several places | One call carries a list of replacements for one file. One question shows all of them as one diff. | main model, worker | "Change this file?" once | 0.10, built |
 | `grep` with patterns | Regular expressions through the crate `regex`, switched on by a field `regex: true`. Plain text stays the default. | main model, scout, worker | no | 0.10, built |
 | `job_start`, `job_read`, `job_stop` | Starts a command in the background, reads its new output, stops it. For servers, watchers and long builds. Output passes the privacy filter. | main model, worker | like `run`: outside the safe list it asks | 0.10, built |
-| `memory_forget` | Takes back one note by its text. The command `memory unravel` exists, the tool does not. | main model | "Forget this note?" | 0.11 |
-| `git_commit` | Stages named files and commits with a message. Never pushes. Identity comes from the repository, no extra trailer. | main model | "Commit these N files?" with the file list | 0.11 |
-| `scouts` | Several lookups at once, see part 2. | main model | no | 0.11 |
-| `check` | Hands a claim and its evidence to the judge, see part 2. | main model | no | 0.12 |
+| `memory_forget` | Takes back one note by its text. The command `memory unravel` exists, the tool does not. | main model | "Forget this note?" | 0.11, built |
+| `git_commit` | Stages named files and commits with a message. Never pushes. Identity comes from the repository, no extra trailer. | main model | "Commit these N files?" with the file list | 0.11, built |
+| `scouts` | Several lookups at once, see part 2. | main model | no | 0.11, built |
+| `check` | Hands a claim and its evidence to the judge, see part 2. | main model | no | 0.11, built |
 | `work` | Hands a change to a worker in its own worktree, see part 2. | main model | "Apply this change?" with the diff | 0.13 |
 | bridge tools | A bridge to a private research prototype: hand it a document, ask it a question. | main model | before every step that needs minutes on the GPU | 0.15 |
 | `train_plan`, `train_start`, `train_watch` | Proteus, first step: writes a training configuration, starts a run on this PC, reads the loss and the test score. | main model | before every start, with model, data, steps and the time estimate | 0.15 |

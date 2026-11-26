@@ -1,13 +1,14 @@
 # Penelope roadmap
 
-Every part of the plan with its state on 2026-11-24, version 0.10.0. Earlier names: Kate until 0.3.0, Strix Forgery in 0.4.0.
+Every part of the plan with its state on 2026-11-24, version 0.11.0. Earlier names: Kate until 0.3.0, Strix Forgery in 0.4.0.
 The repository is public at https://github.com/LaertesAI/Penelope. Licence: MIT, see [`LICENSE`](../LICENSE).
 
 ## Built
 
 | Part | Where | Evidence |
 |---|---|---|
-| Command `penelope` in Rust | `cli/` | 39 tests |
+| Command `penelope` in Rust | `cli/` | 189 tests |
+| Clusters with parts, profiles, reports, one memory file and a validator | `cli/src/clusters.rs` | 5 tests, live solo cluster, [`CLUSTERS.md`](CLUSTERS.md) |
 | Full screen terminal interface | `cli/src/tui/` | 8 tests, 9 real turns |
 | Text that appears piece by piece | `cli/src/backend.rs`, `cli/src/tui/mod.rs` | 1 test, 15 words arrived in 7 pieces |
 | Privacy filter for the request and for tool output, level `pii` for e-mail addresses and IBANs | `cli/src/privacy.rs`, `cli/src/tools.rs` | 4 tests, a made-up token stayed hidden in 4 real turns |
@@ -18,7 +19,14 @@ The repository is public at https://github.com/LaertesAI/Penelope. Licence: MIT,
 | Log of every lesson step | `cli/src/tools.rs`, `.penelope/lessons.log` | 3 real lines |
 | Sessions with transcripts, tabs in the top row, list on `f2` | `cli/src/sessions.rs`, `cli/src/tui/` | 1 test, 6 real sessions, tab change shown in `docs/screens/tabs.png` |
 | Scout: searches run on the weaker model (`delegate`) | `cli/src/scout.rs`, `cli/src/mcp.rs` | 4 real tasks, 12,218 tokens stayed on Haiku in one request |
-| Web search with four sources | `cli/src/search.rs` | 2 tests, claude and DuckDuckGo tried |
+| Web search with ten sources, cache, canonical ranking and fallback | `cli/src/search.rs` | 9 tests, live 8 results |
+| Server search API client, several SearXNG instances, engine health and an optional reranker | `cli/src/search.rs` | 3 tests, client and `penelope serve` live |
+| Scraper: HTML to Markdown with article, metadata, tables, code and instruction warnings | `cli/src/scrape.rs` | 6 tests |
+| Local server: search, read, embed, rerank, redact, token and limit | `cli/src/server.rs` | 6 tests, live HTTP calls |
+| `unzip` and plugin ZIP install with zip-slip and size checks | `cli/src/files.rs`, `cli/src/plugins.rs` | 3 tests, live ZIP |
+| Plugin update/remove, standalone MCP servers, `auth verify` | `cli/src/plugins.rs`, `cli/src/mcpclient.rs`, `cli/src/auth.rs` | 3 tests, live update/remove/echo/Claude |
+| PDF through local `pdftotext` and a guarded reader API client | `cli/src/scrape.rs` | live PDF, 2 tests, no server |
+| Research: queries, pages, cited report on the weaker model | `cli/src/research.rs` | 1 test, live cited report |
 | File tools read, write, edit, find, grep | `cli/src/files.rs` | 8 tests, 3 real changes after a yes |
 | Provider table with 23 entries, `penelope providers`, `penelope provider use`, the table in the setup | `cli/src/providers.rs`, `cli/src/setup.rs`, [`PROVIDERS.md`](PROVIDERS.md) | 2 tests, every address read in the provider's documentation on 2026-11-24, no real provider call |
 | Backend kind `anthropic`: the Messages API with a tool loop, for main model, weaker model and scout | `cli/src/llm.rs`, `cli/src/backend.rs`, `cli/src/weak.rs`, `cli/src/scout.rs` | 2 tests against a stand-in server, no real call |
@@ -47,7 +55,31 @@ The repository is public at https://github.com/LaertesAI/Penelope. Licence: MIT,
 | ScreenCodec as the only picture source | `cli/src/backend.rs` | wired, no run inside the harness yet |
 | Claude subscription through the official `claude` command | `cli/src/backend.rs` | all real runs |
 | Backend kind `openai`: chat completions with a tool loop, API keys, local models | `cli/src/llm.rs` | 2 tests against a stand-in server, no real call |
+| Login for Claude and API providers, Secret Service, file fallback 0600 | `cli/src/auth.rs` | 1 test, live dummy key store/remove |
+| 35 providers, 33 HTTP endpoints | `cli/src/providers.rs` | table test, live OpenCode |
+| Six modes, safe refuses changes | `cli/src/mode.rs`, `cli/src/files.rs` | 2 tests |
+| Tool role and `computer` | `cli/src/route.rs`, `cli/src/tools.rs`, `cli/src/agents.rs` | 1 test, 1 live run |
+| Skills Penelope writes (`skill_new`, from a 5-call turn) | `cli/src/skills.rs` | 1 test, 1 live skill |
+| Leak audit and redirect-free HTTP | `cli/src/audit.rs`, `cli/src/net.rs` | 2 tests, live audit 0 findings |
+| Visible Wayland cursor and uinput click helper | `cli/src/platform.rs`, `cli/src/input.rs`, `cli/tools/uinput-click.c` | 1 test, live counter 0→1→2 |
+| Updater client and blueprint | `cli/src/update.rs`, `docs/AUTOUPDATE.md` | 1 test, no server |
+| Windows branches (cmd, taskkill, clipboard, pointer, PATHEXT) | `cli/src/platform.rs`, `cli/src/jobs.rs` | source only, untested |
 | Brand: hand-drawn weave, lockup, small marks | `brand/` | see `brand/BRAND.md` |
+| One contract table for 54 tools, schema check and role gate | `cli/src/spec.rs`, `cli/src/route.rs` | 4 tests, every name reaches a handler, 3 live calls |
+| Tools Penelope writes for a project | `cli/src/forge.rs` | 2 tests, no shell break-out |
+| Eight roles, a model per role, `provider use --role` | `cli/src/route.rs`, `cli/src/providers.rs` | 1 test, 1 live agent step |
+| Privacy model between the models with a strict JSON contract and a fallback | `cli/src/privacy.rs` | 1 test |
+| Router model for the plan, with fallback to the fixed plan | `cli/src/agents.rs` | 1 test |
+| Agents written with `$name(...)`, limits, budget, cancel | `cli/src/agents.rs` | 3 tests, 1 live one-step run |
+| Crew panel with subagent names, model and state; Laertes families in gold | `cli/src/crew.rs`, `cli/src/tui/view.rs` | screen picture, 1 live run |
+| Shared memory, consolidation, complaint feedback, used-path count | `cli/src/memory.rs`, `cli/src/tools.rs` | 2 tests |
+| Brain graph and Obsidian vault | `cli/src/brain.rs` | 1 test, screen picture |
+| Cost in euro per role and model | `cli/src/cost.rs` | 1 test, live rows |
+| Real ScreenCodec actions, desktop capture, own cursor | `cli/src/screen.rs`, `cli/src/cursor.rs` | 2 tests, 122 lines read, live click 0→1, pointer moved |
+| Plugin MCP tools for HTTP models | `cli/src/mcpclient.rs` | 1 test |
+| Plugin install from git and take-over on first start | `cli/src/plugins.rs` | 2 tests |
+| Tools `session_search`, `http_request`, `json_query`, `git_diff`, `clipboard`, `agent` | `cli/src/tools.rs` | 1 test |
+| Startup animation | `cli/src/startup.rs` | 1 test |
 
 ## Next
 
@@ -56,6 +88,9 @@ subagents and 4 ways they work together. Version 0.10 of that plan is built.
 
 | Part | First step |
 |---|---|
+| A long-lived MCP client for stateful plugin servers | one process per server with a request id and a timeout, as in `screen.rs` |
+| Real desktop click on Wayland | ydotool with a running ydotoold, then `desktop_click` on a test window |
+| A progress view for `plugin install` | a background job with the git output in the transcript |
 | Allow rule for a single tool of a plugin | a list of tool names next to `"allow"` in `plugins.json` |
 | One real call per HTTP kind | set one key, run `penelope ask` once on the cheapest model of that provider, write down tokens and answer |
 | Text piece by piece for the kinds `openai` and `anthropic` | read the event stream of both formats, today whole blocks arrive |

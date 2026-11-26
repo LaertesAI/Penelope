@@ -15,6 +15,29 @@ pub struct Memory {
     paths: Value,
 }
 
+/// The memory every project of this PC shares: rules and facts that outlive one session. It lies outside the project
+/// folder, so a session in another repository reads the same notes.
+pub fn global_dir() -> PathBuf {
+    let home = crate::platform::home();
+    let dir = home.join(".penelope").join("global-memory");
+    let _ = fs::create_dir_all(&dir);
+    dir
+}
+
+/// A memory folder that does not belong to one project.
+pub fn open_global() -> Memory {
+    Memory::open_at(&global_dir())
+}
+
+/// The shared memory of this PC, or the folder named by `global_memory` in the settings. A test and a session with a
+/// separate home both stay inside their own folder.
+pub fn shared(ctx: &crate::config::Ctx) -> Memory {
+    match ctx.cfg["global_memory"].as_str().filter(|p| !p.trim().is_empty()) {
+        Some(p) => Memory::open_at(Path::new(p)),
+        None => Memory::open_at(&global_dir()),
+    }
+}
+
 /// Languages and topics that get their own branch when a note is filed without a path.
 const BRANCHES: &[(&str, &[&str])] = &[
     ("rust", &["rust", "cargo", "crate", "borrow"]),
@@ -52,6 +75,14 @@ const STOP: &[&str] = &[
     "zu", "den", "dem", "des", "nicht", "auch", "ich", "wir", "soll", "bitte", "to", "of", "on", "at", "it", "be", "do", "we", "my",
 ];
 
+/// True for notes that read like a lasting rule: words that bind every later session.
+pub fn scope_for(text: &str) -> &'static str {
+    let t = text.to_lowercase();
+    let markers = ["always", "never", "from now on", "by default", "whenever", "prefer", "remember that", "keep in mind",
+                   "immer", "nie ", "ab jetzt", "grundsätzlich", "standardmäßig", "bevorzuge", "regel:", "rule:", "convention", "style guide"];
+    if markers.iter().any(|m| t.contains(m)) { "global" } else { "project" }
+}
+
 fn signature(text: &str) -> String {
     let mut w = words(text);
     w.sort();
@@ -61,7 +92,11 @@ fn signature(text: &str) -> String {
 
 impl Memory {
     pub fn open(root: &Path) -> Memory {
-        let dir = root.join("memory");
+        Memory::open_at(&root.join("memory"))
+    }
+
+    pub fn open_at(dir: &Path) -> Memory {
+        let dir = dir.to_path_buf();
         let _ = fs::create_dir_all(dir.join("notes"));
         let read = |name: &str, default: Value| -> Value {
             fs::read_to_string(dir.join(name)).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(default)
@@ -69,6 +104,105 @@ impl Memory {
         let map = read("map.json", json!({"": {"title": "start", "signs": [], "children": []}}));
         let paths = read("paths.json", json!({}));
         Memory { dir, map, paths }
+    }
+
+    /// The children of a waypoint, sorted, for the graph and the Obsidian vault.
+    pub fn kids(&self, id: &str) -> Vec<String> {
+        let mut kids = self.children(id);
+        kids.sort();
+        kids
+    }
+
+    /// The title of a waypoint: the last part of its id.
+    pub fn title(&self, id: &str) -> String {
+        if id.is_empty() { "start".to_string() } else { id.rsplit('/').next().unwrap_or(id).to_string() }
+    }
+
+    /// The note lines of one waypoint, without the markdown dash.
+    pub fn notes_at(&self, id: &str) -> Vec<String> {
+        fs::read_to_string(self.note_file(id)).map(|b| b.lines().filter_map(|l| l.strip_prefix("- ").map(str::to_string)).collect()).unwrap_or_default()
+    }
+
+    /// Every waypoint, parents before children, for the gate of a recall.
+    pub fn waypoints(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut stack = vec![String::new()];
+        while let Some(id) = stack.pop() {
+            for c in self.children(&id).into_iter().rev() {
+                stack.push(c);
+            }
+            if !id.is_empty() {
+                out.push(id);
+            }
+        }
+        out
+    }
+
+    /// The top of the map as a few lines: what a system prompt needs to know where notes exist. No note text.
+    pub fn index(&self, max: usize) -> String {
+        let mut rows: Vec<(String, usize)> = Vec::new();
+        for id in self.waypoints() {
+            if id.matches('/').count() > 1 {
+                continue;
+            }
+            let notes = fs::read_to_string(self.note_file(&id)).map(|b| b.lines().filter(|l| l.starts_with("- ")).count()).unwrap_or(0);
+            if notes > 0 {
+                rows.push((id, notes));
+            }
+        }
+        rows.sort();
+        let mut out = String::new();
+        for (id, n) in rows.into_iter().take(max) {
+            out.push_str(&format!("{} ({} notes) · memory_go \"{}\"\n", id, n, id.replace('/', " ")));
+        }
+        out
+    }
+
+    /// Counts one successful walk for every waypoint on the way. The brain shows a hot waypoint with `×n`, so the map
+    /// learns which paths lead to answers that worked.
+    pub fn mark_used(&self, trail: &[String]) {
+        if trail.is_empty() {
+            return;
+        }
+        let path = self.dir.join("uses.json");
+        let mut v: serde_json::Value = fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_else(|| json!({}));
+        for id in trail {
+            v[id] = json!(v[id].as_u64().unwrap_or(0) + 1);
+        }
+        let _ = fs::write(path, serde_json::to_string_pretty(&v).unwrap());
+    }
+
+    /// How often a successful turn went through this waypoint.
+    pub fn uses(&self, id: &str) -> u64 {
+        fs::read_to_string(self.dir.join("uses.json")).ok().and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .map(|v| v[id].as_u64().unwrap_or(0)).unwrap_or(0)
+    }
+
+    /// Removes one note by its text. Returns the waypoint it was filed at.
+    pub fn forget(&mut self, text: &str) -> Option<String> {
+        let text = text.trim();
+        if text.is_empty() {
+            return None;
+        }
+        for id in self.waypoints() {
+            let file = self.note_file(&id);
+            let Ok(body) = fs::read_to_string(&file) else { continue };
+            let target = format!("- {}", text);
+            if !body.lines().any(|l| l == target) {
+                continue;
+            }
+            let kept: Vec<&str> = body.lines().filter(|l| *l != target).collect();
+            let _ = fs::write(&file, kept.join("\n") + "\n");
+            let mut journal = self.journal();
+            if let Some(at) = journal.iter().rposition(|v| v["id"].as_str() == Some(id.as_str()) && v["line"].as_str() == Some(text)) {
+                journal.remove(at);
+                let _ = fs::write(self.dir.join("journal.json"), serde_json::to_string_pretty(&journal).unwrap());
+            }
+            self.paths = json!({});
+            self.save();
+            return Some(id);
+        }
+        None
     }
 
     fn save(&self) {
@@ -329,6 +463,26 @@ mod tests {
         let lessons = m.branch("tools", 800);
         assert!(lessons.contains("[tools/edit]") && lessons.contains("cargo test --release") && !lessons.contains("anyhow"), "{}", lessons);
         assert!(m.branch("tools", 50).len() <= 50 && m.branch("missing", 800).is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn forget_index_and_the_scope_of_a_rule() {
+        let root = std::env::temp_dir().join(format!("penelope-memory-index-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let mut m = Memory::open(&root);
+        m.note("rust/errors", "Use anyhow for errors.");
+        m.note("rust/errors", "No unwrap in library code.");
+        m.note("rust/build", "cargo test --release is the fast check.");
+        let index = m.index(10);
+        assert!(index.contains("rust/errors (2 notes)") && index.contains("rust/build (1 notes)") && !index.contains("anyhow"), "{}", index);
+        assert_eq!(m.forget("No unwrap in library code.").as_deref(), Some("rust/errors"));
+        assert!(!m.notes_at("rust/errors").iter().any(|n| n.contains("unwrap")));
+        assert!(m.forget("not there").is_none());
+        m.mark_used(&["rust/errors".to_string(), "rust/errors".to_string()]);
+        assert_eq!(m.uses("rust/errors"), 2);
+        assert_eq!(scope_for("Always use tabs in Rust."), "global");
+        assert_eq!(scope_for("The build uses cargo."), "project");
         let _ = fs::remove_dir_all(&root);
     }
 }

@@ -5,7 +5,6 @@
 use crate::config::Ctx;
 use serde_json::{json, Value};
 use std::fs;
-use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -40,8 +39,7 @@ fn ended(ctx: &Ctx, id: u64) -> Option<String> {
 /// True if the process of a job is still there. The command line of the process has to name the job folder, so a
 /// process id that the system gave to another program does not count.
 fn alive(ctx: &Ctx, id: u64, pid: u64) -> bool {
-    let line = fs::read(format!("/proc/{}/cmdline", pid)).unwrap_or_default();
-    pid > 0 && String::from_utf8_lossy(&line).contains(&*dir(ctx, id).join("exit").to_string_lossy())
+    crate::platform::process_alive(pid, &dir(ctx, id).join("exit").to_string_lossy())
 }
 
 /// "running for 12 s", "ended with exit code 0", "stopped" or "lost" for a job whose process is gone without a trace.
@@ -79,21 +77,45 @@ pub fn start(ctx: &Ctx, command: &str, cwd: &str) -> String {
         Ok(pair) => pair,
         Err(e) => return format!("the job could not start: {}", e),
     };
-    // The outer shell runs the command and then writes its exit code. Its own command line names the exit file.
-    let mut cmd = Command::new("sh");
-    cmd.arg("-c").arg("sh -c \"$0\"; echo $? > \"$1\"").arg(command).arg(folder.join("exit"))
-        .stdin(Stdio::null()).stdout(out).stderr(err).process_group(0);
-    if !cwd.is_empty() {
-        cmd.current_dir(cwd);
-    }
-    let mut child = match cmd.spawn() {
+    #[cfg(unix)]
+    let child = {
+        // The wrapper runs the command and writes its exit code. Its own command line names the exit file, which is how
+        // `alive` recognises the job after the pid may have been reused.
+        use std::os::unix::process::CommandExt;
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("sh -c \"$0\"; echo $? > \"$1\"").arg(command).arg(folder.join("exit"))
+            .stdin(Stdio::null()).stdout(out).stderr(err).process_group(0);
+        if !cwd.is_empty() {
+            cmd.current_dir(cwd);
+        }
+        cmd.spawn()
+    };
+    #[cfg(windows)]
+    let child = {
+        let mut cmd = Command::new("cmd");
+        cmd.arg("/C").arg(command).stdin(Stdio::null()).stdout(out).stderr(err);
+        if !cwd.is_empty() {
+            cmd.current_dir(cwd);
+        }
+        cmd.spawn()
+    };
+    let mut child = match child {
         Ok(c) => c,
         Err(e) => return format!("the job could not start: {}", e),
     };
     let pid = child.id();
     let _ = fs::write(folder.join("meta.json"), json!({"command": command, "cwd": cwd, "pid": pid, "started": now()}).to_string());
+    let exit_file = folder.join("exit");
     std::thread::spawn(move || {
-        let _ = child.wait();          // collects the ended process while this program lives
+        let status = child.wait();          // collects the ended process while this program lives
+        #[cfg(windows)]
+        if let Ok(status) = status {
+            let _ = fs::write(exit_file, status.code().unwrap_or(-1).to_string());
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (&status, &exit_file);
+        }
     });
     // For a moment after the start the system shows no command line for the new process. The check `alive` reads that
     // line, so the start waits up to half a second until the line is there or the job is over.
@@ -139,8 +161,7 @@ pub fn stop(ctx: &Ctx, id: u64) -> String {
         let _ = fs::write(dir(ctx, id).join("exit"), "stopped");
         return format!("job {} was gone already and is marked as stopped", id);
     }
-    let signal = |name: &str| Command::new("kill").args([name, "--", &format!("-{}", pid)]).stdout(Stdio::null()).stderr(Stdio::null()).status();
-    let _ = signal("-TERM");
+    let _ = crate::platform::kill_tree(pid);
     let mut gone = false;
     for _ in 0..20 {
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -148,10 +169,6 @@ pub fn stop(ctx: &Ctx, id: u64) -> String {
             gone = true;
             break;
         }
-    }
-    if !gone {
-        let _ = signal("-KILL");
-        std::thread::sleep(std::time::Duration::from_millis(200));
     }
     let _ = fs::write(dir(ctx, id).join("exit"), "stopped");
     format!("job {} stopped after {} s{}", id, now().saturating_sub(m["started"].as_u64().unwrap_or(0)), if gone { "" } else { " with the signal KILL" })

@@ -1,14 +1,15 @@
 # Penelope providers
 
-The table in `cli/src/providers.rs` has 23 entries: 1 for the `claude` command and 22 for HTTP endpoints.
-Every address and every variable name was read in the provider's own documentation on 2026-11-24.
-No request from Penelope has reached any of the 22 endpoints. No key was set on the test PC.
-The two wire formats ran against a stand-in server inside the tests and against a stand-in script on this PC.
+The table in `cli/src/providers.rs` has 35 entries: 1 for the `claude` command, 1 for a Laertes family in training and
+33 for HTTP endpoints. Every address and every variable name was read in the provider's own documentation, or in the
+service's own model list, on 2026-11-24. OpenCode Go answered three live runs on that day; the other HTTP endpoints ran
+against stand-in servers only.
 
 ## Commands
 
 ```bash
 penelope providers                                  # the table, with "key set" or "no key" per entry
+penelope models [PROVIDER]                          # the chat models the provider reports, with effort levels
 penelope provider use groq                          # main model on Groq with the example model
 penelope provider use anthropic --role weak --model claude-haiku-5-5
 penelope provider use alibaba-intl --workspace llm-xxx --model qwen-plus
@@ -16,8 +17,25 @@ penelope provider use llamacpp --base-url http://localhost:8080/v1 --role scout
 export GROQ_API_KEY=...                             # the key lives in the environment and nowhere else
 ```
 
-`penelope setup` offers the same 23 entries and a 24th answer `custom` for any other address.
+`penelope setup` offers the same 35 entries and one more answer `custom` for any other address.
 The full screen interface shows the same table with the command `/providers`. `penelope doctor` prints one line per model in use.
+
+## Model lists from the provider
+
+The model screen and `penelope models` ask the provider instead of relying only on the static catalog:
+
+- OpenAI-compatible addresses: `GET BASE/models`, with `Authorization: Bearer KEY` when a key is set. OpenCode Go's
+  endpoint is public; the other entries need their key.
+- Anthropic: `GET BASE/v1/models`, with `x-api-key` and `anthropic-version`.
+- `claude-cli`: there is no list endpoint behind the subscription command, so the three built-in aliases (`sonnet`,
+  `opus`, `haiku`) stay static.
+- The answer is cached at `.penelope/models/<provider>.json`. The picker shows the cache at once and refreshes it in
+  the background; when the provider does not answer, the cache or the static catalog stays in place and the screen
+  names the source.
+- The parser keeps chat models and drops embeddings, speech and image models. It takes `name`/`display_name` as the
+  label and `capabilities.reasoning.effort` or `efforts` as the effort column when the provider sends one. Otherwise
+  the per-family rules in `providers::efforts` decide, and a model with no known field shows `no effort` and receives
+  no parameter.
 
 ## Kinds
 
@@ -26,6 +44,7 @@ The full screen interface shows the same table with the command `/providers`. `p
 | `claude-cli` | the official `claude` command as a child process | none, the command has its own login | MCP server `penelope mcp` |
 | `openai` | `POST BASE/chat/completions` | `Authorization: Bearer KEY` | `tools` with `type: function`, answers carry `tool_calls` |
 | `anthropic` | `POST BASE/v1/messages` | `x-api-key: KEY` and `anthropic-version: 2026-10-21` | `tools` with `input_schema`, answers carry `tool_use` blocks |
+| `laertes` | none, the family is in training | none | none; a role that names it is refused before a request |
 
 ## The table
 
@@ -34,6 +53,18 @@ The full screen interface shows the same table with the command `/providers`. `p
 | `claude-cli` | claude-cli | none | none | `sonnet` | `cli/src/backend.rs` of this repository |
 | `anthropic` | anthropic | `https://api.anthropic.com` | `ANTHROPIC_API_KEY` | `claude-opus-5-5` | https://platform.claude.com/docs/en/api/messages/create and https://platform.claude.com/docs/en/api/versioning |
 | `openai` | openai | `https://api.openai.com/v1` | `OPENAI_API_KEY` | `gpt-6.2-astra` | https://developers.openai.com/api/reference/overview and https://developers.openai.com/api/docs/quickstart |
+| `laertes` | laertes | none | none | `Telemach 1` | the eight families of `Laertes/README.md`; none is trained |
+| `opencode` | openai | `https://opencode.ai/zen/go/v1` | `OPENCODE_API_KEY` | `mimo-v2.6-flash` | the model list and the error text of the service on 2026-11-24; needs `x-opencode-session` |
+| `perplexity` | openai | `https://api.perplexity.ai` | `PERPLEXITY_API_KEY` | `sonar-pro` | https://docs.perplexity.ai/api-reference/chat-completions |
+| `cohere` | openai | `https://api.cohere.ai/compatibility/v1` | `COHERE_API_KEY` | `command-r-plus` | https://docs.cohere.com/docs/compatibility-api |
+| `deepinfra` | openai | `https://api.deepinfra.com/v1/openai` | `DEEPINFRA_API_KEY` | `meta-llama/Llama-3.3-70B-Instruct` | https://deepinfra.com/docs/openai_api |
+| `nebius` | openai | `https://api.studio.nebius.ai/v1` | `NEBIUS_API_KEY` | `meta-llama/Llama-3.3-70B-Instruct` | https://docs.nebius.com/studio/inference/api |
+| `novita` | openai | `https://api.novita.ai/v3/openai` | `NOVITA_API_KEY` | `meta-llama/llama-3.3-70b-instruct` | https://novita.ai/docs/api-reference/model-apis-llm-create-chat-completion |
+| `hyperbolic` | openai | `https://api.hyperbolic.xyz/v1` | `HYPERBOLIC_API_KEY` | `meta-llama/Llama-3.3-70B-Instruct` | https://docs.hyperbolic.xyz/docs/getting-started |
+| `lambda` | openai | `https://api.lambdalabs.com/v1` | `LAMBDA_API_KEY` | `llama3.3-70b-instruct-fp8` | https://docs.lambdalabs.com/public-cloud/on-demand/api |
+| `sambanova` | openai | `https://api.sambanova.ai/v1` | `SAMBANOVA_API_KEY` | `Meta-Llama-3.3-70B-Instruct` | https://docs.sambanova.ai/cloud/docs/get-started/overview |
+| `nous` | openai | `https://inference-api.nousresearch.com/v1` | `NOUS_API_KEY` | `Hermes-3-Llama-3.1-70B` | https://docs.nousresearch.com/docs/api-reference |
+| `github-models` | openai | `https://models.inference.ai.azure.com` | `GITHUB_TOKEN` | `gpt-4o` | https://docs.github.com/en/github-models/use-github-models/prototyping-with-ai-models |
 | `openrouter` | openai | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` | `openai/gpt-5.2` | https://openrouter.ai/docs/quickstart and https://openrouter.ai/docs/api/reference/overview |
 | `alibaba-intl` | openai | `https://{WorkspaceId}.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` | `DASHSCOPE_API_KEY` | `qwen4-max` | https://www.alibabacloud.com/help/en/model-studio/compatibility-of-openai-with-dashscope and https://www.alibabacloud.com/help/en/model-studio/first-api-call-to-qwen |
 | `alibaba-cn` | openai | `https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1` | `DASHSCOPE_API_KEY` | `qwen4-max` | https://help.aliyun.com/zh/model-studio/first-api-call-to-qwen and https://www.alibabacloud.com/help/en/model-studio/regions |
@@ -57,6 +88,14 @@ The full screen interface shows the same table with the command `/providers`. `p
 
 ## Notes per entry
 
+- `perplexity`, `cohere`, `deepinfra`, `nebius`, `novita`, `hyperbolic`, `lambda`, `sambanova`, `nous` and
+  `github-models` are OpenAI-compatible. The model names are examples from the provider's model list; a provider may
+  retire one, so check the list before a run.
+- `opencode`: the service requires an `x-opencode-session` header. `penelope provider use opencode` writes a constant
+  one; the key is `OPENCODE_API_KEY`. The endpoint is OpenAI-compatible and supports tool calls. Prices in the model
+  list are list prices, not a bill for the subscription.
+- `laertes`: this entry does not call anything. It puts one of the eight families into a role so the crew panel can
+  show it in gold as `in training`; a request is refused before it leaves the PC.
 - `alibaba-intl` and `alibaba-cn`: the address holds the workspace of the account, written as `{WorkspaceId}`. The flag
   `--workspace ID` of `penelope provider use` fills it in. The page says a key from one region is rejected in another region with status 401.
 - `alibaba-cn`: the English page lists Beijing with the Singapore host. The Chinese page shows `cn-beijing` 28 times,

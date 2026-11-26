@@ -1,0 +1,139 @@
+//! End-to-end proof for `penelope eval` and `penelope replay` without a real provider.
+//!
+//! The test starts a small local chat-completions endpoint, points a temporary `.penelope` folder at it and runs the
+//! built binary. It proves the command line, the table, the `docs/RUNS.md` write and the read-only replay gate.
+
+use serde_json::{json, Value};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::TcpListener;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::{Arc, Mutex};
+
+struct Seen {
+    path: String,
+    body: Value,
+}
+
+fn fake(replies: Vec<(u16, String)>) -> (String, Arc<Mutex<Vec<Seen>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = format!("http://{}", listener.local_addr().unwrap());
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let log = seen.clone();
+    std::thread::spawn(move || {
+        for (status, reply) in replies {
+            let Ok((stream, _)) = listener.accept() else { return };
+            let mut reader = BufReader::new(stream);
+            let (mut first, mut length) = (String::new(), 0usize);
+            let _ = reader.read_line(&mut first);
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                    break;
+                }
+                if let Some(n) = line.trim().to_lowercase().strip_prefix("content-length:") {
+                    length = n.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut body = vec![0u8; length];
+            let _ = reader.read_exact(&mut body);
+            log.lock().unwrap().push(Seen { path: first.split_whitespace().nth(1).unwrap_or("").to_string(),
+                                            body: serde_json::from_slice(&body).unwrap_or(Value::Null) });
+            let mut stream = reader.into_inner();
+            let _ = write!(stream, "HTTP/1.1 {} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                           status, reply.len(), reply);
+            let _ = stream.flush();
+        }
+    });
+    (address, seen)
+}
+
+fn reply(text: &str, tin: u64, tout: u64) -> (u16, String) {
+    (200, json!({"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": text}}],
+                 "usage": {"prompt_tokens": tin, "completion_tokens": tout}}).to_string())
+}
+
+fn tool_call(name: &str, args: Value, tin: u64, tout: u64) -> (u16, String) {
+    (200, json!({"choices": [{"finish_reason": "tool_calls", "message": {"role": "assistant", "content": null, "tool_calls": [
+        {"id": "call_1", "type": "function", "function": {"name": name, "arguments": args.to_string()}}]}}],
+                 "usage": {"prompt_tokens": tin, "completion_tokens": tout}}).to_string())
+}
+
+fn temp(name: &str) -> PathBuf {
+    let d = std::env::temp_dir().join(format!("penelope-eval-cli-{}-{}", name, std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
+fn root_with_model(d: &Path, address: &str) -> PathBuf {
+    let root = d.join(".penelope");
+    std::fs::create_dir_all(&root).unwrap();
+    let model = json!({"kind": "openai", "base_url": format!("{}/v1", address), "model": "test-model"});
+    let cfg = json!({"main": model, "weak": model, "prices": {"test-model": [1.0, 2.0]}, "eur_per_usd": 0.92,
+                     "edit_policy": "all", "auto_learn": false, "delegate": "off"});
+    std::fs::write(root.join("config.json"), serde_json::to_string_pretty(&cfg).unwrap()).unwrap();
+    root
+}
+
+fn run_bin(args: &[&str]) -> (bool, String, String) {
+    let out = Command::new(env!("CARGO_BIN_EXE_penelope")).args(args).output().unwrap();
+    (out.status.success(), String::from_utf8_lossy(&out.stdout).to_string(), String::from_utf8_lossy(&out.stderr).to_string())
+}
+
+#[test]
+fn help_lists_eval_and_replay() {
+    let (ok, out, err) = run_bin(&["--help"]);
+    assert!(ok, "{} {}", out, err);
+    assert!(out.contains("penelope eval TASKS.jsonl --setup large|large-subagents|cluster|all"), "{}", out);
+    assert!(out.contains("penelope replay ID --model MODEL"), "{}", out);
+}
+
+#[test]
+fn eval_prints_a_table_writes_runs_and_replay_refuses_a_write() {
+    let d = temp("command");
+    let repo = d.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::write(repo.join("README.md"), "# task repo\n").unwrap();
+    let tasks = d.join("tasks.jsonl");
+    std::fs::write(&tasks, format!("{}\n", json!({
+        "id": "write-answer",
+        "prompt": "Create answer.txt with the single word hello.",
+        "setup": {"repo": repo.to_string_lossy()},
+        "check": "grep -qx hello answer.txt"
+    }))).unwrap();
+
+    let (address, seen) = fake(vec![
+        tool_call("write", json!({"path": "answer.txt", "text": "hello\n"}), 100, 10),
+        reply("created answer.txt", 120, 5),
+    ]);
+    let root = root_with_model(&d, &address);
+    let runs = d.join("RUNS.md");
+    let (ok, out, err) = run_bin(&["--root", root.to_str().unwrap(), "eval", tasks.to_str().unwrap(),
+                                   "--setup", "large", "--runs", runs.to_str().unwrap()]);
+    assert!(ok, "{} {}", out, err);
+    assert!(out.contains("large") && out.contains("write-answer: pass") && out.contains("220 in / 15 out"), "{}", out);
+    let doc = std::fs::read_to_string(&runs).unwrap();
+    assert!(doc.contains("| large | 1 | 1 | 220 | 15 |"), "{}", doc);
+    assert_eq!(seen.lock().unwrap().len(), 2);
+    let id = out.lines().find(|l| l.contains("large-")).unwrap().split_whitespace().last().unwrap().to_string();
+    assert!(root.join("eval/runs").join(format!("{}.json", id)).is_file());
+
+    // Replay the stored prompt against the same fake endpoint. A write call must be refused and the file absent.
+    let forbidden = d.join("forbidden.txt");
+    let (address, seen) = fake(vec![
+        tool_call("write", json!({"path": forbidden.to_string_lossy(), "text": "nope"}), 50, 5),
+        reply("I did not write; replay is read-only.", 60, 6),
+    ]);
+    let root = root_with_model(&d, &address);
+    let (ok, out, err) = run_bin(&["--root", root.to_str().unwrap(), "replay", &id, "--model", "test-model"]);
+    assert!(ok, "{} {}", out, err);
+    assert!(out.starts_with("REPLAY IS READ-ONLY") && out.contains("refused: write") && out.contains("110 in / 11 out"), "{}", out);
+    assert!(!forbidden.exists());
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 2);
+    assert_eq!(seen[0].path, "/v1/chat/completions");
+    assert!(seen[1].body["messages"].as_array().unwrap().iter().any(|m| m["role"] == "tool" &&
+        m["content"].as_str().unwrap_or("").contains("replay is read-only")));
+    let _ = std::fs::remove_dir_all(&d);
+}

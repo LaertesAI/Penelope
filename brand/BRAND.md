@@ -17,15 +17,15 @@ pictures are built from. The full set of marks is kept outside this repository.
 
 ## In the terminal
 
-`sh brand/build/term_art.sh` renders four small pictures into `cli/art/`. The interface draws them with half block
-characters, two pixels per character cell.
+The start screen sends `cli/art/penelope_360.png` through the graphics protocol of kitty. The name stays as text below
+it; terminals without the protocol show the name alone. The SVG files in this folder remain the originals for the
+README and the documentation. The old half-block bitmaps are gone.
 
 | Picture | Size in pixels | Where |
 |---|---|---|
 | `weave_22x22.rgb` | 22 by 22 | side panel |
 | `thread_22x22.gray` | 22 by 22 | mask of the loose thread, coloured by the mood |
-| `mark_24x24.rgb` | 24 by 24 | start screen |
-| `word_80x16.rgb` | 80 by 16 | the name on the start screen |
+| `penelope_360.png` | 360 by 360 | the painted picture on the start screen, through the kitty graphics protocol |
 
 Colours of the interface: ink `#15131C`, night `#1E1B28`, raised `#2B2739`, paper `#F6F3EC`, clay `#E8825A`,
 sea `#5FB3E4`, ash `#B5B1C2`, dim `#7C778C`, red `#FF6B6B`. Clay is the terracotta of the mark, made lighter for dark grounds.
