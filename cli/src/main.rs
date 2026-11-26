@@ -315,6 +315,15 @@ fn main() {
                     if id.is_empty() { loom::warn("usage: penelope cluster respawn ID [EXTRA]"); std::process::exit(2); }
                     println!("{}", clusters::respawn(&ctx, &id, &args.iter().skip(3).cloned().collect::<Vec<_>>().join(" ")));
                 }
+                "switch" => {
+                    let sequential = args.iter().any(|a| a == "--sequential");
+                    let kv = args.iter().position(|a| a == "--kv").and_then(|i| args.get(i + 1)).and_then(|v| v.parse().ok())
+                        .unwrap_or(clusters::SWITCH_KV_TOKENS_DESKTOP);
+                    let tokens = args.iter().position(|a| a == "--tokens").and_then(|i| args.get(i + 1)).and_then(|v| v.parse().ok());
+                    let text = args.iter().skip(2).filter(|a| !a.starts_with("--") && a.parse::<usize>().is_err())
+                        .cloned().collect::<Vec<_>>().join(" ");
+                    print!("{}", clusters::switch_text(tokens, &text, sequential, kv));
+                }
                 "advise" => {
                     let apply = args.iter().skip(2).any(|a| a == "--apply");
                     let name = args.iter().skip(2).map(String::as_str)

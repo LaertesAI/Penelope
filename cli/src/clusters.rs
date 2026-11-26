@@ -972,6 +972,36 @@ fn cluster_from(v: &Value) -> Cluster {
     }
 }
 
+/// The context limit of the single-model path: Qwen3-1.7B with the desktop running holds about 28,665 KV tokens
+/// (Paper 35 §7). A task that fits, or that is sequential, goes to one model; only a larger or parallel task goes to
+/// a cluster.
+pub const SWITCH_KV_TOKENS_DESKTOP: usize = 28_665;
+
+/// True means one model, false means a cluster. `tokens` is the estimated context of the task, `sequential` says the
+/// steps cannot run in parallel.
+pub fn switch_decision(tokens: usize, sequential: bool, kv_limit: usize) -> (bool, String) {
+    if sequential {
+        return (true, format!("single model: the task is sequential; a cluster adds orchestration without parallel gain"));
+    }
+    if tokens <= kv_limit {
+        return (true, format!("single model: {} tokens fit the {} token KV limit; a cluster adds tokens without a gain", tokens, kv_limit));
+    }
+    (false, format!("cluster: {} tokens exceed the {} token KV limit", tokens, kv_limit))
+}
+
+/// A rough token estimate for a task text: 4 characters per token, at least one token per non-empty word.
+pub fn estimate_tokens(text: &str) -> usize {
+    let chars = text.chars().count();
+    let words = text.split_whitespace().count();
+    (chars / 4).max(words)
+}
+
+pub fn switch_text(tokens: Option<usize>, text: &str, sequential: bool, kv_limit: usize) -> String {
+    let tokens = tokens.unwrap_or_else(|| estimate_tokens(text));
+    let (single, why) = switch_decision(tokens, sequential, kv_limit);
+    format!("{}\nroute: {}\ntokens: {} (estimated)\nkv limit: {}", why, if single { "single" } else { "cluster" }, tokens, kv_limit)
+}
+
 pub fn list(ctx: &Ctx) -> Vec<Cluster> {
     let mut out = Vec::new();
     let Ok(entries) = fs::read_dir(base(ctx)) else { return out };
@@ -3718,6 +3748,15 @@ mod tests {
         let log = fs::read_to_string(cluster_dir(&ctx, &c.id).join("calls.jsonl")).unwrap();
         assert!(log.contains("run") && !log.contains("10:00"), "the log keeps the hash, not the result: {}", log);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_switch_sends_small_or_sequential_tasks_to_one_model() {
+        assert_eq!(switch_decision(28_665, false, SWITCH_KV_TOKENS_DESKTOP).0, true);
+        assert_eq!(switch_decision(28_666, false, SWITCH_KV_TOKENS_DESKTOP).0, false);
+        assert_eq!(switch_decision(1_000_000, true, SWITCH_KV_TOKENS_DESKTOP).0, true);
+        assert!(switch_text(Some(28_666), "", false, SWITCH_KV_TOKENS_DESKTOP).contains("route: cluster"));
+        assert!(switch_text(None, "short task", false, SWITCH_KV_TOKENS_DESKTOP).contains("route: single"));
     }
 
     fn write_profile(ctx: &Ctx, name: &str, value: Value) {
