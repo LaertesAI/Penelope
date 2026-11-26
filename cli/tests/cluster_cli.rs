@@ -71,10 +71,52 @@ fn run_bin(args: &[&str]) -> (bool, String, String) {
 fn help_names_the_dry_run_and_the_cluster_file() {
     let (ok, out, err) = run_bin(&["--help"]);
     assert!(ok, "{} {}", out, err);
-    assert!(out.contains("penelope cluster run GOAL [--profile NAME] [--dry] [--sequential]"), "{}", out);
-    assert!(out.contains("--dry prints parts, model and an estimate, starts nothing"), "{}", out);
+    assert!(out.contains("penelope cluster run GOAL [--profile NAME] [--shadow PROFILE] [--dry] [--sequential]"), "{}", out);
+    assert!(out.contains("a shadow profile runs beside the first"), "{}", out);
+    assert!(out.contains("prints parts, model and an estimate, starts nothing"), "{}", out);
     assert!(out.contains("penelope cluster advise [NAME]"), "{}", out);
     assert!(out.contains("(built-in, .json or .cluster)"), "{}", out);
+}
+
+#[test]
+fn a_shadow_flag_runs_a_second_cluster_beside_the_main_one() {
+    let d = temp("shadow");
+    let probe = d.join("probe.txt");
+    std::fs::write(&probe, "base\n").unwrap();
+    let (address, _seen) = fake(vec![
+        (200, json!({"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "same answer"}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 2}}).to_string()),
+        (200, json!({"choices": [{"finish_reason": "tool_calls", "message": {"role": "assistant", "content": "",
+            "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "read", "arguments": json!({"path": probe.clone()}).to_string()}}]}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 2}}).to_string()),
+        (200, json!({"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "PASS: main checked"}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 2}}).to_string()),
+        (200, json!({"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "same answer"}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 2}}).to_string()),
+        (200, json!({"choices": [{"finish_reason": "tool_calls", "message": {"role": "assistant", "content": "",
+            "tool_calls": [{"id": "c2", "type": "function", "function": {"name": "read", "arguments": json!({"path": probe}).to_string()}}]}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 2}}).to_string()),
+        (200, json!({"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "PASS: shadow checked"}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 2}}).to_string()),
+    ]);
+    let root = root_with_model(&d, &address);
+    for (name, model) in [("large", "main"), ("small", "weak")] {
+        let profile = json!({
+            "name": name,
+            "workers": [{"name": "one", "role": "scout", "model": model, "task": "Answer the question."}],
+            "validator": {"name": "check", "role": "judge", "model": "judge"},
+            "max_models": 2, "max_depth": 1, "retries": 0, "worktree": false
+        });
+        std::fs::write(root.join(format!("clusters/profiles/{}.json", name)), profile.to_string()).unwrap();
+    }
+    let (ok, out, err) = run_bin(&["--root", root.to_str().unwrap(), "cluster", "run", "--profile", "large",
+                                   "--shadow", "small", "answer", "the", "question"]);
+    assert!(ok, "{} {}", out, err);
+    assert!(out.contains("SHADOW") && out.contains("match 100.0%"), "{}", out);
+    let stored: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(root.join("clusters/shadow.json")).unwrap()).unwrap();
+    assert_eq!(stored["runs"][0]["match_rate"].as_f64(), Some(1.0), "{}", stored);
+    assert_eq!(stored["runs"][0]["outputs"]["matched"].as_u64(), Some(1));
+    let _ = std::fs::remove_dir_all(&d);
 }
 
 #[test]

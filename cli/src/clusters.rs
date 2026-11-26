@@ -31,6 +31,8 @@ static REPORT_LOCK: Mutex<()> = Mutex::new(());
 static MEMORY_LOCK: Mutex<()> = Mutex::new(());
 /// Two clusters may finish a validation at the same moment; the score table is read, changed and written under one lock.
 static SCORE_LOCK: Mutex<()> = Mutex::new(());
+/// Shadow runs append to one `.penelope/clusters/shadow.json`; one writer at a time.
+static SHADOW_LOCK: Mutex<()> = Mutex::new(());
 /// The cancel flag of every cluster that is running in this process. `kill()` sets it at once; a watcher on the kill
 /// file reaches a cluster started by another process within 100 ms.
 static CANCELS: Mutex<Vec<(String, Arc<AtomicBool>)>> = Mutex::new(Vec::new());
@@ -2222,7 +2224,11 @@ fn run_cluster_inner(ctx: &Ctx, id: &str, session_before: Option<f64>) -> Result
         }
     }
     if ok && profile.worktree {
-        if profile.validator.is_none() {
+        if c.shadow {
+            // A shadow is a measurement, not a second writer. Its worktree stays for inspection and its patch never
+            // reaches the live tree, not even after a PASS.
+            append_memory(ctx, &c, &format!("\n## shadow\n\nworktree {} was not merged into {}. A shadow only measures the main run.\n", c.worktree, c.project));
+        } else if profile.validator.is_none() {
             ok = false;
             blocked = true;
             c.error = "the worktree was not applied: a profile without a validator cannot answer PASS".to_string();
@@ -2531,9 +2537,32 @@ fn create_plan(ctx: &Ctx, plan: &[PlanCluster]) -> Result<Vec<(String, PlanClust
 
 /// The orchestrator: make a plan, create the clusters and run them, respecting `after` and `parent`.
 pub fn orchestrate(ctx: &Ctx, goal: &str, hint: Option<&str>, parallel: bool) -> Result<String, String> {
+    orchestrate_with(ctx, goal, hint, parallel, None)
+}
+
+/// `orchestrate` with an optional shadow profile. The shadow runs after the main clusters, on the same task, in its own
+/// worktree. Its result is compared with the main run and its files are never merged.
+pub fn orchestrate_with(ctx: &Ctx, goal: &str, hint: Option<&str>, parallel: bool, shadow: Option<&str>) -> Result<String, String> {
     if goal.trim().is_empty() { return Err("NOT started. The cluster goal is empty.".to_string()); }
     let plan = plan(ctx, goal.trim(), hint);
+    // A bad explicit shadow is refused before a cluster file is written or a model is called.
+    if let Some(name) = shadow.map(str::trim).filter(|s| !s.is_empty()) {
+        profile(ctx, name).map_err(|e| format!("--shadow {}: {}", name, e))?;
+        if plan.iter().any(|p| p.parent.is_none() && p.profile == name) {
+            return Err(format!("--shadow {} is the main profile itself; name another profile.", name));
+        }
+    }
     let created = create_plan(ctx, &plan)?;
+    // Resolve the shadow pairs before the first model call, so a bad --shadow name costs nothing. A profile that names
+    // `shadow_of: P` runs beside every top-level plan cluster with profile P.
+    let explicit_target = created.iter().find(|(_, p)| p.parent.is_none()).map(|(id, _)| id.clone());
+    let mut shadow_plan: Vec<(String, Vec<String>)> = Vec::new();
+    for (id, p) in &created {
+        if p.parent.is_some() { continue; }
+        let explicit_for = if Some(id) == explicit_target.as_ref() { shadow } else { None };
+        let targets = shadow_targets(ctx, &p.profile, explicit_for)?;
+        if !targets.is_empty() { shadow_plan.push((id.clone(), targets)); }
+    }
     let mut done: Vec<String> = Vec::new();
     let mut pending: Vec<(String, PlanCluster)> = created.clone();
     // One euro baseline for the whole orchestration: every cluster also answers to the session budget.
@@ -2569,10 +2598,182 @@ pub fn orchestrate(ctx: &Ctx, goal: &str, hint: Option<&str>, parallel: bool) ->
         for (_, p) in &ready { done.push(p.name.clone()); }
         pending.retain(|(_, p)| !ready.iter().any(|(_, r)| r.name == p.name));
     }
+    let mut shadow_lines = Vec::new();
+    for (main_id, targets) in shadow_plan {
+        for name in targets {
+            match run_shadow(ctx, &main_id, &name, Some(session_before)) {
+                Ok((run, _)) => shadow_lines.push(run.line()),
+                Err(e) => shadow_lines.push(format!("SHADOW {} beside {}: NOT run: {}", name, main_id, e)),
+            }
+        }
+    }
     let ids: Vec<String> = created.iter().map(|(id, _)| id.clone()).collect();
     let summary = status_text(ctx, None);
-    Ok(format!("{} clusters started: {}\n\n{}", created.len(), ids.join(", "), summary))
+    let shadows = if shadow_lines.is_empty() { String::new() } else { format!("\n\n{}", shadow_lines.join("\n")) };
+    Ok(format!("{} clusters started: {}\n\n{}{}", created.len(), ids.join(", "), summary, shadows))
 }
+
+fn shadow_path(ctx: &Ctx) -> PathBuf {
+    base(ctx).join("shadow.json")
+}
+
+/// A role that may change files. A shadow with such a role always gets a worktree, even if its profile says otherwise,
+/// because a shadow must never reach the live tree.
+fn writes_files(p: &Profile) -> bool {
+    p.workers.iter().chain(p.validator.iter()).any(|w| matches!(w.role.as_str(), "worker" | "lead"))
+}
+
+/// Profiles that name `main` in `shadow_of`. A malformed profile file is ignored; it is not a reason to stop a run.
+fn declared_shadows(ctx: &Ctx, main: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for name in profile_names(ctx) {
+        if name == main { continue; }
+        if let Ok(p) = profile(ctx, &name) {
+            if p.shadow_of.as_deref() == Some(main) { out.push(name); }
+        }
+    }
+    out
+}
+
+/// The explicit `--shadow` profile plus every profile declared for this main profile.
+fn shadow_targets(ctx: &Ctx, main: &str, explicit: Option<&str>) -> Result<Vec<String>, String> {
+    let mut out: Vec<String> = Vec::new();
+    if let Some(name) = explicit.map(str::trim).filter(|s| !s.is_empty()) {
+        if name == main { return Err(format!("--shadow {} is the main profile itself; name another profile.", name)); }
+        profile(ctx, name).map_err(|e| format!("--shadow {}: {}", name, e))?;
+        out.push(name.to_string());
+    }
+    for name in declared_shadows(ctx, main) {
+        if !out.iter().any(|known| known == &name) { out.push(name); }
+    }
+    Ok(out)
+}
+
+/// One comparison of a main cluster and its shadow. Outputs are compared worker by worker; checks compare the verdict
+/// and, when one side has evidence, the evidence line.
+#[derive(Clone, Debug)]
+struct ShadowRun {
+    main: String,
+    shadow: String,
+    main_profile: String,
+    shadow_profile: String,
+    main_state: String,
+    shadow_state: String,
+    output_matched: usize,
+    output_total: usize,
+    check_matched: usize,
+    check_total: usize,
+    match_rate: f64,
+}
+
+impl ShadowRun {
+    fn value(&self) -> Value {
+        json!({
+            "main": self.main, "shadow": self.shadow,
+            "main_profile": self.main_profile, "shadow_profile": self.shadow_profile,
+            "main_state": self.main_state, "shadow_state": self.shadow_state,
+            "outputs": {"matched": self.output_matched, "total": self.output_total},
+            "checks": {"matched": self.check_matched, "total": self.check_total},
+            "match_rate": self.match_rate, "at": now()
+        })
+    }
+
+    fn line(&self) -> String {
+        format!("SHADOW {} · {} · match {:.1}% · outputs {}/{} · checks {}/{} · files not merged",
+                self.shadow, self.shadow_profile, self.match_rate * 100.0,
+                self.output_matched, self.output_total, self.check_matched, self.check_total)
+    }
+}
+
+/// The worker outputs in profile order. The validator is left out; it is compared through the verdict and evidence.
+fn compared_outputs(ctx: &Ctx, c: &Cluster) -> Vec<String> {
+    let count = profile(ctx, &c.profile).map(|p| p.workers.len()).unwrap_or(c.parts.len());
+    c.parts.iter().take(count).filter(|p| p.role != "human").map(|p| p.output.clone()).collect()
+}
+
+fn compare_shadows(ctx: &Ctx, main: &Cluster, shadow: &Cluster) -> ShadowRun {
+    let first = compared_outputs(ctx, main);
+    let second = compared_outputs(ctx, shadow);
+    let output_total = first.len().max(second.len());
+    let output_matched = (0..output_total).filter(|i| {
+        i < &first.len() && i < &second.len() && answers_agree(&first[*i], &second[*i])
+    }).count();
+    let mut check_total = 1;
+    let mut check_matched = usize::from(main.state == shadow.state);
+    if !main.evidence.trim().is_empty() || !shadow.evidence.trim().is_empty() {
+        check_total += 1;
+        if normalized_answer(&main.evidence) == normalized_answer(&shadow.evidence) { check_matched += 1; }
+    }
+    let total = output_total + check_total;
+    let matched = output_matched + check_matched;
+    ShadowRun {
+        main: main.id.clone(), shadow: shadow.id.clone(),
+        main_profile: main.profile.clone(), shadow_profile: shadow.profile.clone(),
+        main_state: main.state.clone(), shadow_state: shadow.state.clone(),
+        output_matched, output_total, check_matched, check_total,
+        match_rate: if total == 0 { 0.0 } else { matched as f64 / total as f64 },
+    }
+}
+
+fn shadow_detail(run: &ShadowRun) -> String {
+    format!("Shadow run\n\nmain: {} · state {}\nshadow: {} · state {}\nmatch rate: {:.1}% ({}/{} comparisons)\noutputs: {}/{}\nchecks: {}/{}\n\nThe shadow worked in its own worktree. Its files were not merged into the live tree.\n",
+            run.main, run.main_state, run.shadow, run.shadow_state, run.match_rate * 100.0,
+            run.output_matched + run.check_matched, run.output_total + run.check_total,
+            run.output_matched, run.output_total, run.check_matched, run.check_total)
+}
+
+/// Appends one run to `.penelope/clusters/shadow.json`, the evidence the owner reads across projects.
+fn record_shadow(ctx: &Ctx, run: &ShadowRun) -> Result<(), String> {
+    let _guard = SHADOW_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let path = shadow_path(ctx);
+    let mut table = fs::read_to_string(&path).ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({"runs": []}));
+    if !table["runs"].is_array() { table["runs"] = json!([]); }
+    table["updated"] = json!(now());
+    if let Some(runs) = table["runs"].as_array_mut() {
+        runs.push(run.value());
+        while runs.len() > 100 { runs.remove(0); }
+    }
+    fs::create_dir_all(base(ctx)).map_err(|e| format!("cannot make {}: {}", base(ctx).display(), e))?;
+    fs::write(&path, serde_json::to_string_pretty(&table).unwrap())
+        .map_err(|e| format!("cannot write {}: {}", path.display(), e))
+}
+
+/// Runs one shadow profile beside a finished main cluster, compares the two and records the match rate. The shadow is
+/// a top-level sibling, not a child: it does not change the main tree's max_models and it never merges a patch.
+fn run_shadow(ctx: &Ctx, main_id: &str, shadow_name: &str, session_before: Option<f64>) -> Result<(ShadowRun, Cluster), String> {
+    let main = load(ctx, main_id)?;
+    let mut p = profile(ctx, shadow_name)?;
+    if writes_files(&p) { p.worktree = true; }
+    let label = format!("{}-shadow-{}", main.name, shadow_name);
+    let mut s = new_cluster(ctx, &p, &label, &main.task, None, Vec::new(), 0)?;
+    s.shadow = true;
+    s.shadow_of = main.id.clone();
+    save(ctx, &s)?;
+    let _ = run_cluster_inner(ctx, &s.id, session_before);
+    let s = load(ctx, &s.id)?;
+    let main = load(ctx, main_id)?;
+    let run = compare_shadows(ctx, &main, &s);
+    record_shadow(ctx, &run)?;
+    let mut main = main;
+    main.match_rate = Some(run.match_rate);
+    save(ctx, &main)?;
+    let mut shadow = s;
+    shadow.match_rate = Some(run.match_rate);
+    save(ctx, &shadow)?;
+    let detail = shadow_detail(&run);
+    let dir = cluster_dir(ctx, &main.id);
+    let _ = fs::create_dir_all(&dir);
+    let _ = fs::write(dir.join("shadow.txt"), &detail);
+    append_memory(ctx, &main, &format!("\n## shadow · {}\n\n{}", shadow.name, detail));
+    append_memory(ctx, &shadow, &format!("\n## shadow match\n\n{}", detail));
+    stream_note(ctx, &main.id, &run.line());
+    stream_note(ctx, &shadow.id, &run.line());
+    Ok((run, shadow))
+}
+
 
 /// The parts a name refers to: a cluster id or name, a profile, or one part name. Used by `cluster advise NAME`.
 fn part_names_for(ctx: &Ctx, name: &str) -> Vec<String> {
@@ -3656,6 +3857,158 @@ mod tests {
             "worktree": false
         }), "own").unwrap();
         assert_eq!(quorum_of(&own, &own.workers[0]), 1, "a part may turn the profile quorum off");
+    }
+
+    #[test]
+    fn a_declared_shadow_runs_beside_the_main_cluster_and_records_a_full_match() {
+        let (mut ctx, dir) = ctx();
+        let probe = dir.join("hello.txt").to_string_lossy().to_string();
+        let (address, _seen) = crate::llm::fake::serve(vec![
+            (200, text_reply("same answer")),
+            (200, tool_reply("read", json!({"path": probe.clone()}))),
+            (200, text_reply("PASS: the main answer is checked")),
+            (200, text_reply("same answer")),
+            (200, tool_reply("read", json!({"path": probe}))),
+            (200, text_reply("PASS: the shadow answer is checked")),
+        ]);
+        fake_models(&mut ctx, &address);
+        write_profile(&ctx, "large", json!({
+            "name": "large",
+            "workers": [{"name": "one", "role": "scout", "model": "main", "task": "Answer the question."}],
+            "validator": {"name": "check", "role": "judge", "model": "judge"},
+            "max_models": 2, "max_depth": 1, "retries": 0, "worktree": false
+        }));
+        write_profile(&ctx, "small", json!({
+            "name": "small",
+            "workers": [{"name": "one", "role": "scout", "model": "weak", "task": "Answer the question."}],
+            "validator": {"name": "check", "role": "judge", "model": "judge"},
+            "shadow_of": "large", "max_models": 2, "max_depth": 1, "retries": 0, "worktree": false
+        }));
+        assert_eq!(profile(&ctx, "small").unwrap().shadow_of.as_deref(), Some("large"));
+        let said = orchestrate_with(&ctx, "answer the question", Some("large"), false, None).unwrap();
+        assert!(said.contains("SHADOW") && said.contains("match 100.0%"), "{}", said);
+        let clusters = list(&ctx);
+        assert_eq!(clusters.len(), 2, "{}", said);
+        let main = clusters.iter().find(|c| c.profile == "large").unwrap();
+        let shadow = clusters.iter().find(|c| c.shadow).expect("the shadow is stored");
+        assert_eq!((main.state.as_str(), shadow.state.as_str()), ("done", "done"));
+        assert_eq!((shadow.shadow_of.as_str(), main.match_rate, shadow.match_rate),
+                   (main.id.as_str(), Some(1.0), Some(1.0)));
+        let stored: Value = serde_json::from_str(&fs::read_to_string(shadow_path(&ctx)).unwrap()).unwrap();
+        let run = &stored["runs"][0];
+        assert_eq!((run["main"].as_str(), run["shadow"].as_str()), (Some(main.id.as_str()), Some(shadow.id.as_str())));
+        assert_eq!((run["outputs"]["matched"].as_u64(), run["outputs"]["total"].as_u64()), (Some(1), Some(1)));
+        assert_eq!((run["checks"]["matched"].as_u64(), run["checks"]["total"].as_u64()), (Some(2), Some(2)));
+        assert!((run["match_rate"].as_f64().unwrap() - 1.0).abs() < 1e-9);
+        assert!(cluster_dir(&ctx, &main.id).join("shadow.txt").is_file());
+        let memory = fs::read_to_string(memory_path(&ctx, &main.id)).unwrap();
+        assert!(memory.contains("## shadow ·") && memory.contains("not merged"), "{}", memory);
+        let stream = fs::read_to_string(cluster_dir(&ctx, &main.id).join("reports.jsonl")).unwrap();
+        assert!(stream.contains("SHADOW") && stream.contains("match 100.0%"), "{}", stream);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_shadow_that_differs_lowers_the_match_rate() {
+        let (mut ctx, dir) = ctx();
+        let probe = dir.join("hello.txt").to_string_lossy().to_string();
+        let (address, _seen) = crate::llm::fake::serve(vec![
+            (200, text_reply("alpha")),
+            (200, tool_reply("read", json!({"path": probe.clone()}))),
+            (200, text_reply("PASS: the main answer is checked")),
+            (200, text_reply("beta")),
+            (200, tool_reply("read", json!({"path": probe}))),
+            (200, text_reply("PASS: the shadow answer is checked")),
+        ]);
+        fake_models(&mut ctx, &address);
+        write_profile(&ctx, "large", json!({
+            "name": "large",
+            "workers": [{"name": "one", "role": "scout", "model": "main", "task": "Answer the question."}],
+            "validator": {"name": "check", "role": "judge", "model": "judge"},
+            "max_models": 2, "max_depth": 1, "retries": 0, "worktree": false
+        }));
+        write_profile(&ctx, "small", json!({
+            "name": "small",
+            "workers": [{"name": "one", "role": "scout", "model": "weak", "task": "Answer the question."}],
+            "validator": {"name": "check", "role": "judge", "model": "judge"},
+            "shadow_of": "large", "max_models": 2, "max_depth": 1, "retries": 0, "worktree": false
+        }));
+        let said = orchestrate_with(&ctx, "answer the question", Some("large"), false, None).unwrap();
+        assert!(said.contains("outputs 0/1") && said.contains("checks 2/2"), "{}", said);
+        let main = list(&ctx).into_iter().find(|c| c.profile == "large").unwrap();
+        let rate = main.match_rate.expect("the main cluster carries the match rate");
+        assert!((rate - 2.0 / 3.0).abs() < 1e-9, "match rate was {}", rate);
+        let stored: Value = serde_json::from_str(&fs::read_to_string(shadow_path(&ctx)).unwrap()).unwrap();
+        assert_eq!(stored["runs"][0]["outputs"]["matched"].as_u64(), Some(0));
+        assert!((stored["runs"][0]["match_rate"].as_f64().unwrap() - rate).abs() < 1e-9);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_shadow_never_merges_its_files_into_the_live_tree() {
+        let (mut ctx, dir) = ctx();
+        let (address, _seen) = crate::llm::fake::serve(vec![
+            (200, tool_reply("write", json!({"path": "hello.txt", "text": "main\n"}))),
+            (200, text_reply("main wrote hello.txt")),
+            (200, tool_reply("run", json!({"command": "cat hello.txt"}))),
+            (200, text_reply("PASS: main wrote the file")),
+            (200, tool_reply("write", json!({"path": "hello.txt", "text": "shadow\n"}))),
+            (200, text_reply("shadow wrote hello.txt")),
+            (200, tool_reply("run", json!({"command": "cat hello.txt"}))),
+            (200, text_reply("PASS: shadow wrote the file")),
+        ]);
+        fake_models(&mut ctx, &address);
+        write_profile(&ctx, "big", json!({
+            "name": "big",
+            "workers": [{"name": "coder", "role": "worker", "model": "main", "task": "Write hello.txt."}],
+            "validator": {"name": "check", "role": "judge", "model": "judge"},
+            "max_models": 2, "max_depth": 1, "retries": 0
+        }));
+        write_profile(&ctx, "little", json!({
+            "name": "little",
+            "workers": [{"name": "coder", "role": "worker", "model": "weak", "task": "Write hello.txt."}],
+            "validator": {"name": "check", "role": "judge", "model": "judge"},
+            "shadow_of": "big", "max_models": 2, "max_depth": 1, "retries": 0, "worktree": false
+        }));
+        let said = orchestrate_with(&ctx, "write hello.txt", Some("big"), false, None).unwrap();
+        assert!(said.contains("SHADOW"), "{}", said);
+        assert_eq!(fs::read_to_string(dir.join("hello.txt")).unwrap(), "main\n",
+                   "only the main cluster may reach the live tree: {}", said);
+        let shadow = list(&ctx).into_iter().find(|c| c.shadow).expect("the shadow ran");
+        assert_eq!(shadow.state.as_str(), "done");
+        assert!(!shadow.worktree.is_empty(), "a writing shadow always gets its own worktree");
+        assert_eq!(fs::read_to_string(Path::new(&shadow.worktree).join("hello.txt")).unwrap(), "shadow\n");
+        assert!(shadow.match_rate.is_some());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_orchestration_flag_runs_a_shadow_without_a_shadow_of_field() {
+        let (mut ctx, dir) = ctx();
+        let probe = dir.join("hello.txt").to_string_lossy().to_string();
+        let (address, _seen) = crate::llm::fake::serve(vec![
+            (200, text_reply("same answer")),
+            (200, tool_reply("read", json!({"path": probe.clone()}))),
+            (200, text_reply("PASS: the main answer is checked")),
+            (200, text_reply("same answer")),
+            (200, tool_reply("read", json!({"path": probe}))),
+            (200, text_reply("PASS: the shadow answer is checked")),
+        ]);
+        fake_models(&mut ctx, &address);
+        for (name, model) in [("large", "main"), ("small", "weak")] {
+            write_profile(&ctx, name, json!({
+                "name": name,
+                "workers": [{"name": "one", "role": "scout", "model": model, "task": "Answer the question."}],
+                "validator": {"name": "check", "role": "judge", "model": "judge"},
+                "max_models": 2, "max_depth": 1, "retries": 0, "worktree": false
+            }));
+        }
+        let said = orchestrate_with(&ctx, "answer the question", Some("large"), false, Some("small")).unwrap();
+        assert!(said.contains("SHADOW") && said.contains("match 100.0%"), "{}", said);
+        assert_eq!(list(&ctx).iter().filter(|c| c.shadow).count(), 1);
+        let refused = orchestrate_with(&ctx, "answer the question", Some("large"), false, Some("large")).unwrap_err();
+        assert!(refused.contains("main profile itself"), "{}", refused);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
