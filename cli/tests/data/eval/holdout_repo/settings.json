@@ -1,0 +1,15 @@
+{
+ "service": {
+  "name": "atlas",
+  "port": 8080,
+  "tags": [
+   "a",
+   "b"
+  ]
+ },
+ "limits": {
+  "cpu": 2,
+  "memory": 512
+ },
+ "enabled": true
+}

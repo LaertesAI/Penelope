@@ -329,10 +329,42 @@ fn usage_totals(ctx: &Ctx) -> (u64, u64) {
     total
 }
 
+/// The root config with the unattended policies, and the text to put back when the eval returns.
+struct EvalConfig {
+    path: PathBuf,
+    before: Option<String>,
+}
+
+impl Drop for EvalConfig {
+    fn drop(&mut self) {
+        match &self.before {
+            Some(text) => { let _ = fs::write(&self.path, text); }
+            None => { let _ = fs::remove_file(&self.path); }
+        }
+    }
+}
+
+fn widen_eval_config(ctx: &Ctx) -> Result<EvalConfig, String> {
+    let path = ctx.root.join("config.json");
+    let before = fs::read_to_string(&path).ok();
+    let mut cfg: Value = before.as_deref().and_then(|s| serde_json::from_str(s).ok()).unwrap_or_else(|| ctx.cfg.clone());
+    cfg["edit_policy"] = json!("all");
+    cfg["run_policy"] = json!("all");
+    cfg["sandbox"] = json!("bwrap");
+    fs::write(&path, serde_json::to_string_pretty(&cfg).map_err(|e| format!("cannot encode the eval config: {}", e))?)
+        .map_err(|e| format!("cannot write {}: {}", path.display(), e))?;
+    Ok(EvalConfig { path, before })
+}
+
 fn eval_context(ctx: &Ctx, setup: &str) -> Ctx {
     let mut run = ctx.clone();
     // An eval is unattended: a change must happen without a person at the interface. The eval folder is a scratch copy.
     run.cfg["edit_policy"] = json!("all");
+    // The task's own check and the file actions need commands outside the read-only safe list. The sandbox keeps the
+    // rest of the machine read-only, makes only the task folder writable and cuts the network. Both setups get the
+    // same policy, so the table measures the setup and not the permission prompt.
+    run.cfg["run_policy"] = json!("all");
+    run.cfg["sandbox"] = json!("bwrap");
     run.cfg["auto_learn"] = json!(false);
     run.cfg["auto_skills"] = json!(false);
     // Every search belongs to the model under test; no hidden scout on the weak model.
@@ -370,7 +402,7 @@ fn ensure_cluster_profile(ctx: &Ctx) -> Result<(), String> {
         "validator": {"name": "check", "role": "judge", "slot": "small-check",
                       "model": "weak",
                       "task": "Check the coder's evidence against the task. Answer PASS or FAIL with one reason."},
-        "max_models": 2, "max_depth": 1, "max_steps": 8, "retries": 0, "worktree": false
+        "max_models": 2, "max_depth": 1, "max_steps": 8, "retries": 0, "single_model": true, "worktree": false
     });
     fs::write(dir.join(format!("{}.json", CLUSTER_PROFILE)), serde_json::to_string_pretty(&profile).unwrap())
         .map_err(|e| format!("cannot write the eval cluster profile: {}", e))
@@ -558,6 +590,10 @@ fn append_runs_doc(path: &Path, tasks_path: &str, results: &[SetupResult]) -> Re
 
 /// Runs the named setup (or all of them), prints a table and appends the measured table to `runs_path`.
 pub fn eval(ctx: &Ctx, tasks_path: &str, setup: &str, runs_path: Option<&Path>) -> Result<String, String> {
+    // A Claude CLI part reads the config file again in its MCP server. The in-memory change of eval_context is not
+    // enough for that process, so the unattended policies are written to the scratch root for the run and restored
+    // when eval returns, also on an error. The root must be a scratch root; the sandbox keeps the machine read-only.
+    let _config = widen_eval_config(ctx)?;
     let tasks = parse_tasks(Path::new(tasks_path))?;
     let list: Vec<&str> = if setup == "all" { SETUPS.to_vec() } else { vec![setup] };
     for name in &list {
@@ -803,6 +839,36 @@ mod tests {
     }
 
     #[test]
+    fn the_eval_widens_the_root_config_and_restores_it() {
+        let (ctx, d) = ctx("config-guard");
+        let path = ctx.root.join("config.json");
+        fs::write(&path, r#"{"edit_policy":"ask","run_policy":"safe","sandbox":"off"}"#).unwrap();
+        {
+            let _guard = widen_eval_config(&ctx).unwrap();
+            let now: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!((now["edit_policy"].as_str(), now["run_policy"].as_str(), now["sandbox"].as_str()),
+                       (Some("all"), Some("all"), Some("bwrap")));
+        }
+        let after: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!((after["edit_policy"].as_str(), after["run_policy"].as_str(), after["sandbox"].as_str()),
+                   (Some("ask"), Some("safe"), Some("off")));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn an_eval_runs_unattended_in_the_sandbox_without_changing_the_caller() {
+        let (ctx, d) = ctx("unattended");
+        let run = eval_context(&ctx, "large");
+        assert_eq!((run.cfg["edit_policy"].as_str(), run.cfg["run_policy"].as_str(), run.cfg["sandbox"].as_str()),
+                   (Some("all"), Some("all"), Some("bwrap")));
+        assert_eq!(run.cfg["auto_learn"], json!(false));
+        assert_eq!(run.cfg["auto_skills"], json!(false));
+        assert_eq!(ctx.cfg["run_policy"].as_str(), Some("safe"), "the caller keeps its policy");
+        assert_eq!(ctx.cfg["sandbox"].as_str(), Some("off"), "the caller keeps its sandbox");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
     fn the_cluster_setup_uses_orchestrate_with_the_small_profile() {
         let (mut ctx, d) = ctx("cluster");
         let repo = repo(&d);
@@ -815,12 +881,15 @@ mod tests {
         ctx.cfg["prices"] = json!({"test-model": [1.0, 2.0]});
         let parsed = parse_tasks(&file).unwrap();
         let result = run_setup(&ctx, file.to_str().unwrap(), "cluster", &parsed).unwrap();
-        assert_eq!((result.passed(), result.tokens()), (1, (50, 7)));
+        assert_eq!((result.passed(), result.tokens()), (1, (30, 3)));
         assert!(ctx.root.join("clusters/profiles").join(format!("{}.json", CLUSTER_PROFILE)).is_file());
+        let profile: Value = serde_json::from_str(&fs::read_to_string(ctx.root.join("clusters/profiles").join(format!("{}.json", CLUSTER_PROFILE))).unwrap()).unwrap();
+        assert_eq!(profile["single_model"], true);
         let seen = seen.lock().unwrap();
-        assert_eq!(seen.len(), 2);
+        assert_eq!(seen.len(), 1);
         let systems: Vec<String> = seen.iter().map(|s| s.body["messages"][0]["content"].as_str().unwrap_or("").to_string()).collect();
-        assert!(systems.iter().any(|s| s.contains("part of the Penelope cluster")) && systems.iter().any(|s| s.contains("validator part")), "{:?}", systems);
+        assert!(systems.iter().any(|s| s.contains("part of the Penelope cluster")), "{:?}", systems);
+        assert!(!systems.iter().any(|s| s.contains("validator part")), "the one-worker profile with no retry must skip the validator: {:?}", systems);
         let _ = fs::remove_dir_all(&d);
     }
 

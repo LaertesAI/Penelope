@@ -1,0 +1,2 @@
+cli/tests/data/eval/holdout50.jsonl -text
+cli/tests/data/eval/holdout_repo/** -text
