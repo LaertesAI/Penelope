@@ -197,11 +197,16 @@ mod tests {
         let root = std::env::temp_dir().join(format!("penelope-jobs-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         let mut ctx = crate::config::load(&root);
-        assert!(start(&ctx, "echo one; sleep 30", "").starts_with("NOT started. The command is not on the safe list"));          // same check as run
+        // The job runs in sh on Unix and in cmd on Windows, so the line uses the syntax of each shell.
+        #[cfg(not(windows))]
+        let (unsafe_line, line) = ("echo one; sleep 30", "echo one; echo API_TOKEN=q7Lw2ZxP91aaBBcc; sleep 30; echo never");
+        #[cfg(windows)]
+        let (unsafe_line, line) = ("echo one& ping -n 31 127.0.0.1", "echo one& echo API_TOKEN=q7Lw2ZxP91aaBBcc& ping -n 31 127.0.0.1 >nul& echo never");
+        assert!(start(&ctx, unsafe_line, "").starts_with("NOT started. The command is not on the safe list"));          // same check as run
         assert!(ids(&ctx).is_empty());
         ctx.cfg["run_policy"] = json!("all");
-        let started = start(&ctx, "echo one; echo API_TOKEN=q7Lw2ZxP91aaBBcc; sleep 30; echo never", "");
-        assert!(started.starts_with("job 1 started: echo one;"), "{}", started);
+        let started = start(&ctx, line, "");
+        assert!(started.starts_with("job 1 started: echo one"), "{}", started);
         let mut text = String::new();
         for _ in 0..50 {
             text = read(&ctx, 1);

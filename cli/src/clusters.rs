@@ -3269,6 +3269,8 @@ mod tests {
             assert!(out.status.success(), "git {:?}: {}", args, String::from_utf8_lossy(&out.stderr));
         };
         run(&["init", "-q"]);
+        // The Windows runners set core.autocrlf=true globally; the tests compare bytes, so this repository keeps \n.
+        run(&["config", "core.autocrlf", "false"]);
         run(&["config", "user.email", "test@example.test"]);
         run(&["config", "user.name", "Test"]);
         fs::write(dir.join("hello.txt"), "base\n").unwrap();
@@ -3407,7 +3409,8 @@ mod tests {
         let two = new_cluster(&ctx, &p, "two", "edit hello.txt", None, Vec::new(), 0).unwrap();
         assert_ne!(one.worktree, two.worktree);
         assert_eq!(one.cwd, one.worktree);
-        assert!(one.worktree.starts_with(&format!("{}/.penelope/worktrees/", one.project)), "{}", one.worktree);
+        // Path::starts_with compares parts, so C:/work/.penelope\worktrees\one on Windows matches as well.
+        assert!(Path::new(&one.worktree).starts_with(Path::new(&one.project).join(".penelope").join("worktrees")), "{}", one.worktree);
         assert!(one.branch.starts_with("agent/") && branch_exists(&dir, &one.branch));
         fs::write(Path::new(&one.worktree).join("hello.txt"), "edit one\n").unwrap();
         fs::write(Path::new(&two.worktree).join("hello.txt"), "edit two\n").unwrap();
@@ -3443,7 +3446,9 @@ mod tests {
         let out = run_cluster(&ctx, &c.id).unwrap();
         assert!(out.contains("done"), "{}", out);
         let body = seen.lock().unwrap()[1].body.to_string();
-        assert!(body.contains(&c.worktree), "the write went to the worktree, not the live tree: {}", body);
+        // The body is JSON: a Windows path arrives there with every \ escaped as \\.
+        let in_json = json!(c.worktree).to_string();
+        assert!(body.contains(in_json.trim_matches('"')), "the write went to the worktree, not the live tree: {}", body);
         assert_eq!(fs::read_to_string(dir.join("part.txt")).unwrap(), "made by the part\n");
         assert_eq!(fs::read_to_string(Path::new(&c.worktree).join("part.txt")).unwrap(), "made by the part\n");
         let _ = fs::remove_dir_all(&dir);
@@ -3575,7 +3580,9 @@ mod tests {
         std::thread::sleep(Duration::from_millis(400));
         let started = std::time::Instant::now();
         let said = kill(&ctx, &c.id);
-        assert!(said.contains("will stop"), "{}", said);
+        // The cancel reaches the waiting call at once. Where git needs longer to remove the worktree (Windows), the
+        // run has already saved "killed" when kill looks again, and kill reports "stopped" in place of "will stop".
+        assert!(said.contains("will stop") || said.contains("stopped"), "{}", said);
         let out = handle.join().unwrap().unwrap();
         let elapsed = started.elapsed();
         assert!(elapsed < Duration::from_secs(2), "the kill took {:?}: {}", elapsed, out);

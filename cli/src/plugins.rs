@@ -825,7 +825,7 @@ pub fn install(ctx: &Ctx, target: &str) -> String {
     let remote = target.starts_with("https://") || target.starts_with("http://") || target.starts_with("git@") || target.starts_with("ssh://") || target.starts_with("file://");
     if remote && zip_target(target) {
         let name = target.split(['?', '#']).next().unwrap_or(target).trim_end_matches('/');
-        let name = safe_name(name.rsplit('/').next().unwrap_or("plugin").trim_end_matches(".zip"));
+        let name = safe_name(name.rsplit(['/', '\\']).next().unwrap_or("plugin").trim_end_matches(".zip"));
         if name.is_empty() { return "NOT installed. The link has no usable name.".to_string(); }
         return install_zip_url(ctx, target, &name);
     }
@@ -844,7 +844,8 @@ pub fn install(ctx: &Ctx, target: &str) -> String {
         }
         return register(ctx, &path, &checked);
     }
-    let name = target.trim_end_matches('/').trim_end_matches(".git").rsplit(&['/', ':'][..]).next().unwrap_or("plugin");
+    // A file URL on Windows can hold backslashes (file://C:\work\plugin); the last part is the name there too.
+    let name = target.trim_end_matches(['/', '\\']).trim_end_matches(".git").rsplit(&['/', ':', '\\'][..]).next().unwrap_or("plugin");
     let name: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' { c } else { '-' }).collect();
     if name.is_empty() {
         return "NOT installed. The link has no name at its end.".to_string();

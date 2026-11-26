@@ -319,14 +319,27 @@ pub fn url_parts(uri: &str) -> Option<UrlParts> {
 }
 
 /// The path of a `file://` URL, with percent escapes decoded.
+///
+/// Windows paths come in two forms: `file:///C:/dir/a.txt` (the standard) and `file://C:\dir\a.txt` (a path pasted
+/// after the scheme). Both give `C:/dir/a.txt` or `C:\dir\a.txt`, which Windows opens alike.
 pub fn file_uri_path(uri: &str) -> Option<String> {
     let rest = uri.strip_prefix("file://")?;
-    let path = if rest.starts_with('/') {
+    let path = if rest.starts_with('/') || starts_with_drive(rest) {
         rest
     } else {
         &rest[rest.find('/')?..]
     };
-    Some(percent_decode(path))
+    let path = percent_decode(path);
+    if cfg!(windows) && path.starts_with('/') && starts_with_drive(&path[1..]) {
+        return Some(path[1..].to_string());
+    }
+    Some(path)
+}
+
+/// True for `C:`, `C:/...` and `C:\...`: a drive letter of Windows.
+fn starts_with_drive(text: &str) -> bool {
+    let b = text.as_bytes();
+    b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b.len() == 2 || b[2] == b'/' || b[2] == b'\\')
 }
 
 fn percent_decode(text: &str) -> String {
@@ -349,7 +362,10 @@ fn percent_decode(text: &str) -> String {
 }
 
 fn file_uri(path: &Path) -> String {
+    // Windows: C:\dir\a.txt becomes file:///C:/dir/a.txt. The prefix \\?\ of a canonical path is not part of the URL.
     let text = path.to_string_lossy();
+    let text = if cfg!(windows) { text.strip_prefix(r"\\?\").unwrap_or(&text).replace('\\', "/") } else { text.to_string() };
+    let text = if text.starts_with('/') { text } else { format!("/{}", text) };
     let mut out = String::from("file://");
     for byte in text.bytes() {
         if byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'-' | b'_' | b'.' | b'~') {

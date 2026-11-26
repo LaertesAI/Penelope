@@ -188,6 +188,8 @@ mod tests {
             assert!(out.status.success(), "git {:?}: {}", args, String::from_utf8_lossy(&out.stderr));
         };
         run(&["init", "-q"]);
+        // The Windows runners set core.autocrlf=true globally; the test compares bytes, so this repository keeps \n.
+        run(&["config", "core.autocrlf", "false"]);
         run(&["config", "user.email", "t@example.test"]);
         run(&["config", "user.name", "T"]);
         std::fs::write(dir.join("a.txt"), "one\n").unwrap();

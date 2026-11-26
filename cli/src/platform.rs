@@ -15,12 +15,16 @@ pub fn home_str() -> String {
     home().display().to_string()
 }
 
-/// A shell command that runs one line. Unix uses `sh -c`, Windows `cmd /C`.
+/// A shell command that runs one line. Unix uses `sh -c`, Windows `cmd /S /C "line"`.
+///
+/// On Windows the line goes to cmd unchanged. `Command::arg` would escape inner quotes as `\"`, which cmd does not
+/// understand; with `/S` cmd removes only the outer pair of quotes and keeps the rest of the line as written.
 pub fn shell(command: &str) -> Command {
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
         let mut c = Command::new("cmd");
-        c.arg("/C").arg(command);
+        c.raw_arg(format!("/S /C \"{}\"", command));
         c
     }
     #[cfg(not(windows))]
@@ -28,6 +32,21 @@ pub fn shell(command: &str) -> Command {
         let mut c = Command::new("sh");
         c.arg("-c").arg(command);
         c
+    }
+}
+
+/// One word for the line of `shell`: single quotes for sh, double quotes for cmd.
+///
+/// cmd keeps everything between double quotes as one word, so `&`, `|` and `>` inside lose their meaning. A double
+/// quote inside becomes `""`, which programs built with the C runtime of Windows read as one literal quote.
+pub fn shell_quote(value: &str) -> String {
+    #[cfg(windows)]
+    {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    }
+    #[cfg(not(windows))]
+    {
+        crate::forge::quote(value)
     }
 }
 
@@ -67,10 +86,16 @@ pub fn process_alive(pid: u64, marker: &str) -> bool {
         Command::new("tasklist").args(["/FI", &format!("PID eq {}", pid), "/NH"]).output()
             .map(|o| String::from_utf8_lossy(&o.stdout).contains(&pid.to_string())).unwrap_or(false)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
     {
         let line = std::fs::read(format!("/proc/{}/cmdline", pid)).unwrap_or_default();
         String::from_utf8_lossy(&line).contains(marker)
+    }
+    // macOS and the BSDs have no /proc; ps prints the command line of one process.
+    #[cfg(all(unix, not(target_os = "linux")))]
+    {
+        Command::new("ps").args(["-p", &pid.to_string(), "-o", "command="]).output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).contains(marker)).unwrap_or(false)
     }
 }
 
@@ -123,7 +148,7 @@ pub fn pointer_position() -> Option<(i64, i64)> {
         let mut parts = text.split_whitespace();
         return Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?));
     }
-    #[cfg(all(not(windows), not(target_os = "macos")))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         if std::env::var("WAYLAND_DISPLAY").is_ok() && crate::config::which("hyprctl").is_some() {
             let out = Command::new("hyprctl").arg("cursorpos").output().ok()?;
@@ -173,7 +198,7 @@ pub fn move_pointer(x: i64, y: i64, click: bool) -> Result<String, String> {
         }
         Ok(format!("cursor at {}, {}", x, y))
     }
-    #[cfg(all(not(windows), not(target_os = "macos")))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = click;          // the Unix path clicks after the move in cursor.rs
         if std::env::var("WAYLAND_DISPLAY").is_ok() && crate::config::which("hyprctl").is_some() {
