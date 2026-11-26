@@ -1665,7 +1665,7 @@ memory holds a `## quorum · PART` block with both answers and the decision, and
 line per voted part. The decider and second calls are recorded in `usage.json` under `cluster:NAME:quorum`; the
 cluster and session euro budgets are checked after each call. A `.cluster` file may set `quorum=2` at profile level.
 
-Measured: `cd cli && cargo test` → 313 tests (301 unit + 12 integration), 0 failed (2026-11-26). New tests:
+Measured: `cd cli && cargo test` → 314 tests (301 unit + 13 integration), 0 failed (2026-11-26). New tests:
 - agreement: `seen == 4` calls (part, second answer, validator tool + answer), `quorum.agreed == 1`,
   `quorum.escalated == 0`, and the second request does not contain the first answer;
 - disagreement: `seen == 5` calls, `quorum.escalated == 1`, the decider request contains both answers, and the part
@@ -1690,7 +1690,7 @@ evidence when either side has evidence. The match rate is stored in the main clu
 `cluster_status`, in `reports.jsonl` (`SHADOW ...`), in `<main>/shadow.txt`, and in the project file
 `.penelope/clusters/shadow.json` (last 100 runs).
 
-Measured: same `cargo test` run, 313 tests, 0 failed. New tests:
+Measured: same `cargo test` run, 314 tests, 0 failed. New tests:
 - full match: two read-only clusters answer the same, `match_rate == 1.0`, `shadow.json` has outputs 1/1 and checks
   2/2;
 - mismatch: outputs 0/1 and checks 2/2 give `2/3`, and the main cluster carries that rate;
@@ -1715,7 +1715,7 @@ The comparison reads text outputs and evidence, not a semantic diff of the two p
 profile, and it refuses a `.cluster` profile because that file cannot carry a model. If no model row qualifies it
 switches to the other setting (`main`/`weak`). A change never touches a running cluster's loaded profile.
 
-Measured: same `cargo test` run, 313 tests, 0 failed. New tests:
+Measured: same `cargo test` run, 314 tests, 0 failed. New tests:
 - `record_model` keeps the old totals and counts weak 1/5, main 5/5; `best_model` picks main;
 - one lucky run and a model below 60 % are not suggested;
 - `advise_apply` writes `weak -> main` and the profile reloads with `model: main`; a second call says already set;
