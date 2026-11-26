@@ -18,7 +18,8 @@ const SAFE_SUB: &[(&str, &[&str])] = &[
     ("python3", &["--version"]),
     ("rustc", &["--version"]),
 ];
-const UNSAFE_PARTS: &[&str] = &[" rm ", "sudo", ">", "|", ";", "&&", " & ", "`", "$(", " mv ", " dd ", "mkfs", "chmod", "chown", "kill", "shutdown", "reboot"];
+/// A bare & counts too: `echo a&rm x` starts rm in sh and in cmd, with or without spaces around the &.
+const UNSAFE_PARTS: &[&str] = &[" rm ", "sudo", ">", "|", ";", "&", "`", "$(", " mv ", " dd ", "mkfs", "chmod", "chown", "kill", "shutdown", "reboot"];
 
 /// True if a command may run under the policy "safe": a read-only or build command without shell operators.
 pub fn is_safe(command: &str) -> bool {
@@ -1208,6 +1209,11 @@ mod tests {
         assert!(args.ends_with(&["/bin/sh".to_string(), "-c".to_string(), "cargo test".to_string()]));
     }
 
+
+    #[test]
+    fn an_ampersand_without_spaces_is_no_safe_command() {
+        assert!(is_safe("ls src") && !is_safe("echo one&rm x") && !is_safe("ls & rm x") && !is_safe("ls && rm x"));
+    }
 
     #[test]
     fn a_confirmed_command_is_kept_hashed_for_the_project() {

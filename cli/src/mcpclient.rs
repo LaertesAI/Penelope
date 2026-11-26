@@ -922,8 +922,9 @@ for line in sys.stdin:
         }}});
         fs::write(dir.join(".penelope/mcp.json"), serde_json::to_string_pretty(&config).unwrap()).unwrap();
         let out = call(&ctx, "envtest", "where", &json!({})).unwrap();
-        let want = fs::canonicalize(&work).unwrap();
-        assert!(out.contains(&format!("cwd:{}", want.display())), "{}", out);
+        // Both sides are canonicalized: Windows reports C:\Users\RUNNER~1 to Python and \\?\C:\Users\runneradmin here.
+        let got = out.split("cwd:").nth(1).and_then(|r| r.split(" env:").next()).unwrap_or("");
+        assert_eq!(fs::canonicalize(got).ok(), fs::canonicalize(&work).ok(), "{}", out);
         assert!(out.contains("env:arrived"), "{}", out);
         let _ = fs::remove_dir_all(&dir);
     }
