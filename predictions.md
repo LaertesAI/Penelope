@@ -53,3 +53,20 @@ Expected: cluster 50/50, about 0.50 EUR, about 535 s. The change is one profile 
 in `run_cluster_inner`; the eval profile sets the flag, the built-in profiles keep the validator.
 
 Keep rule: hits stay equal and EUR or time falls by at least 15 %, or hits rise by at least the noise threshold.
+
+## Round 1 result
+
+large 50/50, 0.9844 EUR, 307.8 s. cluster 50/50, 0.8451 EUR, 818.9 s. Paired b = 0, c = 0, p = 1.
+Kept: hits +11 against G2 (39 to 50), EUR -17.7 %, time -9.5 %. The target 45/50 and EUR at most large are met;
+the time 818.9 s is above 581 s, so round 2 must cut the time.
+
+## Round 2 result
+
+cluster 50/50, 0.5119 EUR, 372.4 s. large stays 50/50, 0.9844 EUR, 307.8 s.
+Kept: hits equal, EUR -39.4 %, time -54.5 %. The target is met: 50 at least 45, EUR 0.5119 at most 0.9844,
+time 372.4 s at most 1.3 times large (400.1 s) and below the brief's 581 s. The loop stops after 2 rounds on success.
+
+## Hold-out
+
+The hold-out hashes are unchanged. It runs once after the loop stopped, large and cluster, with the same binary.
+The result is added here after the run.
