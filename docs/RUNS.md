@@ -197,3 +197,18 @@ What is already fixed before a real run:
 - Tokens and euro are the delta of `.penelope/usage.json` and `cost.rs` during the task. An unpriced model shows 0.0000
   and is not guessed.
 - Replay offers only read-only tools and refuses `write`, `edit`, `run`, jobs, screen, MCP and clusters by name.
+
+## Eval run 2026-11-26 17:39 · large, large-subagents, cluster
+
+`penelope eval cli/tests/data/eval/tasks50.jsonl --setup all`
+
+Tasks: `cli/tests/data/eval/tasks50.jsonl`. Models: large = claude-sonnet-5-5, large-subagents = claude-sonnet-5-5, cluster = haiku.
+
+| setup | tasks | passed | tokens in | tokens out | euro | wall | run id |
+|---|---|---|---|---|---|---|---|
+| large | 50 | 35 | 286429 | 31026 | 1.2187 | 446.8s | `large-1795711750811` |
+| large-subagents | 50 | 39 | 1599244 | 131051 | 6.2224 | 1637.6s | `large-subagents-1795712197658` |
+| cluster | 50 | 39 | 800191 | 118906 | 1.0265 | 905.1s | `cluster-1795713835239` |
+
+Passed means the task's own check command exited 0 in the task folder. Tokens and euro are the delta of `.penelope/usage.json`
+during the task; euro uses the prices in `config.json` and marks an unpriced model as 0.0000 rather than guessing.
