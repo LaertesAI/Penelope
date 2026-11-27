@@ -125,6 +125,12 @@ pub fn session_budget(ctx: &Ctx) -> f64 {
     ctx.cfg["session_budget_eur"].as_f64().unwrap_or(0.0).max(0.0)
 }
 
+/// All tokens in and out of this folder, from the usage file.
+pub fn total_tokens(ctx: &Ctx) -> u64 {
+    let v: Value = fs::read_to_string(ctx.root.join("usage.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_else(|| json!({"models": {}}));
+    v["models"].as_object().map(|m| m.values().map(|e| e["in"].as_u64().unwrap_or(0) + e["out"].as_u64().unwrap_or(0)).sum()).unwrap_or(0)
+}
+
 /// The euro spent so far in this folder. A model without a price adds nothing and is counted in `unpriced` by `summary`.
 pub fn total_eur(ctx: &Ctx) -> f64 {
     let v: Value = fs::read_to_string(ctx.root.join("usage.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_else(|| json!({"models": {}}));
@@ -220,6 +226,21 @@ mod tests {
         assert!(summary(&ctx).starts_with("2.250 EUR · 2 calls · 1 unpriced"), "{}", summary(&ctx));
         ctx.cfg["monthly_budget_eur"] = json!(10.0);
         assert!(budget_summary(&ctx).contains("left of 10.00"), "{}", budget_summary(&ctx));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_default_table_prices_older_models_at_their_own_list_price() {
+        let dir = std::env::temp_dir().join(format!("penelope-cost-old-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let ctx = crate::config::load(&dir.join(".penelope"));
+        assert_eq!(price(&ctx, "claude-haiku-4-5"), Some((1.0, 5.0)));
+        assert_eq!(price(&ctx, "claude-sonnet-4-6"), Some((3.0, 15.0)));
+        assert_eq!(price(&ctx, "claude-opus-4-8"), Some((5.0, 25.0)));
+        assert_eq!(price(&ctx, "claude-opus-4-1"), Some((15.0, 75.0)));
+        assert_eq!(price(&ctx, "claude-haiku-5-5"), Some((0.1, 0.5)));
+        assert_eq!(price(&ctx, "claude-opus-5-5"), Some((4.0, 20.0)));
+        assert_eq!(price(&ctx, "haiku"), Some((0.1, 0.5)), "the bare claude-cli alias names the current Haiku");
         let _ = fs::remove_dir_all(&dir);
     }
 }

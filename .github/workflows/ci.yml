@@ -26,6 +26,13 @@ jobs:
         working-directory: cli
         run: cargo test --locked
 
+  scripts:
+    name: eval scripts (python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m unittest discover -s scripts/tests -v
+
   audit:
     name: cargo audit
     runs-on: ubuntu-latest

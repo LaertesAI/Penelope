@@ -41,7 +41,7 @@ pub fn tool_specs_for(ctx: &Ctx, role: &str) -> Value {
     let hidden = if role == "lead" { hidden_for_lead(ctx) } else { Vec::new() };
     Value::Array(all.into_iter().filter(|t| {
         let name = t["name"].as_str().unwrap_or("");
-        (allowed.contains(&name) || forged.iter().any(|f| f == name)) && !hidden.contains(&name)
+        (allowed.contains(&name) || forged.iter().any(|f| f == name)) && !hidden.contains(&name) && (role != "lead" || crate::modes::allows(ctx, name))
     }).collect())
 }
 
@@ -50,7 +50,7 @@ pub fn tool_specs_for(ctx: &Ctx, role: &str) -> Value {
 /// scout, "off" has no scout.
 pub fn main_tools(ctx: &Ctx) -> Vec<&'static str> {
     let hidden = hidden_for_lead(ctx);
-    crate::route::allowed_for("lead").into_iter().filter(|t| !hidden.contains(t)).collect()
+    crate::route::allowed_for("lead").into_iter().filter(|t| !hidden.contains(t) && crate::modes::allows(ctx, t)).collect()
 }
 
 /// With "delegate": "auto" every search belongs to the scout, so the lead sees no search tools. "web" sends web
@@ -105,6 +105,7 @@ fn call_raw_inner(ctx: &Ctx, name: &str, a: &Value) -> Result<String, String> {
         "research" => Ok(crate::research::run(ctx, &s("question"), a["depth"].as_str().unwrap_or("standard"),
                                                a["max_pages"].as_u64().unwrap_or(4) as usize, a["recency"].as_str().unwrap_or(""))),
         "deep_research" => Ok(crate::deepresearch::run_tool(ctx, &s("question"), a["max_rounds"].as_u64())),
+        "hand_off" => crate::modes::hand_off(ctx, a),
         "read" => Ok(crate::files::read(ctx, &s("path"), n("offset"), n("limit"), &s("cwd"))),
         "write" => Ok(crate::files::write(ctx, &s("path"), &s("text"), &s("cwd"))),
         "edit" => {
@@ -272,6 +273,7 @@ fn parse_line(raw: &[u8]) -> Result<Option<Value>, Value> {
 }
 
 pub fn serve(ctx: &Ctx) {
+    crate::timing::mark("mcp server up", "");
     let stdin = std::io::stdin();
     let mut out = std::io::stdout();
     // True after a client announced Mitos in `initialize`; then `tools/list` answers with the index.
@@ -300,6 +302,8 @@ pub fn serve(ctx: &Ctx) {
             continue; // a notification
         }
         let method = msg["method"].as_str().unwrap_or("");
+        let _t = crate::timing::span("mcp request");
+        crate::timing::mark("mcp request in", method);
         let result = match method {
             "initialize" => {
                 mitos = crate::mitos::announced(&msg["params"]);
@@ -329,6 +333,7 @@ pub fn serve(ctx: &Ctx) {
                 }
             },
             "tools/call" => {
+                crate::gates::refresh_live();
                 let name = msg["params"]["name"].as_str().unwrap_or("");
                 let args = &msg["params"]["arguments"];
                 let role = crate::route::current_role();

@@ -12,7 +12,7 @@
 use crate::config::Ctx;
 use serde_json::{json, Value};
 use std::fs;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 thread_local! {
     /// How many agent runs are open on this thread. A subagent cannot start another subagent.
@@ -380,7 +380,7 @@ fn claude_task(ctx: &Ctx, spec: &Spec, step: &Step, model: &Value, previous: &st
     let system = format!("You are the {} of a Penelope agent run. {}\nGoal: {}\nYour answer goes back to the run, not to the user. \\
 Report facts, paths and command output. What earlier steps found:\n{}", step.role, thinking_line(&spec.thinking), spec.goal,
                          if previous.is_empty() { "(nothing yet)" } else { previous });
-    let mut cmd = Command::new("claude");
+    let mut cmd = crate::claudecli::print_command(&ctx.cfg);
     cmd.args(["-p", &step.text, "--output-format", "json", "--model", model["model"].as_str().unwrap_or("sonnet"),
               "--append-system-prompt", &system, "--strict-mcp-config", "--mcp-config", &cfg, "--tools", "", "--allowedTools", &allowed.join(",")]);
     if let Some(level) = crate::llm::effort(model) {

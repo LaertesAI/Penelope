@@ -5,7 +5,7 @@ use crate::config::Ctx;
 use crate::mcp;
 use serde_json::{json, Value};
 use std::fs;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 /// The tools a scout may call: everything that looks, nothing that changes a file.
 pub const TOOLS: &[&str] = &["web_search", "research", "fetch", "read", "find", "grep", "tree", "outline", "run", "run_detail", "memory_go", "memory_find"];
@@ -42,7 +42,7 @@ fn claude(ctx: &Ctx, task: &str, cwd: &str) -> Result<Report, String> {
     let cfg = json!({"mcpServers": {"penelope": {"command": exe.to_string_lossy(), "args": ["mcp", "--root", ctx.root.to_string_lossy()], "env": env}}}).to_string();
     let allowed: Vec<String> = TOOLS.iter().map(|t| format!("mcp__penelope__{}", t)).collect();
     let system = SYSTEM.to_string();
-    let mut cmd = Command::new("claude");
+    let mut cmd = crate::claudecli::print_command(&ctx.cfg);
     cmd.args(["-p", task, "--output-format", "json", "--model", model(ctx)["model"].as_str().unwrap_or("haiku"), "--append-system-prompt", &system,
               "--strict-mcp-config", "--mcp-config", &cfg, "--tools", "", "--allowedTools", &allowed.join(",")]);
     if let Some(level) = crate::llm::effort(model(ctx)) {

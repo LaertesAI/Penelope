@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 /// One question to a model described by `{"kind": ..., "model": ...}`. Returns the answer text.
 pub fn ask(model: &Value, system: &str, user: &str) -> Result<String, String> {
@@ -22,7 +22,7 @@ pub fn ask_count(model: &Value, system: &str, user: &str) -> Result<(String, u64
 }
 
 fn ask_claude_cli(model: &Value, system: &str, user: &str) -> Result<String, String> {
-    let mut cmd = Command::new("claude");
+    let mut cmd = crate::claudecli::print_command(&Value::Null);
     cmd.args(["-p", system, "--model", model["model"].as_str().unwrap_or("haiku"), "--output-format", "text", "--tools", "",
               "--strict-mcp-config", "--mcp-config", "{\"mcpServers\":{}}"]);
     if let Some(level) = crate::llm::effort(model) {

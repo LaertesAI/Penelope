@@ -44,6 +44,9 @@ mod memory;
 mod notes;
 mod net;
 mod mode;
+mod timing;
+mod claudecli;
+mod modes;
 mod mods;
 mod platform;
 mod plugins;
@@ -55,6 +58,7 @@ mod privacy_bench;
 mod providers;
 mod research;
 mod deepresearch;
+mod datatable;
 mod route;
 mod scout;
 mod scrape;
@@ -73,6 +77,7 @@ mod tui;
 mod update;
 mod vet;
 mod weak;
+mod workflows;
 mod work;
 
 use std::io::{BufRead, IsTerminal, Write};
@@ -82,6 +87,9 @@ penelope chat --plain         chat line by line, without the full screen interfa
 penelope chat --resume N      go on with session N of the list
 penelope ask \"TEXT\"           one question, one answer
 penelope ask --json \"TEXT\"    the same turn as newline-delimited JSON events
+penelope ask --mode NAME \"TEXT\"
+                              one question in a work mode: chat, work, agents or code
+penelope chat --mode NAME     start the chat in a work mode (shift+tab and /mode switch it)
 penelope init                 create a .penelope folder in this directory
 penelope setup [--here]       answer seven questions: models, who searches, privacy, policies, web search
 penelope providers            list the provider table and say per entry whether its key is set
@@ -225,6 +233,7 @@ penelope work remove NAME     remove the worktree (--force discards changes)
 penelope doctor               check the programs and models Penelope needs";
 
 fn main() {
+    timing::start();
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let mut root_arg = None;
     if let Some(i) = args.iter().position(|a| a == "--root") {
@@ -266,7 +275,11 @@ fn main() {
         loom::say(&format!("saved: {}", root.join("config.json").display()));
         return;
     }
-    let mut ctx = config::load(&config::find_root(root_arg.as_deref()));
+    let mut ctx = {
+        let _t = timing::span("config load");
+        config::load(&config::find_root(root_arg.as_deref()))
+    };
+    claudecli::configure(&ctx.cfg);
     match cmd {
         "tools" => print!("{}", tools_table(&ctx)),
         "tool" => match args.get(1).map(String::as_str) {
@@ -279,6 +292,57 @@ fn main() {
                 }
             }
             _ => print!("{}", forge::list(&ctx)),
+        },
+        "workflow" => match args.get(1).map(String::as_str) {
+            Some("run") if args.len() >= 3 => {
+                let name = args[2].clone();
+                let yes = args.iter().any(|a| a == "--yes");
+                let resume = args.iter().position(|a| a == "--resume")
+                    .and_then(|i| args.get(i + 1)).cloned();
+                let ask = if yes { None } else {
+                    Some(Box::new(|questions: &[serde_json::Value]| {
+                        for q in questions {
+                            println!("{}", q["question"].as_str().unwrap_or("start?"));
+                        }
+                        let mut line = String::new();
+                        std::io::stdin().read_line(&mut line).map_err(|e| e.to_string())?;
+                        Ok(vec![serde_json::json!(line.trim().eq_ignore_ascii_case("y") || line.trim().eq_ignore_ascii_case("yes"))])
+                    }) as Box<dyn FnMut(&[serde_json::Value]) -> Result<Vec<serde_json::Value>, String>>)
+                };
+                let arg_json = match args.iter().position(|a| a == "--args") {
+                    Some(i) => {
+                        let raw = args.get(i + 1).cloned().unwrap_or_default();
+                        match serde_json::from_str::<serde_json::Value>(&raw) {
+                            Ok(v) if v.is_object() => v,
+                            Ok(_) => { loom::warn("--args needs a JSON object"); std::process::exit(2); }
+                            Err(e) => { loom::warn(&format!("--args is not JSON: {}", e)); std::process::exit(2); }
+                        }
+                    }
+                    None => serde_json::json!({}),
+                };
+                let options = workflows::RunOptions { confirm: !yes, ask, args: arg_json, resume_id: resume, ..Default::default() };
+                let path = std::path::Path::new(&name);
+                let out = if path.is_file() { workflows::run(&ctx, path, options) } else { workflows::run_named(&ctx, &name, options) };
+                match out {
+                    Ok(r) => println!("workflow {} done: {:.4} EUR, {} tokens, journal {}", r.id, r.eur, r.tokens, r.journal.display()),
+                    Err(e) => { loom::warn(&e); std::process::exit(2); }
+                }
+            }
+            Some("list") | None => {
+                for w in workflows::list(&ctx) { println!("{}", w); }
+            }
+            Some("runs") => {
+                for (id, state) in workflows::runs(&ctx) { println!("{}  {}", id, state); }
+            }
+            Some("status") if args.len() >= 3 => match workflows::status(&ctx, &args[2]) {
+                Ok(t) => print!("{}", t),
+                Err(e) => { loom::warn(&e); std::process::exit(2); }
+            },
+            Some("stop") if args.len() >= 3 => match workflows::stop(&ctx, &args[2]) {
+                Ok(t) => println!("{}", t),
+                Err(e) => { loom::warn(&e); std::process::exit(2); }
+            },
+            _ => println!("penelope workflow run NAME|FILE [--yes] [--resume ID] [--args JSON] | list | runs | status ID | stop ID"),
         },
         "route" => print!("{}", route_text(&ctx)),
         "mode" => {
@@ -345,7 +409,10 @@ fn main() {
             let verb = args.get(1).map(String::as_str).unwrap_or("");
             match verb {
                 "list" | "" => print!("{}", clusters::status_text(&ctx, None)),
-                "status" => print!("{}", clusters::status_text(&ctx, args.get(2).map(String::as_str))),
+                "status" => match clusters::status_checked(&ctx, args.get(2).map(String::as_str)) {
+                    Ok(text) => print!("{}", text),
+                    Err(e) => { loom::warn(&e); std::process::exit(2); }
+                },
                 "dump" => {
                     let id = args.get(2).cloned().unwrap_or_default();
                     if id.is_empty() { loom::warn("usage: penelope cluster dump ID"); std::process::exit(2); }
@@ -420,6 +487,12 @@ fn main() {
                     }
                     let goal = words.join(" ");
                     if dry {
+                        if let Some(name) = shadow.as_deref().filter(|s| !s.trim().is_empty()) {
+                            if let Err(e) = clusters::profile(&ctx, name) {
+                                loom::warn(&format!("--shadow {}: {}", name, e));
+                                std::process::exit(2);
+                            }
+                        }
                         match clusters::dry_run(&ctx, &goal, profile.as_deref()) {
                             Ok(text) => {
                                 print!("{}", text);
@@ -732,6 +805,8 @@ fn main() {
         }
         "mcp" => {
             mcp::set_root_given(root_arg.is_some());
+            // A turn in a work mode starts this server with PENELOPE_MODE: the tool list and the checks follow it.
+            let ctx = modes::from_env(&ctx);
             mcp::serve(&ctx)
         }
         "acp" => {
@@ -753,19 +828,34 @@ fn main() {
         "ask" => {
             let mut json = false;
             let mut words = Vec::new();
-            for arg in &args[1..] {
-                if arg == "--json" { json = true; } else { words.push(arg.clone()); }
+            let mut work_mode = String::new();
+            let mut rest = args[1..].iter();
+            while let Some(arg) = rest.next() {
+                if arg == "--json" { json = true; }
+                else if arg == "--mode" { work_mode = rest.next().cloned().unwrap_or_default(); }
+                else { words.push(arg.clone()); }
             }
             let text = words.join(" ");
-            if text.trim().is_empty() {
-                loom::warn("usage: penelope ask [--json] \"TEXT\"");
+            if text.trim().is_empty() || (args.iter().any(|a| a == "--mode") && !modes::valid(&work_mode)) {
+                loom::warn(&format!("usage: penelope ask [--json] [--mode {}] \"TEXT\"", modes::NAMES.join("|")));
                 std::process::exit(2);
             }
             let mut chat = backend::Chat::new();
+            chat.mode = work_mode;
             if json {
                 if !answer_json(&ctx, &mut chat, &text) { std::process::exit(1); }
             } else {
                 answer(&ctx, &mut chat, &text);
+            }
+        }
+        // Hidden: N turns in one chat the way the TUI runs them, one line with the wall time of each. For timing runs.
+        "bench-turns" if args.len() >= 3 => {
+            let mut chat = backend::Chat::new();
+            for _ in 0..args[1].parse::<usize>().unwrap_or(1) {
+                let started = std::time::Instant::now();
+                let (notes, _, _) = tools::recall_all(&ctx, &args[2], 1600);
+                let out = chat.turn_with(&ctx, &args[2], &notes, &mut |_| {});
+                println!("turn {} ms: {}", started.elapsed().as_millis(), out.unwrap_or_else(|e| format!("ERROR {}", e)).chars().take(60).collect::<String>());
             }
         }
         "search" if args.get(1).map(String::as_str) == Some("fanout") => match args.get(2).map(String::as_str) {
@@ -804,7 +894,10 @@ fn main() {
             }
         }
         "research" if args.iter().any(|a| a == "--deep") => {
-            println!("{}", deepresearch::run(&ctx, &deepresearch::Params { verbose: true, ..deepresearch::parse_args(&args[1..]) }));
+            match deepresearch::parse_args(&args[1..]) {
+                Ok(p) => println!("{}", deepresearch::run(&ctx, &deepresearch::Params { verbose: true, ..p })),
+                Err(e) => { loom::warn(&e); std::process::exit(2); }
+            }
         }
         "research" => {
             let mut depth = "standard".to_string();
@@ -887,6 +980,14 @@ fn main() {
                         std::process::exit(2);
                     }
                 }
+            }
+            if let Some(i) = args.iter().position(|a| a == "--mode") {
+                let name = args.get(i + 1).cloned().unwrap_or_default();
+                if !modes::valid(&name) {
+                    loom::warn(&format!("usage: penelope chat --mode {}", modes::NAMES.join("|")));
+                    std::process::exit(2);
+                }
+                ctx.cfg["_start_mode"] = serde_json::json!(name);
             }
             let plain = args.iter().any(|a| a == "--plain") || !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal();
             if plain {
@@ -988,6 +1089,7 @@ fn answer_json(ctx: &config::Ctx, chat: &mut backend::Chat, text: &str) -> bool 
         backend::Event::Masked(n) => emit(serde_json::json!({"event": "masked_request", "items": n})),
         backend::Event::MaskedAnswer(n) => { masked += n; emit(serde_json::json!({"event": "masked_answer", "items": n})); }
     });
+    modes::bind_caller(ctx, chat.route_id(), chat.session.as_deref().unwrap_or(""));
     match result {
         Ok(answer) => {
             emit(serde_json::json!({"event": "result", "text": answer, "tokens_in": chat.input_tokens, "tokens_out": chat.output_tokens,
@@ -1009,16 +1111,19 @@ fn answer(ctx: &config::Ctx, chat: &mut backend::Chat, text: &str) {
     if !expanded.refs.is_empty() {
         loom::say(&format!("context: {}", expanded.refs.iter().map(|r| format!("{} ({} bytes)", r.token, r.bytes)).collect::<Vec<_>>().join(", ")));
     }
-    let (notes, trail, cached) = tools::recall_all(ctx, &expanded.text, 1600);
+    let (notes, trail, cached) = { let _t = timing::span("memory recall"); tools::recall_all(ctx, &expanded.text, 1600) };
     if !trail.is_empty() {
         loom::say(&format!("memory: start / {}{}", trail.last().unwrap().replace('/', " / "), if cached { " (stored walk)" } else { "" }));
     }
     let mut masked = 0;
+    timing::mark("ask: request prepared", "");
     let result = chat.turn_with(ctx, &expanded.text, &notes, &mut |e| {
         if let backend::Event::MaskedAnswer(n) = e {
             masked += n;
         }
     });
+    timing::mark("ask: turn done", "");
+    modes::bind_caller(ctx, chat.route_id(), chat.session.as_deref().unwrap_or(""));
     match result {
         Ok(a) => {
             if !trail.is_empty() {
@@ -1031,9 +1136,11 @@ fn answer(ctx: &config::Ctx, chat: &mut backend::Chat, text: &str) {
             loom::say(&format!("tokens so far: {} in, {} out", chat.input_tokens, chat.output_tokens));
             loom::say(&format!("tool calls of this turn: {}, {} of them failed or refused", chat.trace.len(), chat.trace.iter().filter(|c| tools::in_trouble(c)).count()));
             if ctx.cfg["auto_learn"].as_bool().unwrap_or(true) {
+                let _t = timing::span("post-turn: learn (weak model)");
                 for id in tools::learn(ctx, text, &a) {
                     loom::say(&format!("learned: {}", id));
                 }
+                let _t2 = timing::span("post-turn: learn_tools");
                 for id in tools::learn_tools(ctx, text, &chat.trace) {
                     loom::say(&format!("lesson from the tool calls: {}", id));
                 }
@@ -1065,6 +1172,7 @@ fn repl(ctx: &config::Ctx, resume: Option<backend::Chat>) {
         ctx.cfg["weak"]["model"].as_str().unwrap_or("?"), ctx.cfg["weak"]["kind"].as_str().unwrap_or("?")));
     println!("Type a request. /map shows the memory map, /quit ends.");
     let mut chat = resume.unwrap_or_else(backend::Chat::new);
+    chat.mode = ctx.cfg["_start_mode"].as_str().filter(|m| modes::valid(m)).map(String::from).unwrap_or_else(|| modes::default_mode(ctx));
     let stdin = std::io::stdin();
     loop {
         print!("you> ");

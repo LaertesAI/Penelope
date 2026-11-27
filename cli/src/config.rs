@@ -30,13 +30,18 @@ pub fn default_config() -> Value {
                    "jina": false, "jina_base": "https://r.jina.ai/", "wikipedia": false,
                    "searxng_url": "", "api_url": "", "server_api_key_env": "PENELOPE_SEARCH_API_KEY", "urls": [],
                    "rerank": {"url": "", "api_key_env": "RERANK_API_KEY", "enabled": false}},
-        "research": {"max_rounds": 3, "max_parallel": 3, "pages_per_sub": 4, "page_chars": 12000, "max_queries": 3},
+        "research": {"max_rounds": 3, "max_parallel": 3, "pages_per_sub": 4, "page_chars": 12000, "max_queries": 3, "max_checks": 80, "default_price": [3.0, 15.0]},
         "reader": {"enabled": true, "url": "", "api_key_env": "PENELOPE_READER_API_KEY"},
         "privacy": "rules",
         "privacy_answers": true,
         "auto_learn": true,
         "auto_skills": true,
         "mode": "auto",
+        "modes": {"default": "code", "confirm_rights": true,
+                  "chat": {"model": "weak", "effort": "low", "route": "fixed"},
+                  "work": {"model": "", "effort": "", "route": ""},
+                  "agents": {"model": "", "effort": "", "route": ""},
+                  "code": {"model": "", "effort": "", "route": ""}},
         "agent_verify": true,
         "roles": {},
         "screencodec": {"command": "", "hosts": "", "images": "", "args": "", "desktop": "off", "desktop_input": "off", "input_cmd": ""},
@@ -44,9 +49,7 @@ pub fn default_config() -> Value {
         "eur_per_usd": 0.92,
         "monthly_budget_eur": 0.0,
         "session_budget_eur": 0.0,
-        "prices": {"opus": [15.0, 75.0], "sonnet": [3.0, 15.0], "haiku": [0.8, 4.0],
-                   "claude-haiku-5-5": [0.1, 0.5], "deepseek-v4.1": [0.15, 0.6], "mimo-v2.6": [0.14, 0.28],
-                   "glm-5.3": [0.2, 0.8], "qwen3.8": [0.2, 0.6], "kimi-k3": [0.6, 2.5]},
+        "prices": default_prices(),
         "plugin_dirs": null,
         "plugin_home": null,
         "brief": {"hosts": [], "roots": []},
@@ -57,6 +60,20 @@ pub fn default_config() -> Value {
         "clipboard": {"read": "", "write": ""},
         "ask": {"timeout_secs": 900}
     })
+}
+
+/// List prices in dollars per million tokens, input then output. The longest name in a model name wins, so an older
+/// family keeps its own price. Anthropic list, read 2026-11-27: https://platform.claude.com/docs/en/about-claude/pricing
+/// Haiku 5.5 up to 100K prompt $0.10/$0.50, Sonnet 5.5 $2/$10, Opus 5.5 $4/$20.
+fn default_prices() -> Value {
+    json!({"opus": [4.0, 20.0], "sonnet": [2.0, 10.0], "haiku": [0.1, 0.5],
+           "claude-sonnet-5-5": [2.0, 10.0], "claude-haiku-5-5": [0.1, 0.5],
+           "claude-opus-5-5": [4.0, 20.0], "claude-opus-5": [5.0, 25.0], "claude-opus-4-5": [5.0, 25.0],
+           "claude-opus-4-6": [5.0, 25.0], "claude-opus-4-7": [5.0, 25.0], "claude-opus-4-8": [5.0, 25.0],
+           "claude-opus-4": [15.0, 75.0],
+           "claude-sonnet-5": [2.0, 10.0], "claude-sonnet-4": [3.0, 15.0], "claude-haiku-4": [1.0, 5.0],
+           "deepseek-v4.1": [0.15, 0.6], "mimo-v2.6": [0.14, 0.28],
+           "glm-5.3": [0.2, 0.8], "qwen3.8": [0.2, 0.6], "kimi-k3": [0.6, 2.5]})
 }
 
 /// The nearest `.penelope` folder upwards from the working directory, else `~/.penelope`.
@@ -119,7 +136,27 @@ pub fn load(root: &Path) -> Ctx {
     } else {
         let _ = fs::write(&path, serde_json::to_string_pretty(&cfg).unwrap());
     }
+    apply_policy_env(&mut cfg);
     Ctx { root: root.to_path_buf(), cfg }
+}
+
+/// A child process can be pinned to the policies of its parent. The claude-cli path starts a fresh
+/// `penelope mcp` that would otherwise read `run_policy: all` from disk and ignore the workflow's safe ctx.
+fn apply_policy_env(cfg: &mut Value) {
+    let run = std::env::var("PENELOPE_RUN_POLICY").ok();
+    let edit = std::env::var("PENELOPE_EDIT_POLICY").ok();
+    apply_policy(cfg, run.as_deref(), edit.as_deref());
+}
+
+fn apply_policy(cfg: &mut Value, run: Option<&str>, edit: Option<&str>) {
+    for (key, value, allowed) in [
+        ("run_policy", run, &["safe", "all"][..]),
+        ("edit_policy", edit, &["ask", "all", "never"][..]),
+    ] {
+        if let Some(value) = value.map(str::trim).filter(|v| allowed.contains(v)) {
+            cfg[key] = serde_json::json!(value);
+        }
+    }
 }
 
 /// The folder that holds Penelope's own files. A path that is a project (it has `.git` or a `.penelope` folder) and is
@@ -193,5 +230,15 @@ mod state_dir_tests {
         let _ = fs::remove_dir_all(&plain);
         assert_eq!(load(&plain).root, plain);
         assert_eq!(state_dir(&dir.join(".penelope")), dir.join(".penelope"));
+    }
+
+    #[test]
+    fn a_policy_env_pins_only_known_values() {
+        let mut cfg = default_config();
+        cfg["run_policy"] = serde_json::json!("all");
+        apply_policy(&mut cfg, Some("safe"), Some("ask"));
+        assert_eq!((cfg["run_policy"].as_str(), cfg["edit_policy"].as_str()), (Some("safe"), Some("ask")));
+        apply_policy(&mut cfg, Some("bogus"), Some("bogus"));
+        assert_eq!((cfg["run_policy"].as_str(), cfg["edit_policy"].as_str()), (Some("safe"), Some("ask")));
     }
 }
