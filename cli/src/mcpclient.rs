@@ -329,6 +329,30 @@ pub fn probe(ctx: &Ctx, server: &str) -> Result<Vec<ToolInfo>, String> {
     }).collect())
 }
 
+/// The tools that running servers already listed in this session, as (server, tool). No server is started and no
+/// request is sent; a server that is busy or not started adds nothing. Tool search reads this.
+pub fn cached_tools(ctx: &Ctx) -> Vec<(String, ToolInfo)> {
+    let prefix = format!("{}|", ctx.root.display());
+    let cells: Vec<(String, Cell)> = {
+        let map = pool().lock().unwrap_or_else(|e| e.into_inner());
+        map.iter().filter_map(|(k, c)| k.strip_prefix(&prefix).map(|n| (n.to_string(), c.clone()))).collect()
+    };
+    let mut out = Vec::new();
+    for (name, cell) in cells {
+        if !crate::agents::mcp_allowed(&name) { continue; }
+        let Ok(slot) = cell.try_lock() else { continue };
+        let Some(server) = slot.as_ref().filter(|s| s.alive) else { continue };
+        for t in server.tools.iter().flatten() {
+            out.push((name.clone(), ToolInfo {
+                name: t["name"].as_str().unwrap_or("").to_string(),
+                description: t["description"].as_str().unwrap_or("").to_string(),
+                input_schema: if t["inputSchema"].is_null() { t["input_schema"].clone() } else { t["inputSchema"].clone() },
+            }));
+        }
+    }
+    out
+}
+
 /// The full argument schema of one tool, asked from a Mitos server only when needed. The model reads it before
 /// `mcp_call`, because `mcp_servers` lists names and one sentence each.
 pub fn describe(ctx: &Ctx, server: &str, tool: &str) -> Result<String, String> {

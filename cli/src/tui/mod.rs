@@ -5,6 +5,7 @@
 pub(crate) mod art;
 pub(crate) mod picture;
 mod text;
+mod toolsearch;
 mod view;
 
 use crate::backend::{Chat, Event as TurnEvent};
@@ -130,6 +131,7 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd { name: "/consolidate", help: "keep the lasting rules of this session for every project", key: "", takes_text: false },
     Cmd { name: "/forge", help: "write a tool from the notes at a memory waypoint", key: "", takes_text: true },
     Cmd { name: "/plugins", help: "the filterable plugin screen; install, import, allow, deny, update, remove", key: "", takes_text: false },
+    Cmd { name: "/tools", help: "find a tool: search QUERY, install N, yes, no", key: "", takes_text: true },
     Cmd { name: "/mcp", help: "MCP servers: list, probe, add, remove, allow, deny, call", key: "", takes_text: false },
     Cmd { name: "/screen", help: "ScreenCodec: tools, open URL, see, click ID, desktop", key: "", takes_text: false },
     Cmd { name: "/cursor", help: "move Penelope's cursor: /cursor X Y [click]", key: "", takes_text: false },
@@ -1540,6 +1542,7 @@ impl App {
                 self.start_bg(move |ctx| Ok(crate::research::run(&ctx, &q, "standard", 4, "")));
             }
             "/research" => self.toast("/research QUESTION".to_string()),
+            "/tools" => self.tools_command(rest),
             "/mcp" => {
                 if rest == "probe" {
                     self.start_bg(|ctx| Ok(crate::mcpclient::list(&ctx, true)));

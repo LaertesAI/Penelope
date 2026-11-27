@@ -341,7 +341,7 @@ pub fn transient(text: &str) -> bool {
 pub fn retryable(name: &str, args: &serde_json::Value) -> bool {
     match name {
         "read" | "find" | "grep" | "tree" | "outline" | "run_detail" | "fetch" | "web_search" | "session_search" |
-        "json_query" | "memory_go" | "memory_map" | "cost" | "mcp_servers" => true,
+        "json_query" | "memory_go" | "memory_map" | "cost" | "mcp_servers" | "tool_search" => true,
         "http_request" => matches!(args["method"].as_str().unwrap_or("GET"), "GET" | "HEAD"),
         "screen" => matches!(args["action"].as_str().unwrap_or(""), "snapshot" | "tools" | "open"),
         "cursor" => args["click"].as_bool() != Some(true),
