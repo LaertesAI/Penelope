@@ -83,11 +83,11 @@ A `tools/call` result goes out as an MCP `resource_link` content item, instead o
 
 ### Storage
 
-`<project>/.penelope/attachments/<first 2 hex of the sha256>/<sha256>`, with `<sha256>.json` next to it (type, size, summary, links, level, name, created). Content-addressed: the same bytes are stored once, the first name stays, and the level never goes down. Writes go through a temporary file and a rename.
+`<project>/.penelope/attachments/<first 2 hex of the sha256>/<sha256>`, with `<sha256>.json` next to it (type, size, summary, links, level, name, created, accessed) and `index.json` with the running size of the store. Content-addressed: the same bytes are stored once, the first name stays, and the level never goes down. Writes go through a temporary file with a name unique per process and call, then a rename.
 
-When the store is over `mitos.store_max_bytes` (default 500 MB), the oldest entries are removed first; the entry just written stays. Cleanup counts go to `attachments/cleanup.log` in the project.
+When the store is over `mitos.store_max_bytes` (default 500 MB), the least recently used entries are removed first. A store, a dedup hit and a read all count as use. The entry just written and every attachment this process stored or read stay until the process ends. A store under its limit is not scanned: the size comes from `index.json`, and a scan happens only when the index says the limit is passed, or once for a store that has no index. A scan also removes temporary files older than one hour. Cleanup counts go to `attachments/cleanup.log` in the project.
 
-Level 3 (the person): the attachment is written below the project root only, with mode 0600 on Unix. A cleanup report that leaves the machine (`CleanupReport::export`) lists neither the entries nor their bytes. The local log keeps a count.
+Level 3 (the person): the attachment is written below the project root only, with mode 0600 on Unix, also when an existing entry is raised to level 3. On Windows the inherited rights are removed with `icacls` and only the current user keeps access. A cleanup report that leaves the machine (`CleanupReport::export`) lists neither the entries nor their bytes. The local log keeps a count.
 
 ### Client side
 
@@ -97,11 +97,13 @@ When a plugin server's result holds a `resource_link` with Mitos meta, and that 
 [attachment run-3fa9c1d2 · text/plain · 18300 bytes · 412 lines · 7 links · l0] summary → attachment_read uri=mitos://attachment/<sha256> server=docs
 ```
 
-Name, type, size, summary and the number of links are in it, plus the call that reads it. The tool `attachment_read` takes `uri`, `lines` or `bytes`, and `server` when the line names one. A uri that a plugin server issued goes to that server through `mitos/fetch`; every other uri is read from the local store with the same checks. The model sees the answer with one trailer line (`[N of M bytes]`, and `next` when it was cut).
+Name, type, size, summary and the number of links are in it, plus the call that reads it. Everything in the line comes from the server and is cleaned: the summary is cut to 200 characters without control characters or line breaks, the name keeps letters, digits, `-`, `_` and `.` (40 at most), the type keeps its safe characters, and the level is the higher of the reported one and the level the person assigned to that server in `mitos.server_levels` (default 0).
+
+The tool `attachment_read` takes `uri`, `lines` or `bytes`, and `server` when the line names one. With `server`, the uri must be one that this server issued in this session (the pair counts, not the uri alone), and the request goes to that server through `mitos/fetch`. Without `server`, the local store answers, with the same checks. The line of Penelope's own loop uses the scheme `penelope-local://<sha256>`; a uri in that scheme from a remote server is not shown as an attachment, and the server side never reads it. A scout and a judge read the local store only: `server` is refused. The answer carries the level of the attachment it reads, and one trailer line (`[N of M bytes]`, and `next` when it was cut). A byte range of text starts and ends on a character boundary.
 
 Penelope's own tools use the same path without any server: `run`, `run_detail`, `read`, `grep`, `find`, `tree`, `outline`, `git_diff`, `json_query`, `http_request`, `job_read` and `lsp` return the compact line when their result is over the threshold. These stay inline: results under the threshold, refusals (`NOT ...`), the test-loop stop line, and reports the model has to read whole (`scout`, `scouts`, `research`, `fetch`, the cluster tools, the memory tools).
 
-Settings (all under `mitos` in `config.json`): `attach_over_bytes` 4096, `fetch_cap_bytes` 16384, `store_max_bytes` 524288000.
+Settings (all under `mitos` in `config.json`): `attach_over_bytes` 4096, `fetch_cap_bytes` 16384, `store_max_bytes` 524288000, `server_levels` (a map from server name to level, default 0 for every server).
 
 ### Estimate on kept logs
 

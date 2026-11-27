@@ -626,6 +626,7 @@ fn render_result_from(ctx: &Ctx, attach_server: Option<&str>, tool: &str, result
                 parts.push(text.to_string());
                 continue;
             }
+            let compact = if block["type"] == "resource_link" { attach_server.and_then(|s| crate::attach::compact_from_block(ctx, block, s)) } else { None };
             match block["type"].as_str().unwrap_or("") {
                 "text" => {
                     if let Some(text) = block["text"].as_str() {
@@ -635,9 +636,7 @@ fn render_result_from(ctx: &Ctx, attach_server: Option<&str>, tool: &str, result
                 "image" => parts.push(media_line(ctx, tool, "image", block, index)),
                 "audio" => parts.push(media_line(ctx, tool, "audio", block, index)),
                 "resource" => parts.push(resource_line(ctx, tool, block, index)),
-                "resource_link" if attach_server.and_then(|s| crate::attach::compact_from_block(block, Some(s))).is_some() => {
-                    parts.push(crate::attach::compact_from_block(block, attach_server).unwrap_or_default());
-                }
+                "resource_link" if compact.is_some() => parts.push(compact.unwrap_or_default()),
                 "resource_link" => {
                     let uri = block["uri"].as_str().unwrap_or("");
                     let name = block["name"].as_str().unwrap_or("");
@@ -1200,7 +1199,7 @@ for line in sys.stdin:
         assert!(line.starts_with("[attachment big-aaaaaaaa · text/plain · 9000 bytes · 200 lines · 1 links · l0]"), "{}", line);
         assert!(line.contains("row 1 | row 2") && line.contains("server=att"), "{}", line);
         let uri = format!("{}{}", crate::attach::URI_PREFIX, "a".repeat(64));
-        let got = crate::attach::read_tool(&ctx, &json!({"uri": uri, "lines": [5, 9]})).unwrap();
+        let got = crate::attach::read_tool(&ctx, &json!({"uri": uri, "lines": [5, 9], "server": "att"})).unwrap();
         assert!(got.starts_with("range [5, 9]"), "{}", got);
         let log = fs::read_to_string(&seen).unwrap();
         assert_eq!(log.matches("mitos/fetch").count(), 1, "{}", log);
@@ -1218,7 +1217,7 @@ for line in sys.stdin:
         let line = call(&ctx, "att0", "big", &json!({})).unwrap();
         assert!(line.starts_with("[resource link mitos://attachment/") && !line.contains("attachment_read"), "{}", line);
         let err = crate::attach::read_tool(&ctx, &json!({"uri": format!("{}{}", crate::attach::URI_PREFIX, "a".repeat(64)), "server": "att0"})).unwrap_err();
-        assert!(err.contains("did not announce attachments"), "{}", err);
+        assert!(err.contains("did not issue"), "{}", err);
         assert_eq!(fs::read_to_string(&seen).unwrap().matches("mitos/fetch").count(), 0);
         crate::plugins::mcp_remove(&ctx, "att0");
         let _ = fs::remove_dir_all(&dir);
