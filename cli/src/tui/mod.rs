@@ -137,11 +137,10 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd { name: "/research", help: "search, read the best pages and show a cited report", key: "", takes_text: true },
     Cmd { name: "/route", help: "the roles and their models; /route auto|fixed sets the cost mode", key: "", takes_text: true },
     Cmd { name: "/escalate", help: "cost mode: move this task to the main model", key: "", takes_text: false },
-    Cmd { name: "/tools", help: "every tool, its arguments and its roles", key: "", takes_text: false },
+    Cmd { name: "/tools", help: "every tool, its arguments and its roles; /tools search QUERY, install N, yes, no", key: "", takes_text: false },
     Cmd { name: "/consolidate", help: "keep the lasting rules of this session for every project", key: "", takes_text: false },
     Cmd { name: "/forge", help: "write a tool from the notes at a memory waypoint", key: "", takes_text: true },
     Cmd { name: "/plugins", help: "the filterable plugin screen; install, import, allow, deny, update, remove", key: "", takes_text: false },
-    Cmd { name: "/tools", help: "find a tool: search QUERY, install N, yes, no", key: "", takes_text: true },
     Cmd { name: "/mcp", help: "MCP servers: list, probe, add, remove, allow, deny, call", key: "", takes_text: false },
     Cmd { name: "/screen", help: "ScreenCodec: tools, open URL, see, click ID, desktop", key: "", takes_text: false },
     Cmd { name: "/cursor", help: "move Penelope's cursor: /cursor X Y [click]", key: "", takes_text: false },
@@ -804,7 +803,7 @@ impl App {
             Err(e) => return self.toast(e),
         };
         let root = crate::config::root_from(&target, false);
-        if root != self.ctx.root && root.join("config.json").is_file() {
+        if folder_needs_confirmation(&root, &self.ctx.root, &crate::platform::home()) {
             let lines = folder_settings(&root);
             self.overlay = Overlay::FolderTrust { path: target, lines };
             return;
@@ -1733,7 +1732,7 @@ impl App {
             "/cost" => self.pager("Cost in euro", crate::cost::report(&self.ctx)),
             "/route" => self.route_command(rest),
             "/escalate" => self.escalate_command(),
-            "/tools" => self.pager("Tool contracts", crate::route::table(&self.ctx)),
+            "/tools" if rest.is_empty() => self.pager("Tool contracts", crate::route::table(&self.ctx)),
             "/consolidate" => {
                 let users: Vec<String> = self.items.iter().filter_map(|i| if let Item::User(t) = i { Some(t.clone()) } else { None }).collect();
                 let ids = tools::consolidate(&self.ctx, &users);
@@ -2693,6 +2692,12 @@ impl App {
 
 /// What the `.penelope/config.json` of another folder would apply: its mode, its `human` setting, every `base_url`
 /// and every MCP server command. A person reads this before the folder is entered.
+/// True when the `.penelope` of the target folder has settings of its own that the person has not seen. The shared
+/// folder `~/.penelope` is the person's own settings and never asks.
+fn folder_needs_confirmation(root: &std::path::Path, current: &std::path::Path, home: &std::path::Path) -> bool {
+    root != current && root != home.join(".penelope") && root.join("config.json").is_file()
+}
+
 fn folder_settings(root: &std::path::Path) -> Vec<String> {
     let cfg: serde_json::Value = fs::read_to_string(root.join("config.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
     let mut out = vec![
@@ -3391,6 +3396,35 @@ mod tests {
         let _ = fs::remove_dir_all(&other);
         a.reload_workspace(&other);
         assert!(!marker.exists() && a.approve_dir.starts_with(&other));
+    }
+
+    #[test]
+    fn the_shared_home_settings_never_ask_for_a_folder_yes() {
+        let home = std::env::temp_dir().join(format!("penelope-home-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&home);
+        fs::create_dir_all(home.join(".penelope")).unwrap();
+        fs::write(home.join(".penelope/config.json"), "{}").unwrap();
+        let project = home.join("proj/.penelope");
+        fs::create_dir_all(&project).unwrap();
+        fs::write(project.join("config.json"), "{}").unwrap();
+        let current = home.join("here/.penelope");
+        assert!(!folder_needs_confirmation(&home.join(".penelope"), &current, &home), "the shared folder asked");
+        assert!(folder_needs_confirmation(&project, &current, &home), "a project folder with settings must ask");
+        assert!(!folder_needs_confirmation(&project, &project, &home), "the folder that is already open must not ask");
+    }
+
+    #[test]
+    fn tools_with_a_word_reaches_the_tool_search_and_without_one_the_table() {
+        let mut a = app();
+        a.command("/tools");
+        assert!(matches!(a.overlay, Overlay::Pager { .. }), "/tools shows the table");
+        a.overlay = Overlay::None;
+        a.command("/tools no");
+        assert!(matches!(a.overlay, Overlay::None), "/tools no is a tool search verb, not the table");
+        assert!(a.toast.is_some());
+        a.command("/tools bogus");
+        assert!(a.toast.as_ref().unwrap().0.contains("/tools search QUERY"), "{:?}", a.toast);
+        assert_eq!(COMMANDS.iter().filter(|c| c.name == "/tools").count(), 1, "one palette entry for /tools");
     }
 
     #[test]

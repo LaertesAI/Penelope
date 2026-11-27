@@ -226,6 +226,10 @@ fn main() {
         println!("{}", HELP);
         return;
     }
+    if cmd == "--version" || cmd == "-V" || cmd == "version" {
+        println!("penelope {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
     if cmd == "init" {
         let root = std::env::current_dir().unwrap().join(".penelope");
         let ctx = config::load(&root);
@@ -300,8 +304,17 @@ fn main() {
             }
         }
         "cursor" => {
-            let x: i64 = args.get(1).and_then(|n| n.parse().ok()).unwrap_or(0);
-            let y: i64 = args.get(2).and_then(|n| n.parse().ok()).unwrap_or(0);
+            let number = |i: usize| -> Result<i64, String> {
+                match args.get(i) {
+                    None => Ok(0),
+                    Some(n) if n.starts_with("--") => Ok(0),
+                    Some(n) => n.parse().map_err(|_| format!("usage: penelope cursor X Y [--click] (X and Y are whole numbers, got {})", n)),
+                }
+            };
+            let (x, y) = match (number(1), number(2)) {
+                (Ok(x), Ok(y)) => (x, y),
+                (Err(e), _) | (_, Err(e)) => { loom::warn(&e); std::process::exit(2); }
+            };
             let click = args.iter().any(|a| a == "--click");
             match cursor::tool(&ctx, &serde_json::json!({"x": x, "y": y, "click": click})) {
                 Ok(text) => println!("{}", text),
@@ -435,8 +448,11 @@ fn main() {
                 loom::warn("usage: penelope run-agent NAME --goal TEXT");
                 std::process::exit(2);
             }
-            let spec = agents::Spec { name, role: "orchestrator".into(), thinking: "high".into(), goal, max_sub_agents: 3, max_parallel: 2,
-                                      max_steps: 12, budget_eur: 0.0, model: String::new(), verify: ctx.cfg["agent_verify"].as_bool().unwrap_or(true), language: "en".into(), mcp: Vec::new() };
+            let Some(mut spec) = agents::load(&ctx, &name) else {
+                loom::warn(&format!("no stored agent {} (penelope agents lists them; an orchestrate call with $name(goal=\"...\") stores one)", name));
+                std::process::exit(2);
+            };
+            spec.goal = goal;
             match agents::run(&ctx, &spec) {
                 Ok(text) => println!("{}", text),
                 Err(e) => { loom::warn(&e); std::process::exit(2); }
@@ -474,7 +490,8 @@ fn main() {
         "cost" => print!("{}", cost::report(&ctx)),
         "price" => {
             let parts: Vec<&str> = args[1..].iter().map(String::as_str).collect();
-            if parts.len() != 3 || parts[1].parse::<f64>().is_err() || parts[2].parse::<f64>().is_err() {
+            let price_ok = |t: &str| t.parse::<f64>().map(|v| v.is_finite() && v >= 0.0).unwrap_or(false);
+            if parts.len() != 3 || parts[0].trim().is_empty() || !price_ok(parts[1]) || !price_ok(parts[2]) {
                 loom::warn("usage: penelope price MODEL INPUT OUTPUT (dollars per million tokens)");
                 std::process::exit(2);
             }
@@ -655,6 +672,11 @@ fn main() {
                 std::process::exit(2);
             }
         }
+        "mcp" if args.len() > 1 => {
+            // A mistyped or incomplete `mcp` verb must not start the stdio server, which would wait on stdin.
+            loom::warn(&format!("usage: penelope mcp [--root DIR] | list [--probe] | serve kerkis|vet | add NAME COMMAND [ARGS...] [--allow] | remove NAME | allow|deny NAME | allow-tool|deny-tool SERVER TOOL | call SERVER TOOL JSON (got: mcp {})", args[1..].join(" ")));
+            std::process::exit(2);
+        }
         "mcp" => mcp::serve(&ctx),
         "acp" => {
             if let Err(e) = acp::run(&ctx) {
@@ -679,6 +701,10 @@ fn main() {
                 if arg == "--json" { json = true; } else { words.push(arg.clone()); }
             }
             let text = words.join(" ");
+            if text.trim().is_empty() {
+                loom::warn("usage: penelope ask [--json] \"TEXT\"");
+                std::process::exit(2);
+            }
             let mut chat = backend::Chat::new();
             if json {
                 if !answer_json(&ctx, &mut chat, &text) { std::process::exit(1); }
@@ -844,6 +870,10 @@ fn memory_cmd(ctx: &config::Ctx, args: &[String]) {
             if rest.first().map(String::as_str) == Some("--path") && rest.len() >= 2 {
                 path = rest[1].clone();
                 rest.drain(0..2);
+            }
+            if rest.join(" ").trim().is_empty() {
+                loom::warn("usage: penelope memory note [--path a/b] TEXT");
+                std::process::exit(2);
             }
             println!("{}", tools::memory_note(ctx, &path, &rest.join(" ")));
         }

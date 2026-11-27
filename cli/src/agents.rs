@@ -213,6 +213,26 @@ pub fn save(ctx: &Ctx, spec: &Spec) -> Result<(), String> {
     fs::write(registry(ctx), serde_json::to_string_pretty(&all).unwrap()).map_err(|e| format!("cannot write agents.json: {}", e))
 }
 
+/// The stored settings of one agent, without a goal. None when no agent of that name was stored.
+pub fn load(ctx: &Ctx, name: &str) -> Option<Spec> {
+    let all: Vec<Value> = fs::read_to_string(registry(ctx)).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    let a = all.iter().find(|a| a["name"].as_str() == Some(name))?;
+    Some(Spec {
+        name: name.to_string(),
+        role: a["role"].as_str().unwrap_or("orchestrator").to_string(),
+        thinking: a["thinking"].as_str().unwrap_or("high").to_string(),
+        goal: String::new(),
+        max_sub_agents: a["max_sub_agents"].as_u64().unwrap_or(3) as usize,
+        max_parallel: a["max_parallel"].as_u64().unwrap_or(2) as usize,
+        max_steps: a["max_steps"].as_u64().unwrap_or(12) as usize,
+        budget_eur: a["budget_eur"].as_f64().unwrap_or(0.0),
+        model: a["model"].as_str().unwrap_or("").to_string(),
+        verify: a["verify"].as_bool().unwrap_or(true),
+        language: a["language"].as_str().unwrap_or("en").to_string(),
+        mcp: a["mcp"].as_array().map(|m| m.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default(),
+    })
+}
+
 pub fn list(ctx: &Ctx) -> String {
     let all: Vec<Value> = fs::read_to_string(registry(ctx)).ok().and_then(|s| serde_json::from_str::<Vec<Value>>(&s).ok()).unwrap_or_default();
     if all.is_empty() {
@@ -502,6 +522,20 @@ pub fn run_with_cancel(ctx: &Ctx, spec: &Spec, cancel: Option<&std::sync::atomic
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stored_agent_loads_without_its_goal_and_an_unknown_one_does_not() {
+        let root = std::env::temp_dir().join(format!("penelope-agent-load-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let ctx = Ctx { root: root.clone(), cfg: serde_json::json!({}) };
+        assert!(load(&ctx, "nosuch").is_none());
+        let spec = parse("$builder(role=worker, goal=\"build it\", max_steps=5)").unwrap();
+        save(&ctx, &spec).unwrap();
+        let loaded = load(&ctx, "builder").expect("stored");
+        assert_eq!((loaded.role.as_str(), loaded.max_steps, loaded.goal.as_str()), ("worker", 5, ""));
+        assert!(load(&ctx, "other").is_none());
+    }
 
     #[test]
     fn the_example_from_the_user_parses_into_a_spec() {

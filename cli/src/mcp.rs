@@ -187,6 +187,21 @@ fn server_capabilities() -> Value {
     caps
 }
 
+/// One input line as a JSON-RPC message. Err holds the answer for a line that cannot be one: not UTF-8, not JSON or not
+/// an object. The server stays up in every case.
+fn parse_line(raw: &[u8]) -> Result<Option<Value>, Value> {
+    let error = |code: i64, message: &str| json!({"jsonrpc": "2.0", "id": Value::Null, "error": {"code": code, "message": message}});
+    let Ok(line) = std::str::from_utf8(raw) else { return Err(error(-32700, "parse error: the line is not valid UTF-8")) };
+    if line.trim().is_empty() {
+        return Ok(None);
+    }
+    match serde_json::from_str::<Value>(line.trim()) {
+        Err(_) => Err(error(-32700, "parse error: the line is not JSON")),
+        Ok(v) if v.is_object() => Ok(Some(v)),
+        Ok(_) => Err(error(-32600, "invalid request: not a JSON object")),
+    }
+}
+
 pub fn serve(ctx: &Ctx) {
     let stdin = std::io::stdin();
     let mut out = std::io::stdout();
@@ -194,9 +209,23 @@ pub fn serve(ctx: &Ctx) {
     let mut mitos = false;
     // True after the client announced version 1 with the `attachments` feature; then a long result is a resource_link.
     let mut attach = false;
-    for line in stdin.lock().lines() {
-        let line = match line { Ok(l) => l, Err(_) => break };
-        let msg: Value = match serde_json::from_str(line.trim()) { Ok(v) => v, Err(_) => continue };
+    let mut input = stdin.lock();
+    let mut raw: Vec<u8> = Vec::new();
+    loop {
+        raw.clear();
+        match input.read_until(b'\n', &mut raw) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+        let msg = match parse_line(&raw) {
+            Ok(Some(m)) => m,
+            Ok(None) => continue,
+            Err(answer) => {
+                let _ = writeln!(out, "{}", answer);
+                let _ = out.flush();
+                continue;
+            }
+        };
         let id = msg["id"].clone();
         if id.is_null() {
             continue; // a notification
