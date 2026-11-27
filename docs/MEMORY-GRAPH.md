@@ -14,9 +14,11 @@ The memory of Penelope is a tree of waypoints with notes. The graph view turns i
 |---|---|---|
 | note | a waypoint of the project or shared memory | 3 |
 | rule | a waypoint under `rules/`, or one with a lasting-rule note ("always", "never", ...) | 3 |
-| cluster-entry | one line of a `memory.log`, titled by its ENT field | the `L` of the line |
-| file | a file path named in some node's text | 1 |
-| link | a URL named in some node's text | 0 |
+| cluster-entry | one line of a `memory.log`, titled by its ENT field | the `L` of the line; a line without `L` counts as 3 |
+| file | a file path named in some node's text | highest level of the non-person nodes that name it, 3 if only person nodes do |
+| link | a URL named in some node's text | the same |
+
+A file or link node also takes its added and changed time from the non-person nodes that name it. If only person nodes name it, it is level 3 and no export or pointer without the person flag contains it.
 
 Notes are level 3 because `memory_go` is level 3 in `mitos.rs`: the person wrote them, or said the rule they come from.
 
@@ -88,9 +90,11 @@ If nothing reaches 0.2 the tool answers:
 unknown: nothing stored about "<query>"; note it after the session with memory_add or /note
 ```
 
-The Kerkis server says `memory_add` only, since it has no `/note`. It points at project and shared notes (level 3) only when started with `--allow-person`; without the flag it points at cluster entries and the files and links they name. A pointer from the Kerkis server carries `_meta["laertes/mitos"].l`, and the call carries the lowest level among its pointers.
+The Kerkis server says `memory_add` only, since it has no `/note`. It points at project and shared notes (level 3) only when started with `--allow-person`; without the flag it points at cluster entries and the files and links they name. A pointer from the Kerkis server carries `_meta["laertes/mitos"].l`, and the call carries the highest level among its pointers.
 
 `penelope memory find QUERY` runs the same search in the terminal.
+
+The graph behind the tool is cached per project folder and rebuilt when a map, a use count or a cluster log changed, or after 30 seconds. The scout and worker roles may call `memory_find` (they may call `memory_go`); the judge and tool roles may not read memory.
 
 ## Not part of this feature
 

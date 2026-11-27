@@ -213,11 +213,11 @@ fn find(ctx: &Ctx, allow_person: bool, a: &Value) -> Result<Reply, Fail> {
             _ => return Err(Fail::Params("limit must be an integer from 1 to 20".into())),
         },
     };
-    let pointers = crate::graph::Graph::build(ctx).find(query, limit, allow_person);
+    let pointers = crate::graph::cached(ctx).find(query, limit, allow_person);
     if pointers.is_empty() {
         return Ok(Reply { text: format!("unknown: nothing stored about \"{}\"; note it after the session with memory_add", one_line(query).chars().take(80).collect::<String>()), level: 1 });
     }
-    let level = pointers.iter().map(|p| p.level).min().unwrap_or(1);
+    let level = pointers.iter().map(|p| p.level).max().unwrap_or(1); // the call is as high as its most person-like pointer
     let rows: Vec<Value> = pointers.iter().map(|p| json!({
         "id": p.id.strip_prefix("c:").unwrap_or(&p.id), "title": p.title, "line": p.line, "path": p.path, "L": p.level, "origin": p.scope,
         "kind": p.kind, "score": p.score, "read": crate::graph::read_hint(&p.id),

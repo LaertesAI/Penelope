@@ -313,7 +313,7 @@ fn cluster_nodes(ctx: &Ctx) -> Vec<Node> {
                 title: one_line(&title, 60),
                 kind: Kind::ClusterEntry,
                 scope: Scope::Cluster,
-                level: v["L"].as_u64().unwrap_or(1).min(3) as u8,
+                level: v["L"].as_u64().unwrap_or(3).min(3) as u8, // a line without L: unknown origin, treated as a person's
                 uses: 0,
                 added: t,
                 changed: t,
@@ -381,12 +381,16 @@ impl Graph {
         let mut extra_nodes: Vec<Node> = Vec::new();
         let mut extra_edges: Vec<Edge> = Vec::new();
         let mut derived: HashMap<String, usize> = HashMap::new();
+        // per derived node: (highest level, newest change, oldest change) over the nodes below level 3 that name it,
+        // and the newest change over the person nodes that name it
+        let mut open: Vec<Option<(u8, u64, u64)>> = Vec::new();
+        let mut person_changed: Vec<u64> = Vec::new();
         let derived_cap = (max_nodes / 2).max(1);
         let edge_cap = max_nodes.saturating_mul(4).max(100);
         for &i in &primary {
-            let (id, text, scope, changed) = {
+            let (id, text, scope, changed, level) = {
                 let n = &self.nodes[i];
-                (n.id.clone(), n.text.clone(), n.scope, n.changed)
+                (n.id.clone(), n.text.clone(), n.scope, n.changed, n.level)
             };
             if text.is_empty() {
                 continue;
@@ -432,10 +436,12 @@ impl Graph {
                         None if derived.len() < derived_cap => {
                             extra_nodes.push(Node {
                                 id: key.clone(), title: if kind == Kind::File { v.rsplit('/').next().unwrap_or(&v).to_string() } else { cut(v.trim_start_matches("https://").trim_start_matches("http://"), 60) },
-                                kind, scope: Scope::Derived, level: if kind == Kind::File { 1 } else { 0 }, uses: 0, added: changed, changed,
+                                kind, scope: Scope::Derived, level: 3, uses: 0, added: 0, changed: 0,
                                 text: String::new(), path: v.clone(),
                             });
                             derived.insert(key.clone(), extra_nodes.len() - 1);
+                            open.push(None);
+                            person_changed.push(0);
                             extra_nodes.len() - 1
                         }
                         None => {
@@ -443,10 +449,29 @@ impl Graph {
                             continue;
                         }
                     };
-                    let n = &mut extra_nodes[at];
-                    n.changed = n.changed.max(changed);
-                    n.added = n.added.min(changed);
+                    if level < 3 {
+                        let o = open[at].get_or_insert((0, 0, u64::MAX));
+                        *o = (o.0.max(level), o.1.max(changed), o.2.min(changed));
+                    } else {
+                        person_changed[at] = person_changed[at].max(changed);
+                    }
                     push(key, edge, &mut extra_edges);
+                }
+            }
+        }
+        // A derived node has the highest level of the nodes below 3 that name it and their times; only if person nodes
+        // alone name it, it is level 3 and takes their time, so it never reaches an export without them.
+        for (n, (o, p)) in extra_nodes.iter_mut().zip(open.iter().zip(person_changed.iter())) {
+            match o {
+                Some((level, newest, oldest)) => {
+                    n.level = *level;
+                    n.changed = *newest;
+                    n.added = *oldest;
+                }
+                None => {
+                    n.level = 3;
+                    n.changed = *p;
+                    n.added = *p;
                 }
             }
         }
@@ -593,9 +618,63 @@ pub fn read_hint(id: &str) -> String {
     }
 }
 
+type Cached = (Vec<(PathBuf, u128, u64)>, std::time::Instant, std::sync::Arc<Graph>);
+
+fn stamp(path: &Path) -> (PathBuf, u128, u64) {
+    let m = fs::metadata(path).ok();
+    let t = m.as_ref().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_nanos()).unwrap_or(0);
+    (path.to_path_buf(), t, m.map(|m| m.len()).unwrap_or(0))
+}
+
+/// The files whose change makes a built graph stale: the map and the use counts of both memories (every note writes the
+/// map) and every cluster log.
+fn watched(ctx: &Ctx) -> Vec<(PathBuf, u128, u64)> {
+    let shared = match ctx.cfg["global_memory"].as_str().filter(|p| !p.trim().is_empty()) {
+        Some(p) => PathBuf::from(p),
+        None => crate::memory::global_dir(),
+    };
+    let mut out = Vec::new();
+    for dir in [ctx.root.join("memory"), shared] {
+        out.push(stamp(&dir.join("map.json")));
+        out.push(stamp(&dir.join("uses.json")));
+    }
+    let clusters = ctx.root.join("clusters");
+    out.push(stamp(&clusters));
+    if let Ok(read) = fs::read_dir(&clusters) {
+        let mut logs: Vec<PathBuf> = read.flatten().map(|e| e.path().join("memory.log")).collect();
+        logs.sort();
+        out.extend(logs.iter().map(|l| stamp(l)));
+    }
+    out
+}
+
+/// The graph for `ctx`, built again only when a watched file changed or 30 seconds passed. A model that calls
+/// `memory_find` several times in a turn does not read every note each time.
+pub fn cached(ctx: &Ctx) -> std::sync::Arc<Graph> {
+    use std::sync::{Arc, Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, Cached>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let signature = watched(ctx);
+    if let Ok(map) = cache.lock() {
+        if let Some((old, at, graph)) = map.get(&ctx.root) {
+            if *old == signature && at.elapsed().as_secs() < 30 {
+                return Arc::clone(graph);
+            }
+        }
+    }
+    let graph = Arc::new(Graph::build(ctx));
+    if let Ok(mut map) = cache.lock() {
+        if map.len() >= 8 {
+            map.clear();
+        }
+        map.insert(ctx.root.clone(), (signature, std::time::Instant::now(), Arc::clone(&graph)));
+    }
+    graph
+}
+
 /// The text of the built-in `memory_find` tool.
 pub fn find_text(ctx: &Ctx, query: &str, limit: usize) -> String {
-    let graph = Graph::build(ctx);
+    let graph = cached(ctx);
     let pointers = graph.find(query, limit.clamp(1, 20), true);
     if pointers.is_empty() {
         return format!("unknown: nothing stored about \"{}\"; note it after the session with memory_add or /note", one_line(query, 80));
@@ -733,8 +812,9 @@ pub fn export_cmd(ctx: &Ctx, args: &[String]) -> Result<String, String> {
             if target.is_dir() {
                 target = target.join("memory-graph.json");
             }
-            if let Ok(old) = fs::read_to_string(&target) {
-                if serde_json::from_str::<Value>(&old).map(|v| v.get("penelope_graph").is_none()).unwrap_or(true) {
+            if target.exists() {
+                let ours = fs::read(&target).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()).map(|v| v.get("penelope_graph").is_some()).unwrap_or(false);
+                if !ours {
                     return Err(format!("NOT exported. {} exists and is not a Penelope graph file", target.display()));
                 }
             }
@@ -909,6 +989,48 @@ pub mod tests {
         export_cmd(&ctx, &["--format".into(), "obsidian".into(), plain.to_string_lossy().to_string()]).unwrap();
         assert!(!plain.join("project · rust · errors.md").exists());
         assert!(plain.join("cluster · c1-1-1 parser.md").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_cache_follows_the_files_and_derived_nodes_keep_the_level_of_their_sources() {
+        let (dir, ctx) = filled("cache");
+        let a = cached(&ctx);
+        assert!(std::sync::Arc::ptr_eq(&a, &cached(&ctx)), "no change: the same graph");
+        let mut m = Memory::open(&ctx.root);
+        m.note("work/clients", "contract at ~/clients/x.pdf and docs/PLAN.md");
+        let b = cached(&ctx);
+        assert!(!std::sync::Arc::ptr_eq(&a, &b), "a note changed the map");
+        // a file only a person's note names has level 3 and is not pointed at without the person flag
+        let pdf = b.get("f:~/clients/x.pdf").unwrap();
+        assert_eq!(pdf.level, 3);
+        assert!(b.find("x.pdf", 5, false).is_empty());
+        assert_eq!(b.find("x.pdf", 5, true)[0].id, "f:~/clients/x.pdf");
+        assert!(!b.without_person().nodes.iter().any(|n| n.id == "f:~/clients/x.pdf"));
+        // a file a person's note and a cluster entry both name keeps the entry's level and its time, not the note's
+        let plan = b.get("f:docs/PLAN.md").unwrap();
+        assert_eq!(plan.level, 2);
+        assert_eq!(plan.changed, b.get("c:c1-1:2").unwrap().changed);
+        assert!(b.find("PLAN.md", 5, false).iter().any(|p| p.id == "f:docs/PLAN.md"));
+        // a log line without L is a person's until proven otherwise
+        let log = ctx.root.join("clusters").join("c1-1").join("memory.log");
+        let mut text = fs::read_to_string(&log).unwrap();
+        text.push_str(&format!("{}\n", json!({"t": now(), "C": "c1-1", "text": "ENT: secret\nVAL: no level here"})));
+        fs::write(&log, text).unwrap();
+        let c = cached(&ctx);
+        assert_eq!(c.get("c:c1-1:4").unwrap().level, 3);
+        assert!(c.find("secret", 5, false).is_empty());
+        assert!(!c.without_person().nodes.iter().any(|n| n.id == "c:c1-1:4"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn json_export_refuses_a_binary_file() {
+        let (dir, ctx) = filled("binary");
+        let file = dir.join("data.json");
+        fs::write(&file, [0xffu8, 0xfe, 0x00, 0x01, 0x80]).unwrap();
+        assert!(export_cmd(&ctx, &["--format".into(), "json".into(), file.to_string_lossy().to_string()]).is_err());
+        assert_eq!(fs::read(&file).unwrap(), vec![0xffu8, 0xfe, 0x00, 0x01, 0x80]);
         let _ = fs::remove_dir_all(&dir);
     }
 
