@@ -2266,6 +2266,31 @@ pub fn run_cluster(ctx: &Ctx, id: &str) -> Result<String, String> {
     run_cluster_inner(ctx, id, None)
 }
 
+/// One model call with the tool loop, for a workflow part. The part has no cluster state on disk.
+pub(crate) fn run_once(ctx: &Ctx, prompt: &str, model: Value, effort: &str) -> Result<String, String> {
+    let name = model.as_str().unwrap_or("");
+    let (role, model) = match name {
+        "main" | "weak" => ("worker".to_string(), Value::String(name.to_string())),
+        "worker" | "judge" | "scout" | "router" => (name.to_string(), Value::Null),
+        _ if model.is_string() => ("worker".to_string(), model),
+        _ => ("worker".to_string(), json!({"model": model, "effort": effort})),
+    };
+    let part = Part { name: "workflow".to_string(), role, slot: "workflow".to_string(),
+                      task: String::new(), task_type: String::new(), model, mcp: Vec::new(), depends_on: Vec::new(), quorum: 0 };
+    let c = Cluster { id: "workflow".to_string(), name: "workflow".to_string(), profile: "workflow".to_string(),
+                      task: prompt.to_string(), parent: None, after: Vec::new(), depth: 0, state: "working".to_string(),
+                      done: 0, total: 1, started: now(), updated: now(), output: String::new(), error: String::new(),
+                      memory: String::new(), evidence: String::new(), project: String::new(), worktree: String::new(),
+                      branch: String::new(), cwd: String::new(), respawns: 0, respawned_from: String::new(),
+                      quorum_agreed: 0, quorum_escalated: 0, shadow: false, shadow_of: String::new(),
+                      match_rate: None, parts: Vec::new() };
+    let system = "You are a worker part of a Penelope workflow. Do the task and report the evidence.";
+    let limits = Limits { cluster: 0.0, cluster_before: 0.0, session: 0.0, session_before: 0.0 };
+    let watch = Arc::new(Mutex::new(Watch::new(usize::MAX)));
+    let done = run_model(ctx, &c, &part, system, prompt, 20, &AtomicBool::new(false), limits, &watch)?;
+    Ok(done.text)
+}
+
 /// `run_cluster` with the euro baseline of the whole orchestration. Every cluster of one session therefore shares one
 /// `session_budget_eur`, beside its own `budget_eur`.
 fn run_cluster_inner(ctx: &Ctx, id: &str, session_before: Option<f64>) -> Result<String, String> {

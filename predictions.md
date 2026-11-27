@@ -100,3 +100,13 @@ Prediction, before any run:
 
 Risks: the harness is not a full SWE-bench agent. The resolved rate can be lower for both. If the environment fails
 on more than 10 tasks, stop and fix the harness before scoring.
+
+## Workflows C6: Review mit 3 und 1 Agenten
+
+Vor dem Lauf. Derselbe Review-Workflow auf 10 bekannten Fehlern in einem Testrepo. Arm A: 3 Agenten, je ein Drittel der Dateien, jeder Befund wird von einem Prüfer bestätigt. Arm B: 1 Agent auf allen Dateien, gleiche Prüfung.
+
+Vorhersage: Arm A findet 8 von 10, Arm B 6 von 10. Arm A kostet 1,4-mal Arm B und braucht 0,7-mal die Zeit. Abbruch: Arm A findet nicht mehr Fehler oder braucht über 1,2-mal die Zeit. Kein bezahlter API-Lauf, nur das Claude-Abo.
+
+## Ergebnis C6
+
+3 Agenten: 7/10, 0,0097 EUR, 67.855 Tokens. 1 Agent: 6/10, 0,0044 EUR, 20.760 Tokens. Der 3-Agenten-Arm findet einen Fehler mehr, nicht zwei. Er kostet 2,2-mal so viel, nicht 1,4-mal. Die Vorhersage war zu optimistisch. Behalten wird der 3-Agenten-Arm nur als Option, nicht als Standard; der 1-Agenten-Arm bleibt die Voreinstellung.

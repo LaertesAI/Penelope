@@ -1733,7 +1733,6 @@ impl App {
             "/cost" => self.pager("Cost in euro", crate::cost::report(&self.ctx)),
             "/route" => self.route_command(rest),
             "/escalate" => self.escalate_command(),
-            "/tools" => self.pager("Tool contracts", crate::route::table(&self.ctx)),
             "/consolidate" => {
                 let users: Vec<String> = self.items.iter().filter_map(|i| if let Item::User(t) = i { Some(t.clone()) } else { None }).collect();
                 let ids = tools::consolidate(&self.ctx, &users);
@@ -1770,6 +1769,20 @@ impl App {
                 self.start_bg(move |ctx| Ok(crate::research::run(&ctx, &q, "standard", 4, "")));
             }
             "/research" => self.toast("/research QUESTION".to_string()),
+            "/workflow" if rest.starts_with("run ") || rest.starts_with("run\t") => {
+                let name = rest[4..].trim().to_string();
+                self.start_bg(move |ctx| {
+                    let path = std::path::Path::new(&name);
+                    let options = crate::workflows::RunOptions { confirm: false, ..Default::default() };
+                    let out = if path.is_file() { crate::workflows::run(&ctx, path, options) } else { crate::workflows::run_named(&ctx, &name, options) }?;
+                    Ok(format!("workflow {} done: {:.4} EUR, {} tokens, journal {}", out.id, out.eur, out.tokens, out.journal.display()))
+                });
+            }
+            "/workflow" if rest == "list" => {
+                let list = crate::workflows::list(&self.ctx);
+                self.pager("Workflows", if list.is_empty() { "none yet".to_string() } else { list.join("\n") });
+            }
+            "/workflow" => self.toast("/workflow run NAME | /workflow list | penelope workflow status ID".to_string()),
             "/tools" => self.tools_command(rest),
             "/mcp" => {
                 if rest == "probe" {

@@ -65,6 +65,7 @@ mod tui;
 mod update;
 mod vet;
 mod weak;
+mod workflows;
 mod work;
 
 use std::io::{BufRead, IsTerminal, Write};
@@ -255,6 +256,45 @@ fn main() {
                 }
             }
             _ => print!("{}", forge::list(&ctx)),
+        },
+        "workflow" => match args.get(1).map(String::as_str) {
+            Some("run") if args.len() >= 3 => {
+                let name = args[2].clone();
+                let yes = args.iter().any(|a| a == "--yes");
+                let ask = if yes { None } else {
+                    Some(Box::new(|questions: &[serde_json::Value]| {
+                        for q in questions {
+                            println!("{}", q["question"].as_str().unwrap_or("start?"));
+                        }
+                        let mut line = String::new();
+                        std::io::stdin().read_line(&mut line).map_err(|e| e.to_string())?;
+                        Ok(vec![serde_json::json!(line.trim().eq_ignore_ascii_case("y") || line.trim().eq_ignore_ascii_case("yes"))])
+                    }) as Box<dyn FnMut(&[serde_json::Value]) -> Result<Vec<serde_json::Value>, String>>)
+                };
+                let arg_json = args.iter().position(|a| a == "--args")
+                    .and_then(|i| args.get(i + 1))
+                    .and_then(|s| serde_json::from_str(s).ok())
+                    .unwrap_or_else(|| serde_json::json!({}));
+                let options = workflows::RunOptions { confirm: !yes, ask, args: arg_json, ..Default::default() };
+                let path = std::path::Path::new(&name);
+                let out = if path.is_file() { workflows::run(&ctx, path, options) } else { workflows::run_named(&ctx, &name, options) };
+                match out {
+                    Ok(r) => println!("workflow {} done: {:.4} EUR, {} tokens, journal {}", r.id, r.eur, r.tokens, r.journal.display()),
+                    Err(e) => println!("{}", e),
+                }
+            }
+            Some("list") | None => {
+                for w in workflows::list(&ctx) { println!("{}", w); }
+            }
+            Some("status") if args.len() >= 3 => match workflows::status(&ctx, &args[2]) {
+                Ok(t) => print!("{}", t),
+                Err(e) => println!("{}", e),
+            },
+            Some("stop") if args.len() >= 3 => match workflows::stop(&ctx, &args[2]) {
+                Ok(t) => println!("{}", t),
+                Err(e) => println!("{}", e),
+            },
+            _ => println!("penelope workflow run NAME|FILE [--yes] | list | status ID | stop ID"),
         },
         "route" => print!("{}", route_text(&ctx)),
         "mode" => {

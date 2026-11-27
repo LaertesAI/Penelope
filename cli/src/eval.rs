@@ -51,7 +51,7 @@ pub fn task_cwd() -> String {
     std::env::var("PENELOPE_TASK_CWD").unwrap_or_default()
 }
 
-fn with_task_cwd<T>(dir: &Path, f: impl FnOnce() -> T) -> T {
+pub(crate) fn with_task_cwd<T>(dir: &Path, f: impl FnOnce() -> T) -> T {
     let before = TASK_CWD.with(|d| d.replace(Some(dir.to_path_buf())));
     let out = f();
     TASK_CWD.with(|d| *d.borrow_mut() = before);
