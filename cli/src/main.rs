@@ -21,6 +21,7 @@ mod cost;
 mod crew;
 mod cursor;
 mod forge;
+mod gates;
 mod graph;
 mod eurykleia;
 mod eval;
@@ -63,6 +64,7 @@ mod spec;
 mod startup;
 mod toolsearch;
 mod tools;
+mod toolscan;
 mod tui;
 mod update;
 mod vet;
@@ -190,7 +192,9 @@ penelope mcp serve vet [--scan-root DIR]     serve the skill and plugin scanner 
 penelope mcp add NAME COMMAND [ARGS...] [--allow]
                               register a standalone MCP server
 penelope mcp remove NAME      remove a standalone MCP server
-penelope mcp allow|deny NAME  put its tools on or off the allow list
+penelope mcp allow|deny NAME  put its tools on or off the allow list; allow reads and scans its tool list
+penelope mcp scan NAME        scan the tool names, descriptions and schemas of a server for hidden orders
+penelope mcp trust NAME       accept this exact tool list despite a scan finding
 penelope mcp allow-tool SERVER TOOL
                               allow one tool of a server while the server keeps its default
 penelope mcp deny-tool SERVER TOOL
@@ -646,13 +650,20 @@ fn main() {
         "mcp" if args.get(1).map(String::as_str) == Some("add") && args.len() >= 4 => {
             let allow = args[4..].iter().any(|a| a == "--allow");
             let extra: Vec<String> = args[4..].iter().filter(|a| *a != "--allow").cloned().collect();
-            println!("{}", plugins::mcp_add(&ctx, &args[2], &args[3], &extra, allow));
+            let said = plugins::mcp_add(&ctx, &args[2], &args[3], &extra, allow);
+            println!("{}", if allow { toolscan::after_allow(&ctx, &args[2], &said) } else { said });
         }
         "mcp" if args.get(1).map(String::as_str) == Some("remove") && args.len() >= 3 => {
             print_checked(plugins::mcp_remove(&ctx, &args[2]));
         }
         "mcp" if args.get(1).map(String::as_str) == Some("allow") && args.len() >= 3 => {
-            print_checked(plugins::mcp_set_allow(&ctx, &args[2], true));
+            print_checked(toolscan::after_allow(&ctx, &args[2], &plugins::mcp_set_allow(&ctx, &args[2], true)));
+        }
+        "mcp" if args.get(1).map(String::as_str) == Some("scan") && args.len() >= 3 => {
+            print!("{}", toolscan::report(&ctx, &args[2]));
+        }
+        "mcp" if args.get(1).map(String::as_str) == Some("trust") && args.len() >= 3 => {
+            println!("{}", toolscan::trust(&ctx, &args[2]));
         }
         "mcp" if args.get(1).map(String::as_str) == Some("deny") && args.len() >= 3 => {
             print_checked(plugins::mcp_set_allow(&ctx, &args[2], false));

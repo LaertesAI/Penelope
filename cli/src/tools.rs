@@ -25,7 +25,7 @@ const UNSAFE_PARTS: &[&str] = &[" rm ", "sudo", ">", "|", ";", "&", "`", "$(", "
 /// True if a command may run under the policy "safe": a read-only or build command without shell operators.
 pub fn is_safe(command: &str) -> bool {
     let padded = format!(" {} ", command);
-    if UNSAFE_PARTS.iter().any(|p| padded.contains(p)) {
+    if UNSAFE_PARTS.iter().any(|p| padded.contains(p)) || crate::gates::hidden_effect(command) {
         return false;
     }
     let mut parts = command.split_whitespace();
@@ -408,6 +408,7 @@ pub fn begin_turn() {
     TEST_FAILURES.with(|n| n.set(0));
     TEST_STOPPED.with(|s| s.set(false));
     crate::eurykleia::begin_turn();
+    crate::gates::begin_turn();
 }
 
 /// True when a tool result stopped the test loop. The text may carry the result of the edit before the marker, so the
@@ -543,7 +544,13 @@ pub fn dispatch_retry_plain(ctx: &Ctx, role: &str, name: &str, args: &serde_json
     if let Some(refusal) = crate::eurykleia::guard(ctx, name, args) {
         return (refusal, false);
     }
+    if let Some(refusal) = crate::gates::check(ctx, name, args) {
+        return (refusal, false);
+    }
+    let tree = crate::gates::before_call(ctx, name, args);
     let (text, ok) = retry_loop(|| crate::route::dispatch_as(ctx, role, name, args), name, args);
+    crate::gates::after_call(ctx, tree);
+    crate::gates::observe(ctx, name, args);
     after_edit(ctx, role, name, args, text, ok)
 }
 
@@ -1190,7 +1197,8 @@ pub fn scouts(ctx: &Ctx, tasks: &serde_json::Value, cwd: &str) -> String {
         let ctx = ctx.clone();
         let cwd = cwd.to_string();
         let asked = task.clone();
-        handles.push((i, task, std::thread::spawn(move || crate::scout::run(&ctx, &asked, &cwd))));
+        let taint = crate::gates::snapshot();
+        handles.push((i, task, std::thread::spawn(move || { crate::gates::adopt(taint); crate::scout::run(&ctx, &asked, &cwd) })));
     }
     let mut out = format!("{} lookups side by side, each on the weaker model.\n", tasks.len());
     for (i, task, h) in handles {
