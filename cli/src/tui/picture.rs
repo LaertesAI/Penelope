@@ -17,6 +17,8 @@ use std::sync::Mutex;
 /// The picture, 360 by 360 pixels with 48 colours, 78 kB. A mod may bring its own PNG; this one is the fallback.
 static PNG: &[u8] = include_bytes!("../../art/penelope_360.png");
 static ON: AtomicBool = AtomicBool::new(false);
+/// `PENELOPE_PICTURE_DEBUG=1`: the terminal reports errors of picture commands (q=1) instead of staying silent (q=2).
+static DEBUG: AtomicBool = AtomicBool::new(false);
 static WANT: Mutex<Option<Rect>> = Mutex::new(None);
 /// The number under which the terminal keeps the picture.
 const ID: u32 = 7001;
@@ -132,19 +134,25 @@ pub fn supported(env: impl Fn(&str) -> Option<String>) -> bool {
     }
     let term = env("TERM").unwrap_or_default();
     let program = env("TERM_PROGRAM").unwrap_or_default();
-    env("KITTY_WINDOW_ID").is_some() || term.contains("kitty") || term.contains("ghostty")
-        || program == "ghostty" || program == "WezTerm" || env("KONSOLE_VERSION").is_some()
+    env("KITTY_WINDOW_ID").is_some() || env("KITTY_PID").is_some() || term.contains("kitty") || term.contains("ghostty")
+        || program == "ghostty" || program == "kitty" || env("GHOSTTY_RESOURCES_DIR").is_some() || program == "WezTerm" || env("KONSOLE_VERSION").is_some()
 }
 
 /// Reads the environment once at the start of the interface.
 pub fn detect() {
     ON.store(supported(|key| std::env::var(key).ok()), Ordering::Relaxed);
+    DEBUG.store(std::env::var("PENELOPE_PICTURE_DEBUG").map(|v| v == "1").unwrap_or(false), Ordering::Relaxed);
 }
 
 /// Sets the switch by hand, for tests and for the pictures of the screen in the docs.
 #[cfg(test)]
 pub fn force(on: bool) {
     ON.store(on, Ordering::Relaxed);
+}
+
+/// The quiet level of picture commands: 2 hides every answer, 1 lets the terminal report errors.
+fn q() -> u8 {
+    if DEBUG.load(Ordering::Relaxed) { 1 } else { 2 }
 }
 
 pub fn on() -> bool {
@@ -191,6 +199,7 @@ pub struct Painter {
     sent: bool,
     at: Option<Rect>,
     generation: u64,
+    size: Option<(u16, u16)>,
 }
 
 impl Painter {
@@ -200,7 +209,7 @@ impl Painter {
         if generation != self.generation {
             // a mod brought another picture: the terminal forgets the old one, the new one goes out below
             if self.at.is_some() {
-                write!(out, "\x1b_Ga=d,d=i,i={},q=2\x1b\\", ID)?;
+                write!(out, "\x1b_Ga=d,d=i,i={},q={}\x1b\\", ID, q())?;
             }
             self.sent = false;
             self.at = None;
@@ -211,7 +220,7 @@ impl Painter {
             return Ok(());
         }
         if self.at.is_some() {
-            write!(out, "\x1b_Ga=d,d=i,i={},q=2\x1b\\", ID)?;
+            write!(out, "\x1b_Ga=d,d=i,i={},q={}\x1b\\", ID, q())?;
         }
         if let Some(rect) = want {
             if !self.sent {
@@ -221,7 +230,7 @@ impl Painter {
                 for (i, piece) in pieces.iter().enumerate() {
                     let more = if i + 1 < pieces.len() { 1 } else { 0 };
                     if i == 0 {
-                        write!(out, "\x1b_Ga=t,f=100,t=d,i={},q=2,m={};{}\x1b\\", ID, more, piece)?;
+                        write!(out, "\x1b_Ga=t,f=100,t=d,i={},q={},m={};{}\x1b\\", ID, q(), more, piece)?;
                     } else {
                         write!(out, "\x1b_Gm={};{}\x1b\\", more, piece)?;
                     }
@@ -229,25 +238,36 @@ impl Painter {
                 self.sent = true;
             }
             // save the cursor, go to the corner, show the picture over `width` columns under the text layer, come back
-            write!(out, "\x1b7\x1b[{};{}H\x1b_Ga=p,i={},p=1,c={},z=-1,C=1,q=2\x1b\\\x1b8", rect.y + 1, rect.x + 1, ID, rect.width)?;
+            write!(out, "\x1b7\x1b[{};{}H\x1b_Ga=p,i={},p=1,c={},z=-1,C=1,q={}\x1b\\\x1b8", rect.y + 1, rect.x + 1, ID, rect.width, q())?;
         }
         self.at = want;
         out.flush()
     }
 
-    /// The terminal was cleared or resized: the next frame shows the picture again.
+    /// The terminal was cleared or resized: the placement is gone, and the terminal may have dropped the data too.
+    /// The next frame sends the picture again and shows it.
     pub fn reset(&mut self, out: &mut impl Write) {
         if on() && self.at.is_some() {
-            let _ = write!(out, "\x1b_Ga=d,d=i,i={},q=2\x1b\\", ID);
+            let _ = write!(out, "\x1b_Ga=d,d=i,i={},q={}\x1b\\", ID, q());
             let _ = out.flush();
         }
         self.at = None;
+        self.sent = false;
+    }
+
+    /// Call before every frame with the terminal size. ratatui clears the screen when the size changed, which removes
+    /// the placement without any event reaching the painter, so a same-sized wish would otherwise stay unplaced.
+    pub fn watch(&mut self, size: (u16, u16), out: &mut impl Write) {
+        if self.size.is_some() && self.size != Some(size) {
+            self.reset(out);
+        }
+        self.size = Some(size);
     }
 
     /// The interface ends: the terminal forgets the picture.
     pub fn end(&mut self, out: &mut impl Write) {
         if on() && self.sent {
-            let _ = write!(out, "\x1b_Ga=d,d=I,i={},q=2\x1b\\", ID);
+            let _ = write!(out, "\x1b_Ga=d,d=I,i={},q={}\x1b\\", ID, q());
             let _ = out.flush();
         }
         self.sent = false;
@@ -258,6 +278,8 @@ impl Painter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    static LOCK: Mutex<()> = Mutex::new(());
 
     fn env(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
         move |key| pairs.iter().find(|(k, _)| *k == key).map(|(_, v)| v.to_string())
@@ -286,6 +308,7 @@ mod tests {
 
     #[test]
     fn the_picture_is_sent_once_and_moved_after_that() {
+        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
         force(true);
         let mut painter = Painter::default();
         let mut out = Vec::new();
@@ -318,5 +341,63 @@ mod tests {
         assert!(set_image(b"not a png".to_vec()).is_err());
         use_default();
         assert!(!custom() && generation() == before + 2);
+    }
+
+    fn sync_with(painter: &mut Painter, rect: Option<Rect>) -> String {
+        let mut out = Vec::new();
+        match rect { Some(r) => want(r), None => cancel() }
+        painter.sync(&mut out).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    /// Reproduces the lost picture after a login or setup: the terminal gets a fresh alternate screen without the
+    /// picture, the wish stays the same, and the old painter sent nothing because it believed the picture was there.
+    #[test]
+    fn a_new_screen_gets_the_data_and_the_placement_again() {
+        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        force(true);
+        let (mut painter, rect) = (Painter::default(), Rect::new(4, 2, 22, 11));
+        assert!(sync_with(&mut painter, Some(rect)).contains("a=t,f=100"));
+        let mut sink = Vec::new();
+        painter.end(&mut sink);
+        let again = sync_with(&mut painter, Some(rect));
+        assert!(again.contains("a=t,f=100") && again.contains("a=p,i=7001"), "data and placement go out again");
+        force(false);
+    }
+
+    /// ratatui clears the screen on a size change before it draws, so the placement is gone while the wish is equal.
+    #[test]
+    fn a_size_change_places_the_picture_again_even_for_the_same_rect() {
+        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        force(true);
+        let (mut painter, rect) = (Painter::default(), Rect::new(4, 2, 22, 11));
+        let mut sink = Vec::new();
+        painter.watch((120, 40), &mut sink);
+        sync_with(&mut painter, Some(rect));
+        painter.watch((120, 40), &mut sink);
+        assert_eq!(sync_with(&mut painter, Some(rect)), "", "the same size writes nothing");
+        painter.watch((120, 44), &mut sink);
+        let after = sync_with(&mut painter, Some(rect));
+        assert!(after.contains("a=t,f=100") && after.contains("a=p,i=7001"), "{}", after.len());
+        force(false);
+    }
+
+    /// A dialog takes the wish away for some frames; when it closes the picture comes back at the same place.
+    #[test]
+    fn the_picture_returns_after_a_dialog_at_the_same_place() {
+        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        force(true);
+        let (mut painter, rect) = (Painter::default(), Rect::new(4, 2, 22, 11));
+        sync_with(&mut painter, Some(rect));
+        assert!(sync_with(&mut painter, None).starts_with("\x1b_Ga=d"));
+        assert!(sync_with(&mut painter, Some(rect)).contains("a=p,i=7001"));
+        force(false);
+    }
+
+    #[test]
+    fn more_terminals_are_found_by_their_variables() {
+        assert!(supported(env(&[("KITTY_PID", "812")])));
+        assert!(supported(env(&[("TERM_PROGRAM", "kitty")])));
+        assert!(supported(env(&[("GHOSTTY_RESOURCES_DIR", "/usr/share/ghostty")])));
     }
 }
