@@ -821,7 +821,10 @@ fn main() {
         }
         "research" if args.iter().any(|a| a == "--deep") => {
             match deepresearch::parse_args(&args[1..]) {
-                Ok(p) => println!("{}", deepresearch::run(&ctx, &deepresearch::Params { verbose: true, ..p })),
+                Ok(p) => {
+                    deepresearch::install_ctrl_c();
+                    println!("{}", deepresearch::run(&ctx, &deepresearch::Params { verbose: true, ..p }));
+                }
                 Err(e) => { loom::warn(&e); std::process::exit(2); }
             }
         }

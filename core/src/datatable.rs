@@ -26,6 +26,8 @@ const SHOWN_ROWS: usize = 30;
 pub struct Table {
     pub source: String,
     pub primary: bool,
+    /// What was added to this table and where it came from (for example Hugging Face model cards); the caption repeats it.
+    pub note: String,
     pub header: Vec<String>,
     pub rows: Vec<Vec<String>>,
 }
@@ -67,13 +69,18 @@ pub fn parse_number(raw: &str) -> Option<f64> {
 pub fn num_tokens(text: &str) -> Vec<NumTok> {
     // A comma is a thousands separator (1,024) or, before a percent sign, a decimal comma (21,1 %). Anywhere else it
     // separates cells or list items (CSV rows), so 12.3,77.47 is two numbers.
-    let re = rx!(r"(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+,\d{1,2}(?:\s?%)|\d+(?:\.\d+)?)(?:\s?(%|billion|million|thousand|bn)\b|([kKmMbB])\b)?");
+    let re = rx!(r"(\d+(?:\.\d+){2,}|\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+,\d{1,2}(?:\s?%)|\d+(?:\.\d+)?)(?:\s?(%|billion|million|thousand|bn)\b|([kKmMbB])\b)?");
     let mut out = Vec::new();
     let (mut at_byte, mut at_char) = (0usize, 0usize);
     for c in re.captures_iter(text) {
         let m = c.get(1).unwrap();
         at_char += text[at_byte..m.start()].chars().count();
         at_byte = m.start();
+        // A version (2025.10.27.1) is one token that matches only itself.
+        if m.as_str().matches('.').count() >= 2 {
+            out.push(NumTok { pos: at_char, raw: m.as_str().to_string(), value: 0.0, scale: None, forms: vec![format!("v{}", m.as_str())], digits: m.as_str().chars().filter(|c| c.is_ascii_digit()).count() });
+            continue;
+        }
         let Some(value) = parse_number(m.as_str()) else { continue };
         let unit = c.get(2).or_else(|| c.get(3)).map(|u| u.as_str().to_lowercase());
         let scale = match unit.as_deref() {
@@ -145,7 +152,7 @@ fn table(source: &str, mut rows: Vec<Vec<String>>) -> Option<Table> {
     pad(&mut rows, n);
     let header = rows.remove(0);
     rows.truncate(MAX_ROWS);
-    Some(Table { source: source.to_string(), primary: false, header, rows })
+    Some(Table { source: source.to_string(), primary: false, note: String::new(), header, rows })
 }
 
 /// The markdown tables of a page: runs of lines that start with `|`.
@@ -319,6 +326,59 @@ pub fn guess_data_files(url: &str) -> Vec<String> {
     out
 }
 
+// ---------- model cards ----------
+
+/// Parameters (base units) and licence of a model card.
+pub type CardInfo = Option<(Option<f64>, Option<String>)>;
+
+/// The repository of a Hugging Face model link: `https://huggingface.co/org/name/...` gives `org/name`.
+pub fn hf_repo(cell: &str) -> Option<String> {
+    let c = rx!(r"huggingface\.co/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)").captures(cell)?;
+    let (org, name) = (&c[1], &c[2]);
+    if matches!(org, "datasets" | "spaces" | "docs" | "blog" | "models" | "collections" | "papers") { None } else { Some(format!("{}/{}", org, name)) }
+}
+
+/// Parameters and licence from the JSON of `https://huggingface.co/api/models/ORG/NAME`.
+pub fn parse_model_info(json: &str) -> CardInfo {
+    let v: Value = serde_json::from_str(json.trim()).ok()?;
+    let params = v["safetensors"]["total"].as_f64().or_else(|| v["safetensors"]["parameters"].as_object().map(|o| o.values().filter_map(|x| x.as_f64()).sum::<f64>()).filter(|n| *n > 0.0));
+    let license = v["cardData"]["license"].as_str().map(str::to_string)
+        .or_else(|| v["tags"].as_array().and_then(|t| t.iter().filter_map(|x| x.as_str()).find_map(|x| x.strip_prefix("license:").map(str::to_string))));
+    if params.is_none() && license.is_none() { None } else { Some((params, license)) }
+}
+
+/// Adds the columns "Parameters (Hugging Face)" and "License (Hugging Face)" to a table whose rows link model cards.
+/// `lookup` takes the repository and returns its parameters and licence. Returns how many models were found.
+pub fn add_model_cards(t: &mut Table, lookup: &mut dyn FnMut(&str) -> CardInfo, limit: usize) -> usize {
+    let Some(link_i) = t.header.iter().position(|h| norm(h).contains("link") || norm(h).contains("url")) else { return 0 };
+    if t.header.iter().any(|h| h.contains("(Hugging Face)")) {
+        return 0;
+    }
+    let (mut found, mut asked) = (0, 0);
+    let mut extra: Vec<(String, String)> = Vec::new();
+    for r in &t.rows {
+        let mut cell = (String::new(), String::new());
+        if let Some(repo) = r.get(link_i).and_then(|c| hf_repo(c)) {
+            if asked < limit {
+                asked += 1;
+                if let Some((p, l)) = lookup(&repo) {
+                    found += 1;
+                    cell = (p.map(|v| format!("{} (HF)", shown_size(v))).unwrap_or_default(), l.unwrap_or_default());
+                }
+            }
+        }
+        extra.push(cell);
+    }
+    t.header.push("Parameters (Hugging Face)".to_string());
+    t.header.push("License (Hugging Face)".to_string());
+    for (r, (p, l)) in t.rows.iter_mut().zip(extra) {
+        r.push(p);
+        r.push(l);
+    }
+    t.note = format!("Sizes and licences marked (HF) were read from the Hugging Face model cards of {} models; other sizes come from the model names.", found);
+    found
+}
+
 // ---------- filter and rank ----------
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -344,6 +404,8 @@ pub struct Spec {
     pub filters: Vec<Filter>,
     pub rank_by: Option<String>,
     pub descending: bool,
+    /// Extra columns to show when the table has them (for example "license").
+    pub show: Vec<String>,
 }
 
 /// Reads `{"filters":[{"column":"parameters","op":"<","value":2,"unit":"B"}],"rank_by":"overall","descending":true}`.
@@ -372,7 +434,9 @@ pub fn parse_spec(v: &Value) -> Spec {
         };
         if column.is_empty() { None } else { Some(Filter { column, op, value, unit }) }
     }).collect()).unwrap_or_default();
-    Spec { filters, rank_by: v["rank_by"].as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()), descending: v["descending"].as_bool().unwrap_or(true) }
+    let show: Vec<String> = v["show"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.trim().to_string())).filter(|s| !s.is_empty()).take(4).collect()).unwrap_or_default();
+    Spec { filters, rank_by: v["rank_by"].as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()), descending: v["descending"].as_bool().unwrap_or(true),
+           show: if show.is_empty() { vec!["license".to_string()] } else { show } }
 }
 
 fn norm(h: &str) -> String {
@@ -399,6 +463,16 @@ fn find_col(header: &[String], hint: &str) -> Option<usize> {
     by(&|c| c == h).or_else(|| by(&|c| c.contains(&h) || (c.len() >= 4 && h.contains(c)))).or_else(|| if param_like(hint) { by(&|c| c.starts_with("param") || c.contains("params") || c.contains("parameter") || c.contains("modelsize")) } else { None }).or_else(by_words)
 }
 
+/// Every column that holds a model size; the Hugging Face columns come first.
+fn size_cols(header: &[String]) -> Vec<usize> {
+    let mut cols: Vec<usize> = header.iter().enumerate().filter(|(_, h)| {
+        let n = norm(h);
+        !n.contains("link") && !n.contains("url") && (n.starts_with("param") || n.contains("params") || n.contains("parameter") || n.contains("modelsize"))
+    }).map(|(i, _)| i).collect();
+    cols.sort_by_key(|i| !header[*i].contains("(Hugging Face)"));
+    cols
+}
+
 fn name_col(header: &[String]) -> usize {
     header.iter().position(|c| { let n = norm(c); (n.contains("model") || n == "name") && !n.contains("link") && !n.contains("url") }).unwrap_or(0)
 }
@@ -423,6 +497,7 @@ pub struct Selection {
     pub criteria: String,
     /// Filters whose column the table lacks; they were not applied.
     pub unchecked: Vec<String>,
+    pub note: String,
 }
 
 fn pass(op: Op, a: f64, b: f64) -> bool {
@@ -444,7 +519,7 @@ fn unit_scale(u: &str) -> f64 {
     }
 }
 
-fn shown_size(v: f64) -> String {
+pub fn shown_size(v: f64) -> String {
     if v >= 1e9 { format!("{}B", fmt((v / 1e7).round() / 100.0)) } else if v >= 1e6 { format!("{}M", fmt((v / 1e4).round() / 100.0)) } else { fmt(v) }
 }
 
@@ -475,6 +550,7 @@ pub fn select(t: &Table, spec: &Spec) -> Option<Selection> {
         }
     }
     let spec = &Spec { filters, ..spec.clone() };
+    let show_cols: Vec<usize> = spec.show.iter().filter_map(|h| find_col(&t.header, h)).filter(|i| *i != name_i && *i != rank_i && !cols.contains(&Some(*i))).collect();
     let mut kept: Vec<(f64, String, Vec<String>)> = Vec::new();
     let mut unknown = 0;
     for r in &t.rows {
@@ -486,15 +562,23 @@ pub fn select(t: &Table, spec: &Spec) -> Option<Selection> {
         let mut ok = true;
         let mut shown: Vec<String> = Vec::new();
         for (f, c) in spec.filters.iter().zip(&cols) {
-            let (value, text) = match c {
-                Some(i) => {
-                    let cell = r.get(*i).cloned().unwrap_or_default();
-                    (quantity(&cell, header_scale(&t.header[*i])), cell)
-                }
-                None => match params_from_name(&name) {
-                    Some(v) => (Some(v), format!("{} (from name)", shown_size(v))),
-                    None => (None, String::new()),
-                },
+            let from_name = || match params_from_name(&name) {
+                Some(v) => (Some(v), format!("{} (from name)", shown_size(v))),
+                None => (None, String::new()),
+            };
+            // A size filter reads every size column of the table, the card columns first, then the model name.
+            let candidates: Vec<usize> = if param_like(&f.column) { size_cols(&t.header) } else { c.iter().copied().collect() };
+            let from_cols = candidates.iter().find_map(|i| {
+                let cell = r.get(*i).cloned().unwrap_or_default();
+                quantity(&cell, header_scale(&t.header[*i])).map(|v| {
+                    let tag = if t.header[*i].contains("(Hugging Face)") { "HF" } else { "table" };
+                    (Some(v), format!("{} ({})", shown_size(v), tag))
+                })
+            });
+            let (value, text) = match from_cols {
+                Some(found) => found,
+                None if param_like(&f.column) => from_name(),
+                None => (None, String::new()),
             };
             let Some(v) = value else { ok = false; unknown += 1; break };
             if !pass(f.op, v, f.value * unit_scale(&f.unit)) {
@@ -507,6 +591,7 @@ pub fn select(t: &Table, spec: &Spec) -> Option<Selection> {
             let mut row = vec![name.clone()];
             row.extend(shown);
             row.push(r.get(rank_i).cloned().unwrap_or_default());
+            row.extend(show_cols.iter().map(|i| r.get(*i).cloned().unwrap_or_default()));
             kept.push((score, name.to_lowercase(), row));
         }
     }
@@ -519,9 +604,10 @@ pub fn select(t: &Table, spec: &Spec) -> Option<Selection> {
     }
     let mut header = vec!["Rank".to_string(), t.header[name_i].clone()];
     for (f, c) in spec.filters.iter().zip(&cols) {
-        header.push(match c { Some(i) => t.header[*i].clone(), None => format!("{} (from the model name)", f.column) });
+        header.push(if param_like(&f.column) { "Parameters".to_string() } else { match c { Some(i) => t.header[*i].clone(), None => f.column.clone() } });
     }
     header.push(t.header[rank_i].clone());
+    header.extend(show_cols.iter().map(|i| t.header[*i].clone()));
     let mut rows = Vec::new();
     let mut rank = 0usize;
     let mut last: Option<f64> = None;
@@ -537,12 +623,12 @@ pub fn select(t: &Table, spec: &Spec) -> Option<Selection> {
     let criteria = spec.filters.iter().map(|f| format!("{} {} {}{}", f.column, match f.op { Op::Lt => "<", Op::Le => "<=", Op::Gt => ">", Op::Ge => ">=", Op::Eq => "=" }, fmt(f.value), f.unit)).collect::<Vec<_>>().join(" and ");
     let kept_n = rows.len();
     rows.truncate(SHOWN_ROWS);
-    Some(Selection { source: t.source.clone(), primary: t.primary, header, rows, considered: t.rows.len(), unknown, kept: kept_n, rank_col: t.header[rank_i].clone(), criteria, unchecked })
+    Some(Selection { source: t.source.clone(), primary: t.primary, header, rows, considered: t.rows.len(), unknown, kept: kept_n, rank_col: t.header[rank_i].clone(), criteria, unchecked, note: t.note.clone() })
 }
 
 /// The best selection over several tables: a primary source before a secondary one, then the one with most rows.
 pub fn best(tables: &[Table], spec: &Spec) -> Option<Selection> {
-    tables.iter().filter_map(|t| select(t, spec)).max_by_key(|s| (s.primary, s.kept))
+    tables.iter().filter_map(|t| select(t, spec)).max_by_key(|s| (s.primary, !s.note.is_empty(), s.kept))
 }
 
 impl Selection {
@@ -550,9 +636,10 @@ impl Selection {
     pub fn markdown(&self) -> String {
         let left_out = if self.unknown > 0 { format!(" {} rows were left out: no size in the table or in the model name, or no score.", self.unknown) } else { String::new() };
         let unchecked = if self.unchecked.is_empty() { String::new() } else { format!(" Not checked, the table has no such column: {}.", self.unchecked.join(", ")) };
-        let mut out = format!("Computed by Penelope from the rows of {} ({}): {} of {} rows{}, ranked by {}. The rank counts the kept rows, not the rank the source prints.{}{}\n\n",
+        let note = if self.note.is_empty() { String::new() } else { format!(" {}", self.note) };
+        let mut out = format!("Computed by Penelope from the rows of {} ({}): {} of {} rows{}, ranked by {}. The rank counts the kept rows, not the rank the source prints.{}{}{}\n\n",
             self.source, if self.primary { "primary source" } else { "secondary source, third party" }, self.kept, self.considered,
-            if self.criteria.is_empty() { String::new() } else { format!(" with {}", self.criteria) }, self.rank_col, left_out, unchecked);
+            if self.criteria.is_empty() { String::new() } else { format!(" with {}", self.criteria) }, self.rank_col, left_out, unchecked, note);
         out.push_str(&format!("| {} |\n|{}|\n", self.header.join(" | "), vec!["---"; self.header.len()].join("|")));
         for r in &self.rows {
             out.push_str(&format!("| {} |\n", r.iter().map(|c| c.replace('|', "/")).collect::<Vec<_>>().join(" | ")));
@@ -590,6 +677,8 @@ mod tests {
         assert!(missing_numbers("a 450M model", "a 0.45B model").is_empty() && missing_numbers("a 0.6B model", "600M parameters").is_empty());
         assert_eq!(missing_numbers("scored 21.2", "scored 21.1 and 21.10"), vec!["21.2".to_string()]);
         assert_eq!(missing_numbers("scored 77", "scored 7 and 770"), vec!["77".to_string()]);
+        assert!(missing_numbers("pins bfcl-eval==2025.10.27.1", "bfcl-eval ==  2025.10.27.1").is_empty());
+        assert_eq!(missing_numbers("pins 2025.10.27.1", "pins 2025.10.27.2"), vec!["2025.10.27.1".to_string()]);
         assert_eq!(parse_number("21,1 %"), Some(21.1));
         assert_eq!(parse_number("1,024"), Some(1024.0));
         assert_eq!(params_from_name("Qwen3-0.6B (FC)"), Some(6e8));
@@ -642,19 +731,50 @@ mod tests {
         assert_eq!(models, ["xLAM-2-1b-fc-r", "MiniCPM5-1B", "Qwen3-0.6B (FC)"]);
         let ranks: Vec<&str> = s.rows.iter().map(|r| r[0].as_str()).collect();
         assert_eq!(ranks, ["1", "2", "3"], "the rank counts the kept rows; the source printed 4, 6 and 2");
-        assert!(s.rows[0][2].contains("from name") && s.header[2].contains("from the model name"));
+        assert!(s.rows[0][2].contains("from name") && s.header[2] == "Parameters");
         let md = s.markdown();
         assert!(md.contains("| Rank | Model |") && md.contains("| 1 | xLAM-2-1b-fc-r |") && md.contains("secondary source") && md.contains("not the rank the source prints"), "{}", md);
     }
 
     #[test]
+    fn model_cards_give_sizes_and_licences_and_the_rest_falls_back_to_the_name() {
+        assert_eq!(hf_repo("https://huggingface.co/katanemo/Arch-Agent-1.5B"), Some("katanemo/Arch-Agent-1.5B".to_string()));
+        assert_eq!(hf_repo("https://huggingface.co/datasets/x/y"), None);
+        assert_eq!(hf_repo("https://openai.com/x"), None);
+        let (p, l) = parse_model_info(r#"{"safetensors":{"parameters":{"BF16":2031739904},"total":2031739904},"cardData":{"license":"apache-2.0"}}"#).unwrap();
+        assert_eq!((p, l.as_deref()), (Some(2031739904.0), Some("apache-2.0")));
+        let (p, l) = parse_model_info(r#"{"safetensors":{"parameters":{"F32":1000000000,"BF16":500000000}},"tags":["transformers","license:mit"]}"#).unwrap();
+        assert_eq!((p, l.as_deref()), (Some(1.5e9), Some("mit")));
+        assert!(parse_model_info("{\"id\":\"x\"}").is_none() && parse_model_info("not json").is_none());
+        let mut t = from_csv("https://lb.example/d.csv", "Rank,Overall Acc,Model,Model Link\n1,70,GPT-X,https://openai.com/x\n2,40,Big-Model-1.2B,https://huggingface.co/org/big\n3,30,Small-Model-1B,https://huggingface.co/org/small\n4,20,Plain-0.5B,https://huggingface.co/org/plain\n").unwrap();
+        t.primary = true;
+        let mut asked = Vec::new();
+        let found = add_model_cards(&mut t, &mut |repo| {
+            asked.push(repo.to_string());
+            match repo { "org/big" => Some((Some(2.03e9), Some("apache-2.0".to_string()))), "org/small" => Some((Some(1.2e9), Some("mit".to_string()))), _ => None }
+        }, 50);
+        assert_eq!((found, asked.len()), (2, 3));
+        assert_eq!(t.header[4..], ["Parameters (Hugging Face)".to_string(), "License (Hugging Face)".to_string()]);
+        let s = select(&t, &spec()).unwrap();
+        // Big-Model has 2.03B on its card although its name says 1.2B: it is out. Small-Model passes by card, Plain by name; GPT-X has no size.
+        let models: Vec<&str> = s.rows.iter().map(|r| r[1].as_str()).collect();
+        assert_eq!(models, ["Small-Model-1B", "Plain-0.5B"], "{:?}", s);
+        assert!(s.rows[0][2].contains("(HF)") && s.rows[1][2].contains("from name"));
+        assert_eq!(s.header.last().unwrap(), "License (Hugging Face)");
+        assert_eq!(s.rows[0].last().unwrap(), "mit");
+        assert!(s.markdown().contains("read from the Hugging Face model cards of 2 models"));
+        // A second call does not ask again.
+        assert_eq!(add_model_cards(&mut t, &mut |_| panic!("asked twice"), 50), 0);
+    }
+
+    #[test]
     fn a_column_that_only_contains_param_is_not_the_size_column() {
-        let t = Table { source: "u".into(), primary: true, header: vec!["Rank".into(), "Overall Acc".into(), "Model".into(), "Multi Turn Miss Param".into()],
+        let t = Table { source: "u".into(), primary: true, note: String::new(), header: vec!["Rank".into(), "Overall Acc".into(), "Model".into(), "Multi Turn Miss Param".into()],
                         rows: vec![vec!["1".into(), "70".into(), "Big-70B".into(), "50%".into()], vec!["2".into(), "30".into(), "Tiny-1B".into(), "20%".into()], vec!["3".into(), "20".into(), "Other".into(), "10%".into()]] };
         let s = select(&t, &spec()).unwrap();
         assert_eq!(s.kept, 1, "{:?}", s);
         assert_eq!(s.rows[0][1], "Tiny-1B");
-        assert!(s.header[2].contains("from the model name"));
+        assert_eq!(s.header[2], "Parameters");
     }
 
     #[test]
@@ -667,7 +787,7 @@ mod tests {
         assert_eq!(models, ["Small One", "Tiny, Model"]);
         assert_eq!(s.unknown, 1);
         assert!(s.markdown().contains("primary source"));
-        let tie = Table { source: "u".into(), primary: false, header: vec!["Model".into(), "Score".into()],
+        let tie = Table { source: "u".into(), primary: false, note: String::new(), header: vec!["Model".into(), "Score".into()],
                           rows: vec![vec!["A-1B".into(), "50".into()], vec!["B-1B".into(), "50".into()], vec!["C-1B".into(), "40".into()]] };
         let by_score = parse_spec(&json!({"filters": [{"column": "parameters", "op": "<", "value": 2, "unit": "B"}], "rank_by": "score"}));
         let s = select(&tie, &by_score).unwrap();
