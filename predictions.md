@@ -83,3 +83,11 @@ Vor dem Lauf. 20 eingefrorene Hold-out-Aufgaben, SHA-256 `626fbf6d14e0d4340bc1b7
 Vorhersage: large 5/20, K9 5/20, b = 0, c = 0, exakter McNemar p = 1,0. K9 kostet höchstens 20 % von large und braucht höchstens 1,0-mal die Zeit. Abbruch: K9 löst 2 oder mehr Aufgaben weniger als large, oder die Zeit liegt über 1,2-mal large.
 
 Die 1 scikit-Aufgabe ist `infra` und wird ausgeschlossen.
+
+## Ergebnis A3
+
+Claude Code allein, Haiku 5.5 mit `effort: low`, 28 Entwicklungsaufgaben: 9/28. Penelope K9: 8/28. b = 1 (`sphinx-doc__sphinx-8595`), c = 0, exakter McNemar p = 1,0. Claude Code 0,1571 EUR und 1.546 s, K9 0,1446 EUR und 1.619 s. Claude Code ist 4,5 % schneller und 8,6 % teurer. Der eine Treffer ist nicht signifikant.
+
+## Ergebnis A1
+
+Preise neu: Haiku 5.5 0,10/0,50, Sonnet 5.5 2,00/10,00 USD je Mio. Auf den 28 Aufgaben: large 1,5065, cluster Basis 0,3138, K9 0,1446 EUR. Die alten Werte 2,2597, 2,5108, 1,1567 waren mit den Preisen von Haiku 4.5 und Sonnet 4.6 gerechnet.
