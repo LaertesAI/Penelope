@@ -209,9 +209,37 @@ pub fn stored_spec(ctx: &Ctx, profile: &str) -> Option<Value> {
     v.get("spec").filter(|s| s.is_object()).cloned()
 }
 
-/// True if the spec says a person must approve each run. A timer starts a run alone, so it cannot honor that.
+/// True if the spec says a person must approve each run. A timer starts a run alone, so it can only wait.
 fn needs_approval_each_run(ctx: &Ctx, profile: &str) -> bool {
     stored_spec(ctx, profile).map(|s| s["approve_each_run"].as_str() == Some("yes")).unwrap_or(false)
+}
+
+/// Puts the factory's run in front of the person. The answer folder is the normal `.penelope/approvals`; a running
+/// full screen interface watches it. No answer means no run. A timer therefore waits instead of acting alone.
+fn approve_run(ctx: &Ctx, f: &Factory) -> bool {
+    approve_run_with(ctx, f, crate::ask::timeout_secs(ctx))
+}
+
+fn approve_run_with(ctx: &Ctx, f: &Factory, timeout: u64) -> bool {
+    use crate::ask::{Opt, Question, Reply};
+    let question = Question {
+        header: "Factory".to_string(),
+        question: format!("Factory {} is due now. Start the run with profile {}?\n{}", f.name, f.profile, f.goal),
+        options: vec![
+            Opt { label: "yes".to_string(), description: "start this run now".to_string() },
+            Opt { label: "no".to_string(), description: "skip this run".to_string() },
+        ],
+        multi_select: false,
+        allow_text: false,
+    };
+    let dir = ctx.root.join("approvals");
+    let _ = fs::create_dir_all(&dir);
+    let reply = crate::ask::ask_in(&dir, &[question], timeout, true);
+    match reply {
+        Reply::Answers(answers) => answers.first()
+            .map(|a| a.labels.iter().any(|l| l.eq_ignore_ascii_case("yes"))).unwrap_or(false),
+        _ => false,
+    }
 }
 
 /// The stored spec as one line for the list: approval, budget, rights, abort rule, rounds, results.
@@ -221,8 +249,19 @@ fn spec_line(spec: &Value) -> String {
         .filter_map(|(k, l)| get(k, l)).collect::<Vec<_>>().join(" · ")
 }
 
-/// The command every timer starts. It is the normal cluster command; a factory has no runner of its own.
+/// The command every timer starts: the normal cluster command, or `factory run NAME` when the spec asks for a yes
+/// before each run. The outer `factory run` asks and only then starts the cluster.
 fn runner_args(ctx: &Ctx, f: &Factory) -> Vec<String> {
+    let exe = std::env::current_exe().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|_| "penelope".to_string());
+    if needs_approval_each_run(ctx, &f.profile) {
+        return vec![exe, "--root".to_string(), ctx.root.to_string_lossy().to_string(),
+                    "factory".to_string(), "run".to_string(), f.name.clone()];
+    }
+    cluster_args(ctx, f)
+}
+
+/// The cluster command itself. `factory run` uses this after the yes; it never calls `runner_args` again.
+fn cluster_args(ctx: &Ctx, f: &Factory) -> Vec<String> {
     let exe = std::env::current_exe().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|_| "penelope".to_string());
     vec![exe, "--root".to_string(), ctx.root.to_string_lossy().to_string(),
          "cluster".to_string(), "run".to_string(), "--profile".to_string(), f.profile.clone(), f.goal.clone()]
@@ -596,15 +635,11 @@ pub fn install(ctx: &Ctx, name: &str, dry: bool, yes: bool) -> Result<String, St
         return Err("choose --dry (show the units, change nothing) or --yes (install), not both.".to_string());
     }
     let must_approve = needs_approval_each_run(ctx, &f.profile);
-    if must_approve && yes && !dry {
-        return Err(format!("NOT installed. The spec of factory {} says a person approves each run, and a timer starts runs alone. \
-                            Run it by hand with `penelope factory run {}` after your yes, or create the factory again with approval no.", f.name, f.name));
-    }
     let dir = unit_dir(ctx, &f);
     let units = units(ctx, &f);
     let mut out = report(ctx, &f);
     if must_approve {
-        out.push_str("\nWarning: the spec says a person approves each run. A timer cannot ask, so installing it is refused.\n");
+        out.push_str("\nWarning: the spec says a person approves each run. The timer starts `penelope factory run`, which waits in .penelope/approvals for a yes and skips the run when none comes. A timer alone therefore never starts a model.\n");
     }
     if dry || !yes {
         out.push_str(&format!("\nNothing written and no timer enabled. After a yes, the files go to {}:\n", dir.display()));
@@ -657,7 +692,13 @@ pub fn stop(ctx: &Ctx, name: &str) -> Result<String, String> {
 pub fn run(ctx: &Ctx, name: &str) -> Result<String, String> {
     let mut f = find(ctx, name)?;
     crate::clusters::profile(ctx, &f.profile)?;
-    let args = runner_args(ctx, &f);
+    if needs_approval_each_run(ctx, &f.profile) {
+        let approved = approve_run(ctx, &f);
+        if !approved {
+            return Ok(format!("factory {} did not run: the spec asks for a yes before each run, and no yes came before the deadline.", f.name));
+        }
+    }
+    let args = cluster_args(ctx, &f);
     let dir = log_dir(ctx, &f.name);
     fs::create_dir_all(&dir).map_err(|e| format!("cannot make {}: {}", dir.display(), e))?;
     let out = Command::new(&args[0]).args(&args[1..]).current_dir(project_dir(ctx))
@@ -934,7 +975,7 @@ mod tests {
     }
 
     #[test]
-    fn a_stored_approval_blocks_the_timer_and_the_list_shows_the_spec() {
+    fn a_stored_approval_waits_for_a_yes_and_the_list_shows_the_spec() {
         let (ctx, dir) = ctx();
         let mut spec = crate::clarify::Spec::new(crate::clarify::Kind::Factory);
         for (k, v) in [("goal", "Check mail"), ("approve_each_run", "yes"), ("budget", "2 EUR"), ("rights", "read-only")] { spec.values.insert(k.to_string(), v.to_string()); }
@@ -943,10 +984,14 @@ mod tests {
         assert_eq!(stored_spec(&ctx, "mail").unwrap()["approve_each_run"], "yes");
         let list = list_text(&ctx);
         assert!(list.contains("spec: approval yes · budget 2 EUR · rights read-only"), "{}", list);
-        let e = install(&ctx, "mail", false, true).unwrap_err();
-        assert!(e.starts_with("NOT installed") && e.contains("approves each run"), "{}", e);
-        assert!(install(&ctx, "mail", true, false).unwrap().contains("Warning: the spec says a person approves each run"));
-        assert!(!dir.join(".penelope/factories.json").exists() || !fs::read_to_string(dir.join(".penelope/factories.json")).unwrap().contains("\"armed\": true"));
+        let dry = install(&ctx, "mail", true, false).unwrap();
+        assert!(dry.contains("waits in .penelope/approvals for a yes"), "{}", dry);
+        let f = find(&ctx, "mail").unwrap();
+        assert_eq!(runner_args(&ctx, &f).iter().any(|a| a == "factory"), true, "an approval factory runs through `factory run`");
+        assert!(cluster_args(&ctx, &f).iter().any(|a| a == "cluster"));
+        // No answer: the run is skipped and no cluster is created.
+        assert!(!approve_run_with(&ctx, &f, 0));
+        assert!(crate::clusters::list(&ctx).is_empty());
         let _ = fs::remove_dir_all(&dir);
     }
 

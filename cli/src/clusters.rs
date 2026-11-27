@@ -3729,7 +3729,7 @@ mod tests {
 
     #[test]
     fn a_tool_call_without_cwd_from_an_api_part_writes_in_its_worktree() {
-        let (address, seen) = crate::llm::fake::serve(vec![
+        let (address, _seen) = crate::llm::fake::serve(vec![
             (200, tool_reply("write", json!({"path": "part.txt", "text": "made by the part\n"}))),
             (200, text_reply("wrote part.txt")),
             (200, tool_reply("run", json!({"command": "cat hello.txt"}))),
@@ -3742,10 +3742,8 @@ mod tests {
         assert!(!dir.join("part.txt").exists());
         let out = run_cluster(&ctx, &c.id).unwrap();
         assert!(out.contains("done"), "{}", out);
-        let body = seen.lock().unwrap()[1].body.to_string();
-        // The body is JSON: a Windows path arrives there with every \ escaped as \\.
-        let in_json = json!(c.worktree).to_string();
-        assert!(body.contains(in_json.trim_matches('"')), "the write went to the worktree, not the live tree: {}", body);
+        // The tool answer shortens /home/... to ~/..., so the request body is not a reliable path witness.
+        // The two files below are: the worktree holds the part's write, the live tree only gets the applied diff.
         assert_eq!(fs::read_to_string(dir.join("part.txt")).unwrap(), "made by the part\n");
         assert_eq!(fs::read_to_string(Path::new(&c.worktree).join("part.txt")).unwrap(), "made by the part\n");
         let _ = fs::remove_dir_all(&dir);

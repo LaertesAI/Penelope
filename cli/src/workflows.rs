@@ -35,12 +35,27 @@ impl Default for RunOptions {
             args: json!({}),
             budget_eur: 0.0,
             budget_tokens: 0,
-            max_parallel: 4,
+            max_parallel: default_max_parallel(),
             confirm: true,
             cancel: Arc::new(AtomicBool::new(false)),
             ask: None,
             resume_id: None,
         }
+    }
+}
+
+/// The default number of parallel agents from the machine, not from a wish: half the CPUs, at most 4, and at most
+/// one agent per 1.5 GB of available memory. On the owner's machine the memory bound is the one that matters.
+pub fn default_max_parallel() -> usize {
+    let cpus = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    let by_cpu = (cpus / 2).max(1).min(4);
+    let free_gb = fs::read_to_string("/proc/meminfo").ok()
+        .and_then(|text| text.lines().find(|l| l.starts_with("MemAvailable:"))
+            .and_then(|l| l.split_whitespace().nth(1)).and_then(|k| k.parse::<u64>().ok()))
+        .map(|kib| kib as f64 / 1024.0 / 1024.0);
+    match free_gb {
+        Some(gb) => by_cpu.min((gb / 1.5).floor().max(1.0) as usize),
+        None => by_cpu,
     }
 }
 
@@ -769,8 +784,13 @@ mod tests {
     }
 
     #[test]
-    fn a_workflow_cannot_raise_the_run_policy() {
-        let dir = std::env::temp_dir().join(format!("penelope-workflow-policy-{}", std::process::id()));
+    fn the_default_parallel_limit_comes_from_the_machine_and_stays_small() {
+        let n = default_max_parallel();
+        assert!((1..=4).contains(&n), "{}", n);
+    }
+
+    #[test]
+    fn a_workflow_cannot_raise_the_run_policy() {        let dir = std::env::temp_dir().join(format!("penelope-workflow-policy-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let mut ctx = crate::config::load(&dir.join(".penelope"));
