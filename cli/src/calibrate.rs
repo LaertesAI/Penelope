@@ -424,6 +424,14 @@ pub fn check(run: &TaskRun) -> (bool, String) {
     }
 }
 
+/// How often a run that ended on a rate limit (status 429) is started again in all.
+pub const RATE_LIMIT_TRIES: u32 = 3;
+
+/// True when a turn ended on a rate limit of the provider.
+pub fn rate_limited(error: &str) -> bool {
+    error.contains("status 429")
+}
+
 /// What a set of runs needs besides the tasks.
 pub struct Plan<'a> {
     pub base: &'a Value,
@@ -432,6 +440,8 @@ pub struct Plan<'a> {
     pub out: &'a Path,
     pub jobs: usize,
     pub turn_timeout: Duration,
+    /// The pause before a run that hit a rate limit starts again.
+    pub rate_limit_pause: Duration,
 }
 
 /// Runs every task in every variant, at most `jobs` at once, through `exec` (the child process, or a fake model in
@@ -460,16 +470,25 @@ pub fn run_all(plan: &Plan, tasks: &[crate::eval::Task], variants: &[Variant], e
             s.spawn(|| loop {
                 let i = next.fetch_add(1, Ordering::SeqCst);
                 let Some((task, variant)) = queue.get(i) else { break };
-                let start = Instant::now();
-                let result = match prepare(plan.base, plan.model, plan.out, task, variant, plan.turn_timeout) {
-                    Ok(run) => {
-                        let turn = exec(&run);
-                        let (passed, text) = check(&run);
-                        let (tin, tout, eur) = usage_of(&run.root, plan.prices);
-                        RunResult { variant: variant.name.clone(), task: task.id.clone(), passed, tokens_in: tin, tokens_out: tout, eur,
-                                    wall_ms: start.elapsed().as_millis() as u64, error: turn.error.chars().take(400).collect(), check: text }
+                let mut attempt = 0u32;
+                let result = loop {
+                    attempt += 1;
+                    let start = Instant::now();
+                    let result = match prepare(plan.base, plan.model, plan.out, task, variant, plan.turn_timeout) {
+                        Ok(run) => {
+                            let turn = exec(&run);
+                            let (passed, text) = check(&run);
+                            let (tin, tout, eur) = usage_of(&run.root, plan.prices);
+                            RunResult { variant: variant.name.clone(), task: task.id.clone(), passed, tokens_in: tin, tokens_out: tout, eur,
+                                        wall_ms: start.elapsed().as_millis() as u64, error: turn.error.chars().take(400).collect(), check: text }
+                        }
+                        Err(e) => RunResult { variant: variant.name.clone(), task: task.id.clone(), error: e, wall_ms: start.elapsed().as_millis() as u64, ..Default::default() },
+                    };
+                    // A rate limit of the provider is no result of the variant: the run starts again from a fresh copy.
+                    if !rate_limited(&result.error) || attempt >= RATE_LIMIT_TRIES {
+                        break result;
                     }
-                    Err(e) => RunResult { variant: variant.name.clone(), task: task.id.clone(), error: e, wall_ms: start.elapsed().as_millis() as u64, ..Default::default() },
+                    std::thread::sleep(plan.rate_limit_pause);
                 };
                 {
                     let _g = writer.lock().unwrap_or_else(|e| e.into_inner());
@@ -644,7 +663,8 @@ pub fn command(ctx: &Ctx, o: &Options) -> Result<String, String> {
     if variants.is_empty() {
         return Err("no variant left after --variants".into());
     }
-    let plan = Plan { base: &ctx.cfg, model: &model, prices: ctx, out: &out, jobs: o.jobs, turn_timeout: Duration::from_secs(o.turn_timeout) };
+    let plan = Plan { base: &ctx.cfg, model: &model, prices: ctx, out: &out, jobs: o.jobs, turn_timeout: Duration::from_secs(o.turn_timeout),
+                      rate_limit_pause: Duration::from_secs(60) };
     let count = Mutex::new(0usize);
     let total = tasks.len() * variants.len();
     let results = run_all(&plan, &tasks, &variants, &child_turn, &|r| {
@@ -784,7 +804,8 @@ mod tests {
         let model = json!({"kind": "openai", "base_url": "https://opencode.ai/zen/go/v1", "model": "glm-5.3", "effort": "high"});
         let prices = Ctx { root: dir.clone(), cfg: json!({"prices": {"glm-5.3": [1.0, 2.0]}, "eur_per_usd": 1.0}) };
         let out = dir.join("out");
-        let plan = Plan { base: &json!({}), model: &model, prices: &prices, out: &out, jobs: 3, turn_timeout: Duration::from_secs(5) };
+        let plan = Plan { base: &json!({}), model: &model, prices: &prices, out: &out, jobs: 3, turn_timeout: Duration::from_secs(5),
+                          rate_limit_pause: Duration::from_millis(10) };
         let vars = variants("opencode", "glm-5.3")[..2].to_vec();
         let calls = AtomicUsize::new(0);
         // The fake model: "text" writes the right answer, "default" solves t1 only. It records 1000 in / 100 out.
@@ -808,9 +829,25 @@ mod tests {
         assert_eq!(select(&scores), 1);
         assert_eq!(paired(&results, "default", "text"), (1, 0));
         // A second call finds every result on disk and runs nothing.
+        let limited = AtomicUsize::new(0);
+        let flaky = |run: &TaskRun| {
+            if limited.fetch_add(1, Ordering::SeqCst) == 0 {
+                return Turn { error: "https://opencode.ai/zen/go/v1/chat/completions answered with status 429: Rate limit exceeded.".into(), ..Default::default() };
+            }
+            fs::write(run.workdir.join("out.txt"), "ok\n").unwrap();
+            Turn::default()
+        };
+        let out2 = dir.join("out2");
+        let plan2 = Plan { out: &out2, jobs: 1, ..Plan { ..plan_copy(&plan) } };
+        let retried = run_all(&plan2, &tasks[..1], &vars[..1], &flaky, &|_| {}).unwrap();
+        assert_eq!((retried.len(), retried[0].passed, retried[0].error.as_str(), limited.load(Ordering::SeqCst)), (1, true, "", 2));
         let again = run_all(&plan, &tasks, &vars, &fake, &|_| {}).unwrap();
         assert_eq!((again.len(), calls.load(Ordering::SeqCst)), (4, 4));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn plan_copy<'a>(p: &Plan<'a>) -> Plan<'a> {
+        Plan { base: p.base, model: p.model, prices: p.prices, out: p.out, jobs: p.jobs, turn_timeout: p.turn_timeout, rate_limit_pause: p.rate_limit_pause }
     }
 
     #[cfg(unix)]
