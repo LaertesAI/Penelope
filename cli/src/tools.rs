@@ -408,6 +408,7 @@ pub fn begin_turn() {
     TEST_FAILURES.with(|n| n.set(0));
     TEST_STOPPED.with(|s| s.set(false));
     crate::eurykleia::begin_turn();
+    crate::checker::begin_turn();
     crate::gates::begin_turn();
 }
 
@@ -501,6 +502,7 @@ fn after_edit(ctx: &Ctx, role: &str, name: &str, args: &serde_json::Value, text:
     if !ok || !matches!(name, "write" | "edit") || !text.starts_with("done") {
         return (text, ok);
     }
+    crate::checker::note_edit(ctx, role, args);
     let Some((command, attempts)) = test_settings(ctx, role) else {
         return (text, ok);
     };

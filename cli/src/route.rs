@@ -64,7 +64,7 @@ pub fn allowed_for(role: &str) -> Vec<&'static str> {
         // beyond GET, no MCP call.
         "scout" => &["web_search", "research", "fetch", "read", "find", "grep", "tree", "outline", "run", "run_detail", "memory_go", "memory_find", "session_search", "json_query"],
         "worker" => &["read", "write", "edit", "unzip", "undo", "pr_create", "run", "run_detail", "job_start", "job_read", "job_stop", "find", "grep", "tree", "outline", "lsp", "memory_go", "memory_find",
-                      "json_query", "git_diff", "mcp_servers", "mcp_call", "cluster_spawn", "cluster_ask"],
+                      "json_query", "git_diff", "mcp_servers", "mcp_call", "cluster_spawn", "cluster_ask", "verify_fix"],
         "judge" => &["read", "grep", "tree", "outline", "lsp", "run", "run_detail", "json_query", "git_diff", "cluster_ask"],
         "tool" => &["screen", "cursor", "mcp_servers", "mcp_call", "brief_check", "brief_put", "read", "outline", "tree"],
         _ => &[],

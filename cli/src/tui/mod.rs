@@ -112,6 +112,7 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd { name: "/auth", help: "the login status of Claude and the providers", key: "", takes_text: false },
     Cmd { name: "/update", help: "check for a newer Penelope", key: "", takes_text: false },
     Cmd { name: "/audit", help: "look for key and plain-http leaks in .penelope", key: "", takes_text: false },
+    Cmd { name: "/check", help: "code checker: /check TEST, /check best TEST [N] -- ISSUE, /check gate|report|off", key: "", takes_text: true },
     Cmd { name: "/input", help: "native pointer helper: status, install, enable", key: "", takes_text: false },
     Cmd { name: "/providers", help: "connect a provider: login or API key", key: "", takes_text: false },
     Cmd { name: "/undo", help: "take back the last change to a file", key: "", takes_text: false },
@@ -1486,6 +1487,18 @@ impl App {
             "/auth" => self.pager("Login and keys", crate::auth::status(&self.ctx)),
             "/update" => self.start_bg(|ctx| crate::update::check(&ctx)),
             "/audit" => self.pager("Leak audit", crate::audit::run(&self.ctx)),
+            "/check" => match rest {
+                "" => self.pager("Checker", crate::checker::status(&self.ctx)),
+                "gate" | "report" | "off" | "on" => {
+                    self.ctx.cfg["check"]["mode"] = serde_json::json!(if rest == "on" { "gate" } else { rest });
+                    save_config(&self.ctx);
+                    self.pager("Checker", crate::checker::status(&self.ctx));
+                }
+                _ => {
+                    let line = rest.to_string();
+                    self.start_bg(move |ctx| Ok(crate::checker::command(&ctx, &line)));
+                }
+            },
             "/input" => match rest {
                 "install" => self.start_bg(|_| crate::input::install()),
                 "enable" => match crate::input::enable(&mut self.ctx) {
