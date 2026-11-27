@@ -432,6 +432,21 @@ pub fn rate_limited(error: &str) -> bool {
     error.contains("status 429")
 }
 
+/// The wait until a usage window resets, from a provider text such as "usage limit reached (5-hour, resets in 34m)"
+/// or "resets in 2h 5m", plus one minute. None for a plain rate limit.
+pub fn reset_wait(error: &str) -> Option<Duration> {
+    if !rate_limited(error) {
+        return None;
+    }
+    let caps = regex::Regex::new(r"resets in (?:(\d+)h)?\s*(?:(\d+)m)?").unwrap().captures(error)?;
+    let h: u64 = caps.get(1).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
+    let m: u64 = caps.get(2).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
+    if h == 0 && m == 0 {
+        return None;
+    }
+    Some(Duration::from_secs((h * 60 + m + 1) * 60))
+}
+
 /// What a set of runs needs besides the tasks.
 pub struct Plan<'a> {
     pub base: &'a Value,
@@ -470,7 +485,7 @@ pub fn run_all(plan: &Plan, tasks: &[crate::eval::Task], variants: &[Variant], e
             s.spawn(|| loop {
                 let i = next.fetch_add(1, Ordering::SeqCst);
                 let Some((task, variant)) = queue.get(i) else { break };
-                let mut attempt = 0u32;
+                let (mut attempt, mut waits) = (0u32, 0u32);
                 let result = loop {
                     attempt += 1;
                     let start = Instant::now();
@@ -485,6 +500,13 @@ pub fn run_all(plan: &Plan, tasks: &[crate::eval::Task], variants: &[Variant], e
                         Err(e) => RunResult { variant: variant.name.clone(), task: task.id.clone(), error: e, wall_ms: start.elapsed().as_millis() as u64, ..Default::default() },
                     };
                     // A rate limit of the provider is no result of the variant: the run starts again from a fresh copy.
+                    // A usage window that names its reset ("resets in 34m") is waited out, up to 5 hours, 3 times at most.
+                    if let Some(wait) = reset_wait(&result.error).filter(|_| waits < RATE_LIMIT_TRIES) {
+                        waits += 1;
+                        attempt -= 1;
+                        std::thread::sleep(wait.min(plan.rate_limit_pause * 300));
+                        continue;
+                    }
                     if !rate_limited(&result.error) || attempt >= RATE_LIMIT_TRIES {
                         break result;
                     }
@@ -781,6 +803,15 @@ mod tests {
         assert_eq!(select(&[s("default", 15, 1000), s("text", 15, 800), s("index", 15, 500)]), 2);
         assert_eq!(select(&[s("default", 15, 1000), s("text", 17, 900), s("index", 17, 800)]), 2);
         assert_eq!(select(&[]), 0);
+    }
+
+    #[test]
+    fn a_usage_window_is_waited_out_and_a_plain_limit_is_not() {
+        let e = "https://opencode.ai/zen/go/v1/chat/completions answered with status 429: OpenCode Go usage limit reached (5-hour, resets in 34m).";
+        assert_eq!(reset_wait(e), Some(Duration::from_secs(35 * 60)));
+        assert_eq!(reset_wait("status 429: usage limit reached (resets in 2h 5m)"), Some(Duration::from_secs(126 * 60)));
+        assert_eq!(reset_wait("status 429: Rate limit exceeded. Please try again later."), None);
+        assert_eq!(reset_wait("resets in 34m"), None);            // no 429: not a rate limit
     }
 
     #[test]
