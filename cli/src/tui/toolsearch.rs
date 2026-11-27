@@ -1,7 +1,7 @@
 //! `/tools`: search for a tool and install one after a typed yes. Kept apart from `mod.rs`.
 
 use super::App;
-use crate::toolsearch;
+use penelope_core::toolsearch;
 
 impl App {
     pub(super) fn tools_command(&mut self, rest: &str) {

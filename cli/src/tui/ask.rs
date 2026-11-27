@@ -1,10 +1,10 @@
 //! The question dialog of `ask_user`: a tab strip of headers, one question at a time, a summary page before sending.
-//! The keys live in `crate::ask::Dialog`; this file only draws.
+//! The keys live in `penelope_core::ask::Dialog`; this file only draws.
 
 use super::art::{CLAY, ASH, DIM, GOLD, INK, PAPER, RAISED, RED, SEA};
 use super::text::{clip, wrap_plain, width};
 use super::view::{dialog, fill, on, put};
-use crate::ask::Dialog;
+use penelope_core::ask::Dialog;
 use ratatui::layout::Rect;
 use ratatui::Frame;
 

@@ -1925,3 +1925,41 @@ per tool in a release build.
 Found on the way: the TUI arm `"/tools" =>` for the contracts table caught `/tools search`, `install`, `yes` and `no`,
 so the TUI install flow never ran (the compiler warned "unreachable pattern"). Bare `/tools` keeps the table.
 
+Review round, same branch:
+
+- One gate point. `Server::tools()` gates every list read, cached or new; `call` reads and gates the list before the
+  first call of a process; a `mitos/describe` answer is scanned with the whole list as its own before it is cached,
+  and a finding is recorded as a block. Tool search gates each cached list again. `notifications/tools/list_changed`
+  marks the list for a new read (10 of 10 swaps refused in the end-to-end test).
+- The claude command backend took every plugin and standalone server into `--mcp-config`, blocked and unvetted ones
+  too, so the claude command read their descriptions and started unvetted `npx` packages. `toolscan::claude_servers`
+  keeps them out and probes servers without a fresh verdict. The agent and scout configurations hold only Penelope's
+  own server; the review's claim about them did not hold.
+- Records moved to `~/.penelope/mcp/toolscan/<root hash>/`, written under a file lock by rename; an unreadable file
+  scans again. Cache key: list hash + `RULES_VERSION` + hash of the foreign names. Blocked servers add no foreign
+  names; `mcp remove` deletes the record. `write` and `edit` refuse the record folder.
+- Every changed tool holds the server until `penelope mcp trust NAME`; `penelope mcp scan NAME` shows a word diff.
+  `"toolscan": {"changes": "warn"}` keeps the old hold-on-warning only.
+- Rules: concealment alone warns; "when your system prompt indicates" passes; padding counts every Unicode blank,
+  200 blanks or 8 line breaks; a text over 64 KB blocks; sentence lines are counted once (no quadratic search). The
+  attack test asserts all 44 cases. Server entry findings quote no secret value. New: `penelope mcp secrets`.
+- Measured after the round: 44 of 44, 10 of 10 published, 1 of 12 paraphrases, 442 offline tools 0 blocked and 10
+  warned (tuned on that corpus).
+
+Second review round, same branch:
+
+- `vet::redact` lower-cased with full Unicode and cut `text` at offsets of the lower-cased copy. İ grows by one byte,
+  ẞ and the Kelvin sign shrink, so `"İ token=é ẞ"` panicked at "byte index 10 is not a char boundary" and
+  `"İİ token=secret K"` leaked 2 characters. ASCII lower case keeps every offset; the markers are ASCII.
+- `check_one` skipped the scan of a `mitos/describe` answer when the list was trusted, and `record_block` had no
+  effect on a trusted record. A describe answer is now scanned after a trust too; a finding ends the trust, and a
+  second trust accepts that exact spec. A describe block stays when the same list is scanned again.
+- `is_state_path` compared a canonical path with `$HOME` as written. On Windows `\\?\C:\` never starts with `C:\`,
+  and a symlinked home failed the same way. Both sides now go through `real_target`; Windows compares without case.
+- `claude_servers` probed servers with no `command`; the stdio client refused them, so every HTTP plugin server
+  dropped out of `--mcp-config`. They go in unscanned again, as before the tool scan; `"toolscan": {"http": "block"}`
+  keeps them out (docs/TOOL-SCAN.md names the gap).
+- A trusted record returned before the `seen` refresh, so after 24 hours every claude turn probed it again (up to
+  50 s for a server that hangs). The gate refreshes `seen` for trusted records too, and a probe that reads no list is
+  not repeated for an hour.
+- Tests: 6 new in `toolscan.rs`, 1 in `vet.rs`.

@@ -1,77 +1,10 @@
 //! penelope: the Laertes harness on the command line.
 
-mod acp;
-#[allow(dead_code)]
-mod advise;
-mod agents;
-mod apps;
-mod ask;
-mod audit;
-mod auth;
-mod autoroute;
-mod backend;
-mod brain;
-mod brief;
-mod calibrate;
-mod checker;
-mod loom;
-mod config;
-mod clarify;
-mod clusters;
-mod context;
-mod cost;
-mod crew;
-mod cursor;
-mod forge;
-mod gates;
-mod graph;
-mod eurykleia;
-mod eval;
-mod factories;
-mod files;
 mod input;
-mod jobs;
-mod llm;
-mod lsp;
-mod mcp;
-mod mcpclient;
-mod mcpmem;
-mod mcpserv;
-mod mcpvet;
-mod attach;
-mod mitos;
-mod memory;
-#[allow(dead_code)]
-mod notes;
-mod net;
-mod mode;
-mod mods;
-mod platform;
-mod plugins;
-#[allow(dead_code)]
-mod proof;
-mod privacy;
-mod providers;
-mod research;
-mod route;
-mod scout;
-mod scrape;
-mod screen;
-mod search;
-mod server;
-mod setup;
-mod sessions;
-mod skills;
-mod spec;
-mod startup;
-mod toolsearch;
-mod tools;
-mod toolscan;
 mod tui;
 mod update;
-mod vet;
-mod weak;
-mod work;
+
+use penelope_core::*;
 
 use std::io::{BufRead, IsTerminal, Write};
 
@@ -80,6 +13,9 @@ penelope chat --plain         chat line by line, without the full screen interfa
 penelope chat --resume N      go on with session N of the list
 penelope ask \"TEXT\"           one question, one answer
 penelope ask --json \"TEXT\"    the same turn as newline-delimited JSON events
+penelope ask --mode NAME \"TEXT\"
+                              one question in a work mode: chat, work, agents or code
+penelope chat --mode NAME     start the chat in a work mode (shift+tab and /mode switch it)
 penelope init                 create a .penelope folder in this directory
 penelope setup [--here]       answer seven questions: models, who searches, privacy, policies, web search
 penelope providers            list the provider table and say per entry whether its key is set
@@ -151,6 +87,8 @@ penelope search fanout on|off  ask every configured engine at once and merge the
 penelope search health [--probe]
                               the last call of each engine
 penelope research QUESTION    search, read the best pages and print a cited report
+penelope research --deep [--max-rounds N] [--budget EUR] QUESTION
+                              deep research: plan, parallel researchers, gap loop, cited report, re-check, assumptions
 penelope scout TASK           let the weaker model look something up with its own tool calls
 penelope run [--ask QUESTION] COMMAND
                               run a command, long output condensed by the weaker model
@@ -183,6 +121,11 @@ penelope tool list            the tools Penelope wrote for this project
 penelope tool call NAME JSON  call one tool through the same gate a model uses
 penelope route                the roles, their tools and their models
 penelope mode [NAME]          auto, manual, safe, review, privacy or power
+penelope privacy factory --out DIR [--seed N] [--count N]
+                              write synthetic German business documents with known personal data
+penelope privacy bench [--seed N] [--count N] [--file MARKED.txt] [--view raw|read|grep|crlf] [--model [--cloud]] [--misses N] [--json]
+                              recall and precision of the privacy filter per kind of personal data
+penelope privacy scan FILE... masks the privacy filter would set in any file, per 1,000 lines
 penelope agents               the agents written with $name(...)
 penelope skills               the skills Penelope wrote for this project
 penelope run-agent NAME --goal TEXT
@@ -201,7 +144,8 @@ penelope mcp add NAME COMMAND [ARGS...] [--allow]
 penelope mcp remove NAME      remove a standalone MCP server
 penelope mcp allow|deny NAME  put its tools on or off the allow list; allow reads and scans its tool list
 penelope mcp scan NAME        scan the tool names, descriptions and schemas of a server for hidden orders
-penelope mcp trust NAME       accept this exact tool list despite a scan finding
+penelope mcp trust NAME       accept this exact tool list despite a finding or after a change
+penelope mcp secrets          list secret values in MCP server configs by length, never the value
 penelope mcp allow-tool SERVER TOOL
                               allow one tool of a server while the server keeps its default
 penelope mcp deny-tool SERVER TOOL
@@ -218,6 +162,7 @@ penelope work remove NAME     remove the worktree (--force discards changes)
 penelope doctor               check the programs and models Penelope needs";
 
 fn main() {
+    timing::start();
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let mut root_arg = None;
     if let Some(i) = args.iter().position(|a| a == "--root") {
@@ -259,7 +204,11 @@ fn main() {
         loom::say(&format!("saved: {}", root.join("config.json").display()));
         return;
     }
-    let mut ctx = config::load(&config::find_root(root_arg.as_deref()));
+    let mut ctx = {
+        let _t = timing::span("config load");
+        config::load(&config::find_root(root_arg.as_deref()))
+    };
+    claudecli::configure(&ctx.cfg);
     match cmd {
         "tools" => print!("{}", tools_table(&ctx)),
         "tool" => match args.get(1).map(String::as_str) {
@@ -272,6 +221,57 @@ fn main() {
                 }
             }
             _ => print!("{}", forge::list(&ctx)),
+        },
+        "workflow" => match args.get(1).map(String::as_str) {
+            Some("run") if args.len() >= 3 => {
+                let name = args[2].clone();
+                let yes = args.iter().any(|a| a == "--yes");
+                let resume = args.iter().position(|a| a == "--resume")
+                    .and_then(|i| args.get(i + 1)).cloned();
+                let ask = if yes { None } else {
+                    Some(Box::new(|questions: &[serde_json::Value]| {
+                        for q in questions {
+                            println!("{}", q["question"].as_str().unwrap_or("start?"));
+                        }
+                        let mut line = String::new();
+                        std::io::stdin().read_line(&mut line).map_err(|e| e.to_string())?;
+                        Ok(vec![serde_json::json!(line.trim().eq_ignore_ascii_case("y") || line.trim().eq_ignore_ascii_case("yes"))])
+                    }) as Box<dyn FnMut(&[serde_json::Value]) -> Result<Vec<serde_json::Value>, String>>)
+                };
+                let arg_json = match args.iter().position(|a| a == "--args") {
+                    Some(i) => {
+                        let raw = args.get(i + 1).cloned().unwrap_or_default();
+                        match serde_json::from_str::<serde_json::Value>(&raw) {
+                            Ok(v) if v.is_object() => v,
+                            Ok(_) => { loom::warn("--args needs a JSON object"); std::process::exit(2); }
+                            Err(e) => { loom::warn(&format!("--args is not JSON: {}", e)); std::process::exit(2); }
+                        }
+                    }
+                    None => serde_json::json!({}),
+                };
+                let options = workflows::RunOptions { confirm: !yes, ask, args: arg_json, resume_id: resume, ..Default::default() };
+                let path = std::path::Path::new(&name);
+                let out = if path.is_file() { workflows::run(&ctx, path, options) } else { workflows::run_named(&ctx, &name, options) };
+                match out {
+                    Ok(r) => println!("workflow {} done: {:.4} EUR, {} tokens, journal {}", r.id, r.eur, r.tokens, r.journal.display()),
+                    Err(e) => { loom::warn(&e); std::process::exit(2); }
+                }
+            }
+            Some("list") | None => {
+                for w in workflows::list(&ctx) { println!("{}", w); }
+            }
+            Some("runs") => {
+                for (id, state) in workflows::runs(&ctx) { println!("{}  {}", id, state); }
+            }
+            Some("status") if args.len() >= 3 => match workflows::status(&ctx, &args[2]) {
+                Ok(t) => print!("{}", t),
+                Err(e) => { loom::warn(&e); std::process::exit(2); }
+            },
+            Some("stop") if args.len() >= 3 => match workflows::stop(&ctx, &args[2]) {
+                Ok(t) => println!("{}", t),
+                Err(e) => { loom::warn(&e); std::process::exit(2); }
+            },
+            _ => println!("penelope workflow run NAME|FILE [--yes] [--resume ID] [--args JSON] | list | runs | status ID | stop ID"),
         },
         "route" => print!("{}", route_text(&ctx)),
         "mode" => {
@@ -338,7 +338,10 @@ fn main() {
             let verb = args.get(1).map(String::as_str).unwrap_or("");
             match verb {
                 "list" | "" => print!("{}", clusters::status_text(&ctx, None)),
-                "status" => print!("{}", clusters::status_text(&ctx, args.get(2).map(String::as_str))),
+                "status" => match clusters::status_checked(&ctx, args.get(2).map(String::as_str)) {
+                    Ok(text) => print!("{}", text),
+                    Err(e) => { loom::warn(&e); std::process::exit(2); }
+                },
                 "dump" => {
                     let id = args.get(2).cloned().unwrap_or_default();
                     if id.is_empty() { loom::warn("usage: penelope cluster dump ID"); std::process::exit(2); }
@@ -413,6 +416,12 @@ fn main() {
                     }
                     let goal = words.join(" ");
                     if dry {
+                        if let Some(name) = shadow.as_deref().filter(|s| !s.trim().is_empty()) {
+                            if let Err(e) = clusters::profile(&ctx, name) {
+                                loom::warn(&format!("--shadow {}: {}", name, e));
+                                std::process::exit(2);
+                            }
+                        }
                         match clusters::dry_run(&ctx, &goal, profile.as_deref()) {
                             Ok(text) => {
                                 print!("{}", text);
@@ -444,6 +453,10 @@ fn main() {
                 }
             }
         }
+        "privacy" => match privacy_bench::cli(&ctx, &args[1..]) {
+            Ok(text) => print!("{}", text),
+            Err(e) => { loom::warn(&e); std::process::exit(2); }
+        },
         "factory" => match factories::cli(&ctx, &args[1..]) {
             Ok(text) => print!("{}", text),
             Err(e) => { loom::warn(&e); std::process::exit(2); }
@@ -680,7 +693,9 @@ fn main() {
             println!("{}", if allow { toolscan::after_allow(&ctx, &args[2], &said) } else { said });
         }
         "mcp" if args.get(1).map(String::as_str) == Some("remove") && args.len() >= 3 => {
-            print_checked(plugins::mcp_remove(&ctx, &args[2]));
+            let said = plugins::mcp_remove(&ctx, &args[2]);
+            if said.ends_with("removed") { toolscan::forget(&ctx, &args[2]); }
+            print_checked(said);
         }
         "mcp" if args.get(1).map(String::as_str) == Some("allow") && args.len() >= 3 => {
             print_checked(toolscan::after_allow(&ctx, &args[2], &plugins::mcp_set_allow(&ctx, &args[2], true)));
@@ -690,6 +705,9 @@ fn main() {
         }
         "mcp" if args.get(1).map(String::as_str) == Some("trust") && args.len() >= 3 => {
             println!("{}", toolscan::trust(&ctx, &args[2]));
+        }
+        "mcp" if args.get(1).map(String::as_str) == Some("secrets") => {
+            println!("{}", toolscan::secrets_report(&ctx));
         }
         "mcp" if args.get(1).map(String::as_str) == Some("deny") && args.len() >= 3 => {
             print_checked(plugins::mcp_set_allow(&ctx, &args[2], false));
@@ -723,6 +741,8 @@ fn main() {
         }
         "mcp" => {
             mcp::set_root_given(root_arg.is_some());
+            // A turn in a work mode starts this server with PENELOPE_MODE: the tool list and the checks follow it.
+            let ctx = modes::from_env(&ctx);
             mcp::serve(&ctx)
         }
         "acp" => {
@@ -744,19 +764,34 @@ fn main() {
         "ask" => {
             let mut json = false;
             let mut words = Vec::new();
-            for arg in &args[1..] {
-                if arg == "--json" { json = true; } else { words.push(arg.clone()); }
+            let mut work_mode = String::new();
+            let mut rest = args[1..].iter();
+            while let Some(arg) = rest.next() {
+                if arg == "--json" { json = true; }
+                else if arg == "--mode" { work_mode = rest.next().cloned().unwrap_or_default(); }
+                else { words.push(arg.clone()); }
             }
             let text = words.join(" ");
-            if text.trim().is_empty() {
-                loom::warn("usage: penelope ask [--json] \"TEXT\"");
+            if text.trim().is_empty() || (args.iter().any(|a| a == "--mode") && !modes::valid(&work_mode)) {
+                loom::warn(&format!("usage: penelope ask [--json] [--mode {}] \"TEXT\"", modes::NAMES.join("|")));
                 std::process::exit(2);
             }
             let mut chat = backend::Chat::new();
+            chat.mode = work_mode;
             if json {
                 if !answer_json(&ctx, &mut chat, &text) { std::process::exit(1); }
             } else {
                 answer(&ctx, &mut chat, &text);
+            }
+        }
+        // Hidden: N turns in one chat the way the TUI runs them, one line with the wall time of each. For timing runs.
+        "bench-turns" if args.len() >= 3 => {
+            let mut chat = backend::Chat::new();
+            for _ in 0..args[1].parse::<usize>().unwrap_or(1) {
+                let started = std::time::Instant::now();
+                let (notes, _, _) = tools::recall_all(&ctx, &args[2], 1600);
+                let out = chat.turn_with(&ctx, &args[2], &notes, &mut |_| {});
+                println!("turn {} ms: {}", started.elapsed().as_millis(), out.unwrap_or_else(|e| format!("ERROR {}", e)).chars().take(60).collect::<String>());
             }
         }
         "search" if args.get(1).map(String::as_str) == Some("fanout") => match args.get(2).map(String::as_str) {
@@ -791,6 +826,15 @@ fn main() {
             let q = words.join(" ");
             match search::search_hits(&ctx, &q, &opts) {
                 Ok((hits, engines)) => println!("{}", search::format_hits(&hits, &q, &engines)),
+                Err(e) => { loom::warn(&e); std::process::exit(2); }
+            }
+        }
+        "research" if args.iter().any(|a| a == "--deep") => {
+            match deepresearch::parse_args(&args[1..]) {
+                Ok(p) => {
+                    deepresearch::install_ctrl_c();
+                    println!("{}", deepresearch::run(&ctx, &deepresearch::Params { verbose: true, ..p }));
+                }
                 Err(e) => { loom::warn(&e); std::process::exit(2); }
             }
         }
@@ -875,6 +919,14 @@ fn main() {
                         std::process::exit(2);
                     }
                 }
+            }
+            if let Some(i) = args.iter().position(|a| a == "--mode") {
+                let name = args.get(i + 1).cloned().unwrap_or_default();
+                if !modes::valid(&name) {
+                    loom::warn(&format!("usage: penelope chat --mode {}", modes::NAMES.join("|")));
+                    std::process::exit(2);
+                }
+                ctx.cfg["_start_mode"] = serde_json::json!(name);
             }
             let plain = args.iter().any(|a| a == "--plain") || !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal();
             if plain {
@@ -976,6 +1028,7 @@ fn answer_json(ctx: &config::Ctx, chat: &mut backend::Chat, text: &str) -> bool 
         backend::Event::Masked(n) => emit(serde_json::json!({"event": "masked_request", "items": n})),
         backend::Event::MaskedAnswer(n) => { masked += n; emit(serde_json::json!({"event": "masked_answer", "items": n})); }
     });
+    modes::bind_caller(ctx, chat.route_id(), chat.session.as_deref().unwrap_or(""));
     match result {
         Ok(answer) => {
             emit(serde_json::json!({"event": "result", "text": answer, "tokens_in": chat.input_tokens, "tokens_out": chat.output_tokens,
@@ -997,16 +1050,19 @@ fn answer(ctx: &config::Ctx, chat: &mut backend::Chat, text: &str) {
     if !expanded.refs.is_empty() {
         loom::say(&format!("context: {}", expanded.refs.iter().map(|r| format!("{} ({} bytes)", r.token, r.bytes)).collect::<Vec<_>>().join(", ")));
     }
-    let (notes, trail, cached) = tools::recall_all(ctx, &expanded.text, 1600);
+    let (notes, trail, cached) = { let _t = timing::span("memory recall"); tools::recall_all(ctx, &expanded.text, 1600) };
     if !trail.is_empty() {
         loom::say(&format!("memory: start / {}{}", trail.last().unwrap().replace('/', " / "), if cached { " (stored walk)" } else { "" }));
     }
     let mut masked = 0;
+    timing::mark("ask: request prepared", "");
     let result = chat.turn_with(ctx, &expanded.text, &notes, &mut |e| {
         if let backend::Event::MaskedAnswer(n) = e {
             masked += n;
         }
     });
+    timing::mark("ask: turn done", "");
+    modes::bind_caller(ctx, chat.route_id(), chat.session.as_deref().unwrap_or(""));
     match result {
         Ok(a) => {
             if !trail.is_empty() {
@@ -1019,9 +1075,11 @@ fn answer(ctx: &config::Ctx, chat: &mut backend::Chat, text: &str) {
             loom::say(&format!("tokens so far: {} in, {} out", chat.input_tokens, chat.output_tokens));
             loom::say(&format!("tool calls of this turn: {}, {} of them failed or refused", chat.trace.len(), chat.trace.iter().filter(|c| tools::in_trouble(c)).count()));
             if ctx.cfg["auto_learn"].as_bool().unwrap_or(true) {
+                let _t = timing::span("post-turn: learn (weak model)");
                 for id in tools::learn(ctx, text, &a) {
                     loom::say(&format!("learned: {}", id));
                 }
+                let _t2 = timing::span("post-turn: learn_tools");
                 for id in tools::learn_tools(ctx, text, &chat.trace) {
                     loom::say(&format!("lesson from the tool calls: {}", id));
                 }
@@ -1053,6 +1111,7 @@ fn repl(ctx: &config::Ctx, resume: Option<backend::Chat>) {
         ctx.cfg["weak"]["model"].as_str().unwrap_or("?"), ctx.cfg["weak"]["kind"].as_str().unwrap_or("?")));
     println!("Type a request. /map shows the memory map, /quit ends.");
     let mut chat = resume.unwrap_or_else(backend::Chat::new);
+    chat.mode = ctx.cfg["_start_mode"].as_str().filter(|m| modes::valid(m)).map(String::from).unwrap_or_else(|| modes::default_mode(ctx));
     let stdin = std::io::stdin();
     loop {
         print!("you> ");
@@ -1144,7 +1203,7 @@ fn route_text(ctx: &config::Ctx) -> String {
 }
 
 fn skills_list(ctx: &config::Ctx) -> String {
-    let local = crate::skills::list(ctx);
+    let local = penelope_core::skills::list(ctx);
     let mut out = String::new();
     for (name, description) in &local {
         out.push_str(&format!("{} — {} (learned here)\n", name, description));
@@ -1165,62 +1224,7 @@ fn last_session_users(ctx: &config::Ctx) -> Vec<String> {
 
 fn doctor(ctx: &config::Ctx) {
     loom::banner("doctor");
-    print!("{}", doctor_text(ctx));
-}
-
-/// One line per program or setting Penelope depends on.
-pub fn doctor_text(ctx: &config::Ctx) -> String {
-    let mut out = String::new();
-    let mut line = |name: &str, ok: bool, detail: String| {
-        out.push_str(&format!("{} {}{}\n", if ok { "ok   " } else { "FAIL " }, name, if detail.is_empty() { String::new() } else { format!(": {}", detail) }));
-    };
-    line("folder", true, ctx.root.display().to_string());
-    let claude = config::which("claude");
-    let needs_claude = ["main", "weak"].iter().any(|r| !llm::is_api(llm::kind_of(&ctx.cfg[*r])));
-    line("claude command (login of the user)", claude.is_some() || !needs_claude, claude.map(|p| p.display().to_string())
-        .unwrap_or_else(|| if needs_claude { "not on the PATH".into() } else { "not on the PATH, no model setting needs it".into() }));
-    for role in ["main", "weak", "scout"] {
-        let m = &ctx.cfg[role];
-        if !m["model"].is_string() {
-            continue;
-        }
-        // The line names the variable and says whether it is set. The key itself is never read into this text.
-        let (table, env) = (providers::of(m), m["api_key_env"].as_str().unwrap_or(""));
-        let local = ["http://localhost", "http://127.0.0.1", "http://[::1]"].iter().any(|h| m["base_url"].as_str().unwrap_or("").starts_with(h));
-        let optional = table.map(|p| p.key_optional).unwrap_or(env.is_empty()) || local;
-        let state = table.map(providers::state_of).unwrap_or_else(|| providers::key_state(env, optional));
-        line(&format!("{} model", role), state != "no key", format!("{} on {}, {}{}", m["model"].as_str().unwrap_or("?"),
-            table.map(|p| p.name).unwrap_or("an address outside the table"), state, if env.is_empty() { String::new() } else { format!(" in {}", env) }));
-    }
-    let sc = ctx.cfg["screencodec"]["command"].as_str().filter(|c| !c.is_empty()).map(std::path::PathBuf::from).or_else(|| config::which("screencodec-mcp"));
-    line("screencodec-mcp (eyes: pages and pictures as text)", sc.is_some(), sc.map(|p| p.display().to_string()).unwrap_or_else(|| "not on the PATH, Penelope runs without it".into()));
-    line("run policy", true, ctx.cfg["run_policy"].as_str().unwrap_or("safe").to_string());
-    line("edit policy (file changes)", true, ctx.cfg["edit_policy"].as_str().unwrap_or("ask").to_string());
-    line("delegate (who searches)", true, format!("{}: {}", ctx.cfg["delegate"].as_str().unwrap_or("auto"), match ctx.cfg["delegate"].as_str().unwrap_or("auto") {
-        "off" => "the main model searches itself",
-        "offer" => "the main model may search itself or send a scout",
-        "web" => "web research runs on the scout, the main model searches files itself",
-        _ => "every search runs on the weaker model as scout",
-    }));
-    line("web search", true, search::kind(ctx).to_string());
-    line("search API", true, search::api_status(ctx));
-    let reader = ctx.cfg["reader"]["url"].as_str().filter(|u| !u.is_empty());
-    line("reader API", true, reader.map(|u| u.to_string()).unwrap_or_else(|| "not set; static HTML and local PDF only".to_string()));
-    line("pdftotext (local PDF)", config::which("pdftotext").is_some(), "a scanned PDF still needs OCR or the reader API".to_string());
-    line("memory map", true, format!("{} lines", tools::memory_map(ctx).lines().count()));
-    let shared = memory::open_global().index(200);
-    line("shared memory", true, format!("{} waypoints (rules for every project)", if shared.is_empty() { 0 } else { shared.lines().count() }));
-    line("tool contracts", true, format!("{} built-in tools, every call checked by route::dispatch", spec::TOOLS.len()));
-    let (cursor, ok) = cursor::backend(ctx);
-    line("cursor (Penelope's own pointer)", ok, cursor);
-    let desktop = ctx.cfg["screencodec"]["desktop"].as_str().unwrap_or("off");
-    line("ScreenCodec desktop", true, format!("{} (SDL_MCP_DESKTOP; ask needs your confirmation, on captures at once)", desktop));
-    for (role, _) in route::ROLES {
-        if matches!(*role, "router" | "filter") {
-            line(&format!("role {}", role), true, route::model_name(ctx, role));
-        }
-    }
-    out
+    print!("{}", doctor::text(ctx));
 }
 
 #[cfg(test)]

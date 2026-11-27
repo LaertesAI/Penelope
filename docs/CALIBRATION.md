@@ -35,7 +35,7 @@ The profile lives in `.penelope/models/<provider>__<model>.json`, for example `o
  "tasks": "cli/tests/data/eval/hard_calib.jsonl", "tasks_sha256": "...", "n": 20, "scores": [...]}
 ```
 
-`calibrate::apply` runs at the start of `Chat::turn_once`. It copies `tool_format`, `tool_list`, `prompt` and `effort`
+`calibrate::apply` (core/src/calibrate.rs) runs at the start of `Chat::turn_once`. It copies `tool_format`, `tool_list`, `prompt` and `effort`
 into the main model setting of that turn. `"calibration": "off"` in config.json switches the profile off.
 
 ## Runner
