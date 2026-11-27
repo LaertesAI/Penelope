@@ -1013,7 +1013,7 @@ pub fn set_allow(ctx: &Ctx, name: &str, allow: bool) -> String {
 
 /// The name of a server inside a tool name of the claude command. Its documentation says that characters such as `.`
 /// or spaces become `_`. Letters, digits, `_` and `-` stay.
-fn tool_server(name: &str) -> String {
+pub fn tool_server(name: &str) -> String {
     name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' }).collect()
 }
 
@@ -1453,19 +1453,44 @@ pub fn list(ctx: &Ctx) -> String {
     }
 }
 
-/// One line per skill for the system prompt.
-pub fn skill_index(ctx: &Ctx) -> String {
+/// The skill index for the system prompt. The skills learned in this folder keep their description. The skills of
+/// plugins appear by name only: with 231 skills the full index was about 10,000 tokens in every request. The model
+/// reads a skill with the tool `skill`; `skill_matches` adds the few that fit the request.
+pub fn skill_index_compact(ctx: &Ctx) -> String {
     let reg = active(ctx);
     let mut out = String::new();
     for (name, description) in crate::skills::list(ctx) {
         out.push_str(&format!("- {}: {} (learned here)\n", name, description));
     }
-    for p in reg["plugins"].as_array().unwrap() {
-        for s in p["skills"].as_array().unwrap() {
-            out.push_str(&format!("- {}: {}\n", s["name"].as_str().unwrap_or("?"), s["description"].as_str().unwrap_or("").chars().take(160).collect::<String>()));
-        }
+    let names: Vec<&str> = reg["plugins"].as_array().unwrap().iter()
+        .flat_map(|p| p["skills"].as_array().unwrap().iter()).filter_map(|s| s["name"].as_str()).collect();
+    if !names.is_empty() {
+        out.push_str(&format!("Skills of plugins, by name: {}\n", names.join(", ")));
     }
     out
+}
+
+/// The skills whose name or description share words with the request, best first, with their description.
+pub fn skill_matches(ctx: &Ctx, request: &str, max: usize) -> String {
+    let words: Vec<String> = request.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| w.chars().count() >= 4).map(String::from).collect();
+    if words.is_empty() {
+        return String::new();
+    }
+    let reg = active(ctx);
+    let mut scored: Vec<(usize, String)> = Vec::new();
+    for p in reg["plugins"].as_array().unwrap() {
+        for s in p["skills"].as_array().unwrap() {
+            let name = s["name"].as_str().unwrap_or("?");
+            let description = s["description"].as_str().unwrap_or("");
+            let hay = format!("{} {}", name, description).to_lowercase();
+            let score: usize = words.iter().map(|w| if name.to_lowercase().contains(w.as_str()) { 3 } else if hay.contains(w.as_str()) { 1 } else { 0 }).sum();
+            if score > 0 {
+                scored.push((score, format!("- {}: {}\n", name, description.chars().take(160).collect::<String>())));
+            }
+        }
+    }
+    scored.sort_by_key(|s| std::cmp::Reverse(s.0));
+    scored.into_iter().take(max).map(|(_, line)| line).collect()
 }
 
 /// The body of a skill, at most 12,000 characters.
@@ -1482,7 +1507,8 @@ pub fn skill_body(ctx: &Ctx, name: &str) -> String {
             }
         }
     }
-    format!("no skill named {}", name)
+    let near = skill_matches(ctx, &name.replace(['-', '_', ':'], " "), 8);
+    if near.is_empty() { format!("no skill named {}", name) } else { format!("no skill named {}. Skills that come close:\n{}", name, near) }
 }
 
 /// True when one tool of a server may run. `default` is the old switch of the plugin or of the server: it holds for
@@ -1747,6 +1773,27 @@ mod tests {
     }
 
     #[test]
+    fn the_prompt_index_lists_skill_names_and_matches_describe_only_the_fitting_ones() {
+        let dir = std::env::temp_dir().join(format!("penelope-skillidx-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let plugin = dir.join("demo");
+        fs::create_dir_all(plugin.join(".claude-plugin")).unwrap();
+        fs::create_dir_all(plugin.join("skills/pdf-forms")).unwrap();
+        fs::create_dir_all(plugin.join("skills/canvas-art")).unwrap();
+        fs::write(plugin.join(".claude-plugin/plugin.json"), r#"{"name": "demo"}"#).unwrap();
+        fs::write(plugin.join("skills/pdf-forms/SKILL.md"), "---\nname: pdf-forms\ndescription: Fill in and read PDF forms with a library\n---\nBody").unwrap();
+        fs::write(plugin.join("skills/canvas-art/SKILL.md"), "---\nname: canvas-art\ndescription: Draw generative art on a canvas\n---\nBody").unwrap();
+        let ctx = crate::config::load(&dir.join(".penelope"));
+        add(&ctx, &plugin.to_string_lossy());
+        let index = skill_index_compact(&ctx);
+        assert!(index.contains("pdf-forms") && index.contains("canvas-art") && !index.contains("generative art"), "{}", index);
+        let near = skill_matches(&ctx, "please fill the PDF form for me", 5);
+        assert!(near.contains("pdf-forms: Fill in") && !near.contains("canvas-art"), "{}", near);
+        assert!(skill_body(&ctx, "pdf form").contains("Skills that come close") && skill_body(&ctx, "pdf form").contains("pdf-forms"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_tool_rule_overrides_the_switch_of_its_server() {
         let server = json!({"allow": true, "deny_tools": ["danger"], "tools": {"quiet": false, "read": {"allow": true}}});
         assert!(tool_allowed(&server, true, "other"));
@@ -1972,7 +2019,7 @@ mod tests {
         // Another tool moves the folder to a new commit: the plugin stops running until Penelope checked that commit.
         let live = dir.join("home/pinned");
         assert!(git_in(&live, &["-c", "user.email=t@e.org", "-c", "user.name=T", "commit", "-q", "--allow-empty", "-m", "moved"]));
-        assert!(entries(&ctx).is_empty() && servers(&ctx).as_object().unwrap().is_empty() && skill_index(&ctx).is_empty());
+        assert!(entries(&ctx).is_empty() && servers(&ctx).as_object().unwrap().is_empty() && skill_index_compact(&ctx).is_empty());
         assert!(list(&ctx).contains("blocked: its folder moved from the checked commit"), "{}", list(&ctx));
         assert!(git_in(&live, &["reset", "-q", "--hard", &with_server]));
         assert_eq!(entries(&ctx).len(), 1);

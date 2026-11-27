@@ -287,3 +287,19 @@ fn the_holdout_is_frozen() {
     }
     assert_eq!(h.finish(), "c3224aba7eeb471f6512c30d072bf547a11bde1ed5c4f9c42f184df566b1c830");
 }
+
+#[test]
+fn the_swebench_holdout_is_frozen() {
+    assert_eq!(sha256(b"abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/eval");
+    let dev = std::fs::read(base.join("swebench_dev30.jsonl")).unwrap();
+    let hold = std::fs::read(base.join("swebench_holdout20.jsonl")).unwrap();
+    let meta = std::fs::read(base.join("swebench50.json")).unwrap();
+    assert_eq!(sha256(&dev), "7819859228608f74c7bc1e240c69f0d78df3614921ae69d92f004109404fe94b");
+    assert_eq!(sha256(&hold), "626fbf6d14e0d4340bc1b7e6d741b96a5ca437ce3d5f3a18e9427d509b36be90");
+    assert_eq!(sha256(&meta), "88238bf835cc7eb727039729bc1bd449a0fd51614c77b580bdee3b728715254b");
+    assert_eq!(String::from_utf8(dev).unwrap().lines().count(), 30);
+    assert_eq!(String::from_utf8(hold).unwrap().lines().count(), 20);
+    let doc = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../predictions.md")).unwrap();
+    assert!(doc.contains("626fbf6d14e0d4340bc1b7e6d741b96a5ca437ce3d5f3a18e9427d509b36be90"), "the hash is in predictions.md");
+}

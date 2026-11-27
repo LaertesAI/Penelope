@@ -525,10 +525,16 @@ fn prompt_text(params: &Value) -> Option<String> {
 /// One turn with the normal context expansion, memory lookup and tool gate. Text and tool calls stream as
 /// `session/update`; the final answer is sent too when the backend returned it without a text block before.
 fn run_turn(ctx: &Ctx, session: &Session, session_id: &str, text: &str, protocol: &Protocol) -> Result<String, String> {
+    // The editor names the project folder of the session. Tools without a cwd work there. The folder is a
+    // thread-local task cwd, never the process cwd: two sessions and the tests run at the same time.
     if !session.cwd.is_empty() && std::path::Path::new(&session.cwd).is_dir() {
-        // The editor names the project folder of the session. Tools without a cwd work there.
-        let _ = std::env::set_current_dir(&session.cwd);
+        return crate::eval::with_task_cwd(std::path::Path::new(&session.cwd),
+            || run_turn_in(ctx, session, session_id, text, protocol));
     }
+    run_turn_in(ctx, session, session_id, text, protocol)
+}
+
+fn run_turn_in(ctx: &Ctx, session: &Session, session_id: &str, text: &str, protocol: &Protocol) -> Result<String, String> {
     let expanded = crate::context::expand(ctx, text);
     let (notes, trail, _cached) = crate::tools::recall_all(ctx, &expanded.text, 1600);
     let mut emitted: Vec<String> = Vec::new();

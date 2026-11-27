@@ -1578,9 +1578,38 @@ fn evidence_of(checks: &[Check]) -> String {
     }
 }
 
-/// Reads the tool log of a Claude CLI part. Every line is one call that reached `mcp::call_raw`.
+/// The path of a part's tool log. Each call of the part appends one JSON line; the file holds every attempt.
+fn tool_log_path(ctx: &Ctx, c: &Cluster, part: &Part) -> PathBuf {
+    cluster_dir(ctx, &c.id).join(format!("tools-{}.jsonl", safe(&part.name)))
+}
+
+/// The current size of a tool log. An attempt reads its own checks from this offset on.
+fn tool_log_len(path: &Path) -> u64 {
+    fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+}
+
+/// Appends one tool call to a part's tool log, in the line format `mcp::call_raw` writes for a Claude CLI part.
+fn append_tool_log(path: &Path, name: &str, args: &Value, result: &str, ok: bool) {
+    if let Some(dir) = path.parent() {
+        let _ = fs::create_dir_all(dir);
+    }
+    let line = json!({"name": name, "args": args, "ok": ok, "result": result.chars().take(4000).collect::<String>()});
+    if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(f, "{}", line);
+    }
+}
+
+/// Reads the whole tool log of a part. Every line is one call.
+#[cfg(test)]
 fn checks_from_log(path: &Path) -> Vec<Check> {
-    let Ok(text) = fs::read_to_string(path) else { return Vec::new(); };
+    checks_from_log_since(path, 0)
+}
+
+/// Reads the tool log of a part from byte `offset` on, so one attempt sees only its own calls.
+fn checks_from_log_since(path: &Path, offset: u64) -> Vec<Check> {
+    let Ok(bytes) = fs::read(path) else { return Vec::new(); };
+    let start = (offset as usize).min(bytes.len());
+    let text = String::from_utf8_lossy(&bytes[start..]);
     text.lines().filter_map(|line| serde_json::from_str::<Value>(line).ok()).filter_map(|v| {
         let name = v["name"].as_str()?;
         let args = v["args"].clone();
@@ -1611,13 +1640,17 @@ fn run_model(ctx: &Ctx, c: &Cluster, part: &Part, system: &str, task: &str, max_
     }
     let kind = crate::llm::kind_of(&model).to_string();
     if crate::llm::is_api(&kind) {
-        let tools: Vec<Value> = crate::mcp::tool_specs_for(ctx, &part.role).as_array().cloned().unwrap_or_default();
+        let mut tools: Vec<Value> = crate::mcp::tool_specs_for(ctx, &part.role).as_array().cloned().unwrap_or_default();
+        // A stable order keeps the prompt prefix byte-identical for the provider cache.
+        tools.sort_by(|a, b| a["name"].as_str().unwrap_or("").cmp(b["name"].as_str().unwrap_or("")));
         let mut history = vec![crate::llm::user_message(task)];
         let mut usage = crate::llm::Usage::default();
         let role = part.role.clone();
         let cluster_cwd = c.cwd.clone();
         let model_name = model["model"].as_str().unwrap_or("").to_string();
         let mut checks: Vec<Check> = Vec::new();
+        // The API part writes the same tool log as a Claude CLI part, so the offline checker sees every attempt.
+        let log = tool_log_path(ctx, c, part);
         let mut tick = |usage: &crate::llm::Usage| {
             if let Some(stop) = limits.check(ctx, &model_name, usage) { return Some(stop); }
             if let Some(cause) = watch.lock().unwrap_or_else(|e| e.into_inner()).cause() {
@@ -1636,6 +1669,7 @@ fn run_model(ctx: &Ctx, c: &Cluster, part: &Part, system: &str, task: &str, max_
                         record_event(ctx, &part.name, "loop_kill");
                         cancel.store(true, Ordering::SeqCst);
                     }
+                    append_tool_log(&log, &call.name, &args, &text, ok);
                     checks.push(Check { name: call.name.clone(), target: check_target(&call.name, &args), ok: check_ok(&call.name, &text, ok) });
                     (text, ok)
                 }, &mut |_| {})
@@ -1652,8 +1686,9 @@ fn run_model(ctx: &Ctx, c: &Cluster, part: &Part, system: &str, task: &str, max_
         return Err(format!("the cluster cannot call the model kind {}", kind));
     }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let log = cluster_dir(ctx, &c.id).join(format!("tools-{}.jsonl", safe(&part.name)));
-    let _ = fs::remove_file(&log);
+    // The log keeps every earlier attempt; this attempt reads its checks from the current end on.
+    let log = tool_log_path(ctx, c, part);
+    let log_start = tool_log_len(&log);
     let mut env = json!({"PENELOPE_ROLE": part.role, "PENELOPE_CLUSTER": c.id});
     // The MCP child reads config.json from disk. Pin the policies of this run so a workflow's safe ctx also holds
     // in the claude-cli path.
@@ -1720,8 +1755,8 @@ fn run_model(ctx: &Ctx, c: &Cluster, part: &Part, system: &str, task: &str, max_
     let tokens_in = v["usage"]["input_tokens"].as_u64().unwrap_or(0) + v["usage"]["cache_creation_input_tokens"].as_u64().unwrap_or(0);
     let tokens_out = v["usage"]["output_tokens"].as_u64().unwrap_or(0);
     crate::cost::record(ctx, &format!("cluster:{}", c.name), model["model"].as_str().unwrap_or(""), tokens_in, tokens_out);
-    let checks = checks_from_log(&log);
-    let _ = fs::remove_file(&log);
+    let checks = checks_from_log_since(&log, log_start);
+    // The tool log stays for the offline checker (Eurykleia). It holds the real arguments and results.
     if let Some(stop) = limits.over(ctx) { return Err(stop); }
     if let Some(cause) = watch.lock().unwrap_or_else(|e| e.into_inner()).note_checks(ctx, c, part, &checks) {
         return Err(format!("STUCK: {}", cause));
@@ -2266,6 +2301,8 @@ fn prompt_rewrite(ctx: &Ctx, c: &Cluster, p: &Profile, session_before: Option<f6
 }
 
 /// Runs one cluster: every worker part, then the validator. A FAIL sends the result back to the workers up to `retries`.
+/// The CLI enters through `run_cluster_inner` with the session baseline; this shorthand is for tests.
+#[cfg(test)]
 pub fn run_cluster(ctx: &Ctx, id: &str) -> Result<String, String> {
     run_cluster_inner(ctx, id, None)
 }
@@ -3305,8 +3342,17 @@ pub fn advise_apply(ctx: &Ctx, name: Option<&str>) -> Result<String, String> {
     Ok(out)
 }
 
-pub fn status_text(ctx: &Ctx, id: Option<&str>) -> String {
-    if let Some(id) = id.filter(|s| !s.is_empty()) {
+/// `status_text` for the CLI: a named target that does not exist is an error, not a line with exit 0. A name that
+/// exists resolves to its id, so `cluster status NAME` works like `cluster status ID`.
+pub fn status_checked(ctx: &Ctx, target: Option<&str>) -> Result<String, String> {
+    let Some(target) = target.filter(|s| !s.trim().is_empty()) else {
+        return Ok(status_text(ctx, None));
+    };
+    let c = find_target(ctx, target)?;
+    Ok(status_text(ctx, Some(&c.id)))
+}
+
+pub fn status_text(ctx: &Ctx, id: Option<&str>) -> String {    if let Some(id) = id.filter(|s| !s.is_empty()) {
         let c = match load(ctx, id) { Ok(c) => c, Err(e) => return e };
         let mut out = format!("cluster {} · {} · profile {} · state {}\nTask: {}\nProgress: {}/{}\nMemory: {}\n",
                               c.id, c.name, c.profile, c.state, c.task, c.done, c.total, c.memory);
@@ -3796,6 +3842,16 @@ mod tests {
     }
 
     #[test]
+    fn a_cluster_status_by_name_resolves_and_an_unknown_target_is_an_error() {
+        let (ctx, dir) = ctx();
+        let p = profile(&ctx, "solo").unwrap();
+        let c = new_cluster(&ctx, &p, "named", "do the thing", None, Vec::new(), 0).unwrap();
+        assert!(status_checked(&ctx, Some("named")).unwrap().contains(&c.id));
+        assert!(status_checked(&ctx, Some("nosuch")).unwrap_err().contains("no cluster"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_plan_keeps_dependencies_and_refuses_an_unknown_profile() {
         let (ctx, dir) = ctx();
         let plan = parse_plan(r#"{"clusters":[{"name":"back","profile":"backend","task":"server"},{"name":"front","profile":"frontend","task":"ui"},{"name":"live","profile":"live-test","task":"test","after":["back","front"]}]}"#, &ctx).unwrap();
@@ -3908,6 +3964,27 @@ mod tests {
     }
 
     #[test]
+    fn the_api_tool_list_is_sorted_for_the_cache_prefix() {
+        let (address, seen) = crate::llm::fake::serve(vec![(200, text_reply("done"))]);
+        let (mut ctx, dir) = ctx();
+        fake_models(&mut ctx, &address);
+        let p = profile(&ctx, "solo").unwrap();
+        let c = new_cluster(&ctx, &p, "sort", "read the project", None, Vec::new(), 0).unwrap();
+        let part = p.workers[0].clone();
+        let limits = Limits { cluster: 0.0, cluster_before: 0.0, session: 0.0, session_before: 0.0 };
+        let watch = Arc::new(Mutex::new(Watch::new(1)));
+        let out = run_model(&ctx, &c, &part, "you are the coder", "do the task", 1,
+                            &AtomicBool::new(false), limits, &watch).unwrap();
+        assert_eq!(out.text, "done");
+        let seen = seen.lock().unwrap();
+        let names: Vec<String> = seen[0].body["tools"].as_array().unwrap().iter()
+            .map(|t| t["name"].as_str().unwrap_or("").to_string()).collect();
+        assert!(names.len() > 1, "the request must carry the tool list: {:?}", names);
+        assert!(names.windows(2).all(|w| w[0] <= w[1]), "the tool list must be sorted for the cache prefix: {:?}", names);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_worktree_profile_is_refused_in_a_folder_without_git() {
         let dir = std::env::temp_dir().join(format!("penelope-clusters-nogit-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
@@ -3975,6 +4052,50 @@ mod tests {
         let line = fs::read_to_string(cluster_dir(&ctx, &c.id).join("report.txt")).unwrap();
         let r = crate::proof::parse(&line).unwrap();
         assert!(crate::proof::accept(&r).is_err(), "{}", line);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_tool_log_keeps_every_attempt_of_an_api_part() {
+        let (address, _seen) = crate::llm::fake::serve(vec![
+            (200, tool_reply("tree", json!({}))),
+            (200, text_reply("first attempt")),
+            (200, tool_reply("tree", json!({}))),
+            (200, text_reply("second attempt")),
+        ]);
+        let (mut ctx, dir) = ctx();
+        fake_models(&mut ctx, &address);
+        let p = profile(&ctx, "solo").unwrap();
+        let c = new_cluster(&ctx, &p, "tool-log", "read the project", None, Vec::new(), 0).unwrap();
+        let part = p.workers[0].clone();
+        let log = tool_log_path(&ctx, &c, &part);
+        for _ in 0..2 {
+            let limits = Limits { cluster: 0.0, cluster_before: 0.0, session: 0.0, session_before: 0.0 };
+            let watch = Arc::new(Mutex::new(Watch::new(3)));
+            let out = run_model(&ctx, &c, &part, "you are the coder", "do the task", 4,
+                                &AtomicBool::new(false), limits, &watch).unwrap();
+            assert_eq!(out.checks.len(), 1, "an attempt reports only its own calls");
+        }
+        let lines: Vec<Value> = fs::read_to_string(&log).unwrap().lines()
+            .map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert_eq!(lines.len(), 2, "the offline checker needs both attempts: {:?}", lines);
+        assert!(lines.iter().all(|l| l["name"] == "tree" && l["args"].is_object() && l["result"].is_string()));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_retry_reads_only_its_own_lines_from_the_tool_log() {
+        let (ctx, dir) = ctx();
+        let p = profile(&ctx, "solo").unwrap();
+        let c = new_cluster(&ctx, &p, "tool-log-offset", "do the task", None, Vec::new(), 0).unwrap();
+        let log = tool_log_path(&ctx, &c, &p.workers[0]);
+        append_tool_log(&log, "run", &json!({"command": "false"}), "exit code 1", false);
+        let start = tool_log_len(&log);
+        append_tool_log(&log, "run", &json!({"command": "true"}), "exit code 0", true);
+        let checks = checks_from_log_since(&log, start);
+        assert_eq!(checks.len(), 1);
+        assert!(checks[0].ok);
+        assert_eq!(checks_from_log(&log).len(), 2, "the first attempt stays in the file");
         let _ = fs::remove_dir_all(&dir);
     }
 

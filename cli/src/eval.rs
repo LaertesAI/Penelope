@@ -71,6 +71,8 @@ pub struct Task {
     pub check: String,
     pub check_timeout_seconds: u64,
     pub max_steps: usize,
+    /// A commit for a shared repo. A task with this field gets a git worktree at that commit instead of a copy.
+    pub base_commit: String,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -185,7 +187,11 @@ pub fn parse_tasks(path: &Path) -> Result<Vec<Task>, String> {
         }
         let timeout = v["check_timeout_seconds"].as_u64().unwrap_or(300).clamp(1, 3600);
         let max_steps = v["max_steps"].as_u64().unwrap_or(12).clamp(1, 30) as usize;
-        tasks.push(Task { id, prompt, repo, cwd, copy, check, check_timeout_seconds: timeout, max_steps });
+        let base_commit = v["base_commit"].as_str().unwrap_or("").trim().to_string();
+        if !base_commit.is_empty() && !base_commit.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(format!("task line {} ({}): base_commit is not a hex commit", line_no, id));
+        }
+        tasks.push(Task { id, prompt, repo, cwd, copy, check, check_timeout_seconds: timeout, max_steps, base_commit });
     }
     if tasks.is_empty() {
         return Err(format!("the task file {} holds no task", path.display()));
@@ -230,16 +236,37 @@ struct Workspace {
     dir: PathBuf,
     /// The root of the scratch copy, removed after the task. None when the task works in the setup folder itself.
     scratch: Option<PathBuf>,
+    /// A git worktree at a base commit: the shared repo and the worktree folder, removed with `git worktree remove`.
+    worktree: Option<(PathBuf, PathBuf)>,
 }
 
 fn prepare_workspace(ctx: &Ctx, run_id: &str, task: &Task) -> Result<Workspace, String> {
     let repo = task.repo.canonicalize().unwrap_or_else(|_| task.repo.clone());
+    if !task.base_commit.is_empty() {
+        let root = ctx.root.join("eval").join("work").join(safe_name(run_id)).join(safe_name(&task.id));
+        let _ = fs::remove_dir_all(&root);
+        if let Some(parent) = root.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("cannot make {}: {}", parent.display(), e))?;
+        }
+        let out = std::process::Command::new("git").arg("-C").arg(&repo)
+            .args(["worktree", "add", "--detach", "--force"]).arg(&root).arg(&task.base_commit)
+            .output().map_err(|e| format!("cannot start git worktree: {}", e))?;
+        if !out.status.success() {
+            return Err(format!("cannot make a worktree at {}: {}", task.base_commit,
+                               String::from_utf8_lossy(&out.stderr).trim()));
+        }
+        let dir = if task.cwd.is_empty() { root.clone() } else { root.join(&task.cwd) };
+        if !dir.is_dir() {
+            return Err(format!("worktree has no cwd {}", dir.display()));
+        }
+        return Ok(Workspace { dir, scratch: None, worktree: Some((repo, root)) });
+    }
     if !task.copy {
         let dir = if task.cwd.is_empty() { repo.clone() } else { repo.join(&task.cwd) };
         if !dir.is_dir() {
             return Err(format!("setup cwd {} is not a folder", dir.display()));
         }
-        return Ok(Workspace { dir, scratch: None });
+        return Ok(Workspace { dir, scratch: None, worktree: None });
     }
     let root = ctx.root.join("eval").join("work").join(safe_name(run_id)).join(safe_name(&task.id));
     let _ = fs::remove_dir_all(&root);
@@ -249,7 +276,7 @@ fn prepare_workspace(ctx: &Ctx, run_id: &str, task: &Task) -> Result<Workspace, 
     if !dir.is_dir() {
         return Err(format!("copied setup has no cwd {}", dir.display()));
     }
-    Ok(Workspace { dir, scratch: Some(root) })
+    Ok(Workspace { dir, scratch: Some(root), worktree: None })
 }
 
 fn safe_name(text: &str) -> String {
@@ -257,11 +284,30 @@ fn safe_name(text: &str) -> String {
 }
 
 fn task_text(task: &Task, workdir: &Path) -> String {
+    // A SWE-bench task must not show the check: the check applies the test patch, and the model may not read the tests.
+    let check = if task.base_commit.is_empty() {
+        format!("The check command that judges the result is `{}`.", task.check)
+    } else {
+        "The check runs the project's tests after you stop. Do not run the check yourself; the tests are not part of the working tree.".to_string()
+    };
     format!("This is an automated evaluation task. The project is at {}. Ignore any other working directory named in \
 your system prompt; for this task it is {}. Work only inside that folder. The file and run tools use it as their \
-working directory; if you set cwd, use that path. The check command that judges the result is `{}`. Do not start a \
-cluster or a subagent of your own; do the task here and then stop.\n\nTask: {}",
-            workdir.display(), workdir.display(), task.check, task.prompt)
+working directory; if you set cwd, use that path. {} Do not start a cluster or a subagent of your own; do the task \
+here and then stop.\n\nTask: {}",
+            workdir.display(), workdir.display(), check, task.prompt)
+}
+
+/// The source folder a task check reaches as `$PENELOPE_ROOT`. The caller's environment wins. Without it, the build
+/// folder is used only when it still exists, so a release binary never points a check at the path of its CI build.
+fn penelope_root(from_env: Option<std::ffi::OsString>) -> Option<PathBuf> {
+    penelope_root_from(from_env, Path::new(env!("CARGO_MANIFEST_DIR")).parent()?)
+}
+
+fn penelope_root_from(from_env: Option<std::ffi::OsString>, built: &Path) -> Option<PathBuf> {
+    if let Some(v) = from_env.filter(|v| !v.is_empty()) {
+        return Some(PathBuf::from(v));
+    }
+    built.join("cli").join("Cargo.toml").is_file().then(|| built.to_path_buf())
 }
 
 #[derive(Default)]
@@ -283,7 +329,17 @@ fn run_check(ctx: &Ctx, run_id: &str, task: &Task, dir: &Path) -> CheckRun {
         Err(e) => return CheckRun { passed: false, output: format!("cannot write the check log: {}", e) },
     };
     let mut cmd = crate::platform::shell(&task.check);
+    if let Some(root) = penelope_root(std::env::var_os("PENELOPE_ROOT")) {
+        cmd.env("PENELOPE_ROOT", root);
+    }
     cmd.current_dir(dir).stdin(Stdio::null()).stdout(Stdio::from(out)).stderr(Stdio::from(err));
+    // The check gets its own process group. `kill_tree` then reaches pytest and every process the check started;
+    // without this, only the shell died and a hung check ran for hours (sympy-18698).
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => return CheckRun { passed: false, output: format!("the check command could not start: {}", e) },
@@ -369,6 +425,13 @@ fn eval_context(ctx: &Ctx, setup: &str) -> Ctx {
     run.cfg["auto_skills"] = json!(false);
     // Every search belongs to the model under test; no hidden scout on the weak model.
     run.cfg["delegate"] = json!("off");
+    if setup == "cluster" {
+        // The small model gets a low thinking budget. The baseline spent 94.8 % of its output on text that was not
+        // stored; this is the lever.
+        if run.cfg["weak"].is_object() {
+            run.cfg["weak"]["effort"] = json!("low");
+        }
+    }
     if setup == "large-subagents" {
         let main = run.cfg["main"].clone();
         let mut roles = run.cfg["roles"].clone();
@@ -449,9 +512,12 @@ fn run_setup(ctx: &Ctx, tasks_path: &str, setup: &str, tasks: &[Task]) -> Result
     if setup == "cluster" {
         ensure_cluster_profile(ctx)?;
     }
+    // The cluster arm runs the eval-small profile: one weak worker at low effort (K9). A routing rule by the number of
+    // parts (K7) needs the part count of a plan; a fixed one-worker profile would send every task to the large model.
+    let route = setup;
     let run_id = next_run_id(ctx, setup);
-    let run_ctx = eval_context(ctx, setup);
-    let model = setup_model(&run_ctx, setup);
+    let run_ctx = eval_context(ctx, route);
+    let model = setup_model(&run_ctx, route);
     let mut out = SetupResult { setup: setup.to_string(), run_id: run_id.clone(), model: model.clone(), tasks: Vec::new() };
     let mut stored: Vec<Value> = Vec::new();
     for task in tasks {
@@ -466,8 +532,12 @@ fn run_setup(ctx: &Ctx, tasks_path: &str, setup: &str, tasks: &[Task]) -> Result
                 continue;
             }
         };
-        let answer = with_task_cwd(&workspace.dir, || run_one(&run_ctx, setup, task, &workspace.dir));
+        let answer = with_task_cwd(&workspace.dir, || run_one(&run_ctx, route, task, &workspace.dir));
         let check = run_check(&run_ctx, &run_id, task, &workspace.dir);
+        if let Some((repo, dir)) = &workspace.worktree {
+            let _ = std::process::Command::new("git").arg("-C").arg(repo)
+                .args(["worktree", "remove", "--force"]).arg(dir).output();
+        }
         if let Some(scratch) = &workspace.scratch {
             let _ = fs::remove_dir_all(scratch);
         }
@@ -504,6 +574,7 @@ fn run_setup(ctx: &Ctx, tasks_path: &str, setup: &str, tasks: &[Task]) -> Result
         "schema": 1,
         "id": run_id,
         "setup": setup,
+        "route": route,
         "started": crate::sessions::stamp(now()),
         "tasks_path": tasks_path,
         "model": model,
@@ -794,6 +865,72 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_timed_out_check_kills_the_grandchild_too() {
+        let (ctx, d) = ctx("timeout-tree");
+        let repo = repo(&d);
+        let task = Task { id: "tree".into(), prompt: "Do it".into(), repo: repo.clone(),
+                          cwd: String::new(), copy: false, check: "sleep 30 & echo $! > child.pid; wait".into(),
+                          check_timeout_seconds: 1, max_steps: 1, base_commit: String::new() };
+        let run = run_check(&ctx, "tree-run", &task, &repo);
+        assert!(run.output.contains("timed out"), "{}", run.output);
+        let pid = fs::read_to_string(repo.join("child.pid")).unwrap().trim().to_string();
+        let mut alive = true;
+        for _ in 0..20 {
+            alive = std::process::Command::new("kill").args(["-0", &pid]).stderr(Stdio::null()).status()
+                .map(|s| s.success()).unwrap_or(false);
+            if !alive { break; }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert!(!alive, "the grandchild {} survived the timeout", pid);
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_swebench_task_does_not_show_the_check_command() {        let base = Task { id: "x".into(), prompt: "Do it".into(), repo: std::path::PathBuf::from("."),
+                          cwd: String::new(), copy: false, check: "python3 secret_check.py".into(),
+                          check_timeout_seconds: 5, max_steps: 1, base_commit: "a".repeat(40) };
+        let text = task_text(&base, Path::new("/tmp/x"));
+        assert!(!text.contains("secret_check.py"), "{}", text);
+        assert!(text.contains("Do not run the check"), "{}", text);
+        let file = Task { base_commit: String::new(), ..base };
+        assert!(task_text(&file, Path::new("/tmp/x")).contains("secret_check.py"));
+    }
+
+    #[test]
+    fn a_task_with_a_base_commit_gets_a_git_worktree_at_that_commit() {
+        let (ctx, d) = ctx("worktree");
+        let repo = d.join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let run = |args: &[&str]| {
+            let out = std::process::Command::new("git").arg("-C").arg(&repo).args(args).output().unwrap();
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        };
+        run(&["init", "-q"]);
+        // The Windows runners set core.autocrlf=true globally; the worktree must keep the committed bytes.
+        run(&["config", "core.autocrlf", "false"]);
+        fs::write(repo.join("a.txt"), "one\n").unwrap();
+        run(&["add", "."]);
+        run(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "one"]);
+        let first = String::from_utf8(std::process::Command::new("git").arg("-C").arg(&repo)
+            .args(["rev-parse", "HEAD"]).output().unwrap().stdout).unwrap().trim().to_string();
+        fs::write(repo.join("a.txt"), "two\n").unwrap();
+        run(&["add", "."]);
+        run(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "two"]);
+        let task = Task { id: "wt".into(), prompt: "do it".into(), repo: repo.clone(), cwd: String::new(),
+                          copy: false, check: "true".into(), check_timeout_seconds: 5, max_steps: 1,
+                          base_commit: first };
+        let w = prepare_workspace(&ctx, "run", &task).unwrap();
+        assert_eq!(fs::read_to_string(w.dir.join("a.txt")).unwrap(), "one\n");
+        assert!(w.worktree.is_some());
+        if let Some((r, dir)) = &w.worktree {
+            let _ = std::process::Command::new("git").arg("-C").arg(r)
+                .args(["worktree", "remove", "--force"]).arg(dir).output();
+        }
+        let _ = fs::remove_dir_all(&d);
+    }
+
     #[test]
     fn the_large_setup_runs_a_task_on_a_fake_endpoint_and_the_table_is_written() {
         let (mut ctx, d) = ctx("large");
@@ -862,6 +999,16 @@ mod tests {
     }
 
     #[test]
+    fn the_cluster_eval_lowers_the_weak_effort() {
+        let (ctx, d) = ctx("weak-effort");
+        let cluster = eval_context(&ctx, "cluster");
+        assert_eq!(cluster.cfg["weak"]["effort"].as_str(), Some("low"));
+        let large = eval_context(&ctx, "large");
+        assert_ne!(large.cfg["weak"]["effort"].as_str(), Some("low"));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
     fn an_eval_runs_unattended_in_the_sandbox_without_changing_the_caller() {
         let (ctx, d) = ctx("unattended");
         let run = eval_context(&ctx, "large");
@@ -875,28 +1022,41 @@ mod tests {
     }
 
     #[test]
-    fn the_cluster_setup_uses_orchestrate_with_the_small_profile() {
-        let (mut ctx, d) = ctx("cluster");
+    fn the_cluster_setup_runs_the_weak_model() {
+        let (mut ctx, d) = ctx("cluster-weak");
         let repo = repo(&d);
         let file = tasks(&d, &repo, "test -f README.md", "Say what the project is.");
-        let (address, seen) = crate::llm::fake::serve(vec![
-            reply("the coder read the README", 30, 3),
-            reply("PASS the evidence is in the memory", 20, 4),
-        ]);
+        let (address, seen) = crate::llm::fake::serve(vec![reply("the task is done", 30, 3), reply("PASS: done", 10, 1),
+                                                          reply("PASS: done", 10, 1)]);
+        endpoint(&mut ctx, &address, "main");
         endpoint(&mut ctx, &address, "weak");
-        ctx.cfg["prices"] = json!({"test-model": [1.0, 2.0]});
+        ctx.cfg["main"]["model"] = json!("main-model");
+        ctx.cfg["weak"]["model"] = json!("weak-model");
         let parsed = parse_tasks(&file).unwrap();
         let result = run_setup(&ctx, file.to_str().unwrap(), "cluster", &parsed).unwrap();
-        assert_eq!((result.passed(), result.tokens()), (1, (30, 3)));
-        assert!(ctx.root.join("clusters/profiles").join(format!("{}.json", CLUSTER_PROFILE)).is_file());
+        assert_eq!(result.model, "weak-model");
+        assert_eq!(result.passed(), 1);
         let profile: Value = serde_json::from_str(&fs::read_to_string(ctx.root.join("clusters/profiles").join(format!("{}.json", CLUSTER_PROFILE))).unwrap()).unwrap();
         assert_eq!(profile["single_model"], true);
+        let run: Value = serde_json::from_str(&fs::read_to_string(ctx.root.join("eval/runs").join(format!("{}.json", result.run_id))).unwrap()).unwrap();
+        assert_eq!((run["setup"].as_str(), run["route"].as_str()), (Some("cluster"), Some("cluster")));
         let seen = seen.lock().unwrap();
-        assert_eq!(seen.len(), 1);
-        let systems: Vec<String> = seen.iter().map(|s| s.body["messages"][0]["content"].as_str().unwrap_or("").to_string()).collect();
-        assert!(systems.iter().any(|s| s.contains("part of the Penelope cluster")), "{:?}", systems);
-        assert!(!systems.iter().any(|s| s.contains("validator part")), "the one-worker profile with no retry must skip the validator: {:?}", systems);
+        assert!(!seen.is_empty());
+        assert!(seen.iter().all(|s| s.body["model"] == "weak-model"), "the cluster arm must not call the main model: {:?}",
+                seen.iter().map(|s| s.body["model"].clone()).collect::<Vec<_>>());
+        assert!(seen.iter().any(|s| s.body["messages"][0]["content"].as_str().unwrap_or("").contains("part of the Penelope cluster")),
+                "the cluster arm must start the cluster");
         let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn the_check_root_comes_from_the_environment_first() {
+        assert_eq!(penelope_root(Some("/opt/penelope".into())), Some(PathBuf::from("/opt/penelope")));
+        let built = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf();
+        assert_eq!(penelope_root(None), Some(built.clone()), "a test build still finds its own source folder");
+        assert_eq!(penelope_root(Some("".into())), Some(built));
+        let gone = std::env::temp_dir().join(format!("penelope-no-build-{}", std::process::id()));
+        assert_eq!(penelope_root_from(None, &gone), None, "a release binary must not name its CI build folder");
     }
 
     #[test]

@@ -228,4 +228,19 @@ mod tests {
         assert!(budget_summary(&ctx).contains("left of 10.00"), "{}", budget_summary(&ctx));
         let _ = fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn the_default_table_prices_older_models_at_their_own_list_price() {
+        let dir = std::env::temp_dir().join(format!("penelope-cost-old-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let ctx = crate::config::load(&dir.join(".penelope"));
+        assert_eq!(price(&ctx, "claude-haiku-4-5"), Some((1.0, 5.0)));
+        assert_eq!(price(&ctx, "claude-sonnet-4-6"), Some((3.0, 15.0)));
+        assert_eq!(price(&ctx, "claude-opus-4-8"), Some((5.0, 25.0)));
+        assert_eq!(price(&ctx, "claude-opus-4-1"), Some((15.0, 75.0)));
+        assert_eq!(price(&ctx, "claude-haiku-5-5"), Some((0.1, 0.5)));
+        assert_eq!(price(&ctx, "claude-opus-5-5"), Some((4.0, 20.0)));
+        assert_eq!(price(&ctx, "haiku"), Some((0.1, 0.5)), "the bare claude-cli alias names the current Haiku");
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
