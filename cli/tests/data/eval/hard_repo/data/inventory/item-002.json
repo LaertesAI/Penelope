@@ -1,0 +1,9 @@
+{
+  "sku": "SKU-1002",
+  "warehouse": "hamburg",
+  "count": 11,
+  "tags": [
+    "bulk",
+    "fragile"
+  ]
+}

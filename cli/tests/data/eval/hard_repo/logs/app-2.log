@@ -1,0 +1,45 @@
+2026-11-01 08:35:37 WARN billing: disk at 58%
+2026-11-01 09:15:36 INFO auth: retrying upstream
+2026-11-01 09:39:21 INFO search: disk at 82%
+2026-11-01 10:42:24 INFO billing: timeout after 30s
+2026-11-01 10:47:06 INFO billing: invoice 560 stored
+2026-11-01 14:33:46 ERROR search: queue full
+2026-11-01 17:23:02 INFO search: invoice 197 stored
+2026-11-01 17:58:17 INFO search: queue full
+2026-11-02 09:15:35 INFO search: invoice 203 stored
+2026-11-02 09:42:05 WARN auth: invoice 987 stored
+2026-11-02 13:14:07 WARN mail: queue full
+2026-11-02 13:17:19 INFO auth: disk at 52%
+2026-11-02 13:49:49 INFO search: retrying upstream
+2026-11-02 14:09:04 INFO mail: queue full
+2026-11-02 17:44:34 INFO billing: request done
+2026-11-02 17:51:42 INFO mail: queue full
+2026-11-03 08:00:36 INFO mail: timeout after 30s
+2026-11-03 08:05:45 ERROR billing: queue full
+2026-11-03 09:06:53 ERROR auth: retrying upstream
+2026-11-03 09:36:33 ERROR auth: request done
+2026-11-03 09:42:01 INFO mail: cache miss
+2026-11-03 09:48:56 INFO auth: retrying upstream
+2026-11-03 10:38:59 INFO auth: queue full
+2026-11-03 13:00:16 WARN mail: cache miss
+2026-11-03 13:09:51 WARN mail: invoice 392 stored
+2026-11-03 13:18:19 ERROR search: cache miss
+2026-11-03 13:49:49 INFO search: queue full
+2026-11-03 13:54:49 INFO billing: cache miss
+2026-11-03 14:18:59 INFO mail: request done
+2026-11-03 17:07:18 WARN billing: queue full
+2026-11-03 17:29:31 INFO mail: request done
+2026-11-03 22:56:01 INFO mail: queue full
+2026-11-04 08:38:15 INFO auth: login failed for user=u030
+2026-11-04 09:31:11 ERROR billing: disk at 97%
+2026-11-04 10:12:44 INFO search: retrying upstream
+2026-11-04 10:19:15 INFO auth: disk at 58%
+2026-11-04 10:55:41 WARN auth: disk at 61%
+2026-11-04 13:34:03 WARN mail: queue full
+2026-11-04 14:08:37 INFO search: queue full
+2026-11-04 14:41:20 WARN auth: login failed for user=u004
+2026-11-04 14:49:09 INFO auth: invoice 608 stored
+2026-11-04 17:15:46 INFO auth: login failed for user=u027
+2026-11-04 17:16:17 ERROR auth: cache miss
+2026-11-04 22:14:07 INFO auth: cache miss
+2026-11-04 22:27:36 INFO auth: queue full

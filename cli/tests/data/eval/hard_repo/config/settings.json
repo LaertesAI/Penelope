@@ -1,0 +1,29 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8080,
+    "workers": 4
+  },
+  "features": [
+    "search",
+    "export"
+  ],
+  "debug": {
+    "trace": true,
+    "level": "info"
+  },
+  "storage": {
+    "path": "data/",
+    "retention_days": 30
+  },
+  "users": [
+    {
+      "name": "ana",
+      "role": "admin"
+    },
+    {
+      "name": "ben",
+      "role": "viewer"
+    }
+  ]
+}
