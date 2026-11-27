@@ -676,12 +676,12 @@ mod tests {
         let (ctx, dir) = ctx_with_fake(vec![(200, reply.clone()), (200, reply.clone())]);
         let path = dir.join("par.rhai");
         fs::write(&path, "parallel([#{prompt: \"a\", opts: #{}}, #{prompt: \"b\", opts: #{}}])").unwrap();
-        let out = run(&ctx, &path, RunOptions { confirm: false, ..RunOptions::default() }).unwrap();
+        let out = run(&ctx, &path, RunOptions { confirm: false, max_parallel: 4, ..RunOptions::default() }).unwrap();
         assert_eq!(out.output.as_array().map(|a| a.len()), Some(2));
         let (ctx, dir) = ctx_with_fake(vec![(200, reply.clone())]);
         let path = dir.join("pipe.rhai");
         fs::write(&path, "pipeline([\"a\"], [#{prompt: \"x {item}\", model: \"worker\"}])").unwrap();
-        let out = run(&ctx, &path, RunOptions { confirm: false, ..RunOptions::default() }).unwrap();
+        let out = run(&ctx, &path, RunOptions { confirm: false, max_parallel: 4, ..RunOptions::default() }).unwrap();
         assert_eq!(out.output.as_array().map(|a| a.len()), Some(1));
         let _ = fs::remove_dir_all(&dir);
     }
