@@ -93,7 +93,7 @@ pub fn wizard(input: &mut dyn BufRead, out: &mut dyn Write, mut cfg: Value) -> V
           ("web", "web research goes to the scout, the main model searches files itself"),
           ("offer", "the main model may search itself or send a scout"), ("off", "the main model searches itself")], &cur(&cfg, "delegate", "auto")));
     cfg["privacy"] = json!(choose(input, out, "What does the privacy filter mask before a model reads a text?",
-        &[("rules", "keys, passwords, tokens, private key blocks"), ("pii", "the same plus e-mail addresses and IBANs"), ("off", "nothing")], &cur(&cfg, "privacy", "rules")));
+        &[("rules", "keys, passwords, tokens, private key blocks"), ("pii", "the same plus names, addresses, phone numbers, e-mail, IBANs, tax ids and birth dates"), ("off", "nothing")], &cur(&cfg, "privacy", "rules")));
     cfg["run_policy"] = json!(choose(input, out, "Which commands run without a question?",
         &[("safe", "read-only and build commands, every other command asks"), ("all", "every command")], &cur(&cfg, "run_policy", "safe")));
     cfg["edit_policy"] = json!(choose(input, out, "May the main model change files without a question?",

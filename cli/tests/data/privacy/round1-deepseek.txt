@@ -1,0 +1,733 @@
+RECHNUNG NR. RE-2026-0417
+
+Nordwind Logistik GmbH
+⟦address|Hafenstraße 12⟧
+⟦address|28195 Bremen⟧
+USt-IdNr.: DE 312 445 678
+
+Empfänger:
+⟦name|Mehmet Öztürk⟧
+⟦address|Kastanienallee 33⟧
+⟦address|44137 Dortmund⟧
+
+Rechnungsdatum: 03.02.2026 · Leistungszeitraum: Januar 2026 · Kundennummer: KD-88412
+
+| Pos. | Artikel | Menge | Einzelpreis | Gesamt |
+|---|---|---|---|---|
+| 1 | Transportpalette EUR | 6 | 18,50 € | 111,00 € |
+| 2 | Speditionsfahrt Inland | 2 | 240,00 € | 480,00 € |
+| 3 | Luftpolsterfolie 50 m | 1 | 35,90 € | 35,90 € |
+
+Zwischensumme 626,90 €, zzgl. 19 % USt. 119,11 €. Rechnungsbetrag: 746,01 €.
+
+Zahlbar bis 03.03.2026 auf Konto IBAN ⟦iban⟧ · BIC GENODE51BHE.
+
+Rückfragen: ⟦phone|0231 44 55 660⟧ oder ⟦email|buchhaltung@nordwind-logistik.de⟧.
+=====
+ZAHLUNGSERINNERUNG / 1. MAHNUNG
+
+Sehr geehrter Herr ⟦name|Lukas Brandner⟧,
+
+wir weisen Sie auf die offene Rechnung RE-2025-1189 vom 12.11.2025 über 1.240,50 € hin, die trotz vereinbarter Zahlungsfrist bis heute nicht beglichen wurde. Ihre Kundennummer lautet 77123.
+
+Bitte überweisen Sie den Gesamtbetrag zuzüglich Mahngebühr von 8,50 € bis spätestens 12.03.2026 auf IBAN ⟦iban⟧ (BIC: SOLADES1STG).
+
+Sollte die Zahlung bereits veranlasst sein, betrachten Sie dieses Schreiben als gegenstandslos. Andernfalls behalten wir uns weitere Schritte vor.
+
+Mit freundlichen Grüßen
+Solartechnik Brunner GmbH, Debitorenbuchhaltung
+⟦address|Industriestraße 9⟧ · ⟦address|74523 Schwäbisch Hall⟧
+⟦phone|0791 223 44 55⟧ · ⟦email|mahnwesen@solartechnik-brunner.de⟧
+=====
+LIEFERSCHEIN NR. LS-2607-334
+
+Warenausgang: Becker & Söhne Maschinenbau e.K.
+⟦address|Gewerbering 4⟧
+⟦address|47441 Moers⟧
+
+Lieferadresse:
+⟦name|Josephine von Falkenberg⟧
+⟦address|Rosenhöhe 8⟧
+⟦address|82467 Garmisch-Partenkirchen⟧
+
+Datum: 21.02.2026 · Auftragsnummer: AU-55981
+
+| Pos. | Artikel-Nr. | Bezeichnung | Menge |
+|---|---|---|---|
+| 1 | BK-7721 | Keilriemen 13x850 | 4 |
+| 2 | BK-3340 | Riemenscheibe Ø160 | 2 |
+| 3 | FS-0098 | Fettpatrone 400 g | 12 |
+
+Geliefert durch Spedition "RheinExpress". Ware in ordnungsgemäßem Zustand übergeben.
+
+Empfangsbestätigung:
+
+Unterschrift: ____________________
+Name in Druckbuchstaben: ____________________
+Datum: ____________________
+=====
+ANGEBOT NR. AN-2026-0081
+
+Dachdeckerbetrieb Hartmann & Co.
+⟦address|Birkenweg 21⟧
+⟦address|56112 Lahnstein⟧
+Tel. ⟦phone|02621 78 99 00⟧
+
+Angebot an: ⟦name|Aylin Demir⟧, ⟦address|Weinbergstraße 15⟧, ⟦address|56329 St. Goar⟧
+Datum: 07.02.2026 · Gültig bis: 07.03.2026
+
+Objekt: Dachsanierung Wohnhaus, Weinstraße 15, St. Goar
+
+1. Gerüststellung, Abbau, Vorhaltezeit 3 Wochen: 1.480,00 €
+2. Neueindeckung 118 m² Dachziegel Tegalit, inkl. Lattung: 6.890,00 €
+3. Rinnen- und Fallrohrarbeiten, Zink, 24 lfm: 1.250,00 €
+4. Entsorgung Alteindeckung: 420,00 €
+
+Summe netto 10.040,00 € · zzgl. 19 % USt. 1.907,60 € · Angebotssumme brutto 11.947,60 €.
+
+Alle Preise verstehen sich inklusive Material und Lohn. Für Rückfragen erreichen Sie unseren Bauleiter unter ⟦phone|0171 55 22 887⟧.
+=====
+ARBEITSVERTRAG
+
+Zwischen der Berggarten Gastronomie GmbH, ⟦address|Parkallee 3⟧, ⟦address|26122 Oldenburg⟧ (Arbeitgeber), vertreten durch die Geschäftsführung, und
+
+Herrn ⟦name|Heinrich Wagner⟧, geboren am ⟦birth_date|14.09.1972⟧, wohnhaft ⟦address|Lerchenweg 6⟧, ⟦address|26123 Oldenburg⟧, Steuer-ID ⟦tax_id⟧ (Arbeitnehmer),
+
+wird folgender Arbeitsvertrag geschlossen:
+
+§ 1 Beginn und Dauer: unbefristet ab 01.04.2026, Probezeit 6 Monate.
+§ 2 Tätigkeit: Koch, Einsatz im Restaurantbetrieb.
+§ 3 Arbeitszeit: 40 Stunden wöchentlich, Schichtdienst.
+§ 4 Vergütung: 3.250,00 € brutto monatlich, zahlbar zum Monatsletzten auf IBAN ⟦iban⟧.
+§ 5 Urlaub: 28 Arbeitstage.
+§ 6 Kündigungsfristen: gesetzlich.
+
+Ort, Datum: Oldenburg, den 12.02.2026
+
+________________________ (Arbeitgeber) · ________________________ (Arbeitnehmer)
+=====
+MIETVERTRAG (Wohnraum)
+
+Vermieter: ⟦name|Kwame Mensah⟧, ⟦address|Heidestraße 44⟧, ⟦address|50931 Köln⟧
+Mieter: ⟦name|Clara Berger-Simon⟧, geboren am ⟦birth_date|29.11.1988⟧, ⟦address|Heidestraße 44⟧, ⟦address|50931 Köln⟧
+
+§ 1 Mietgegenstand: 2-Zimmer-Wohnung, 2. OG rechts, Heidestraße 44, Köln.
+§ 2 Mietbeginn: 01.05.2026, unbefristet.
+§ 3 Miete: Grundmiete 760,00 €, Nebenkostenvorauszahlung 140,00 €, gesamt 900,00 €, fällig bis 3. Werktag des Monats auf IBAN ⟦iban⟧.
+§ 4 Kaution: 2.280,00 €.
+§ 5 Kündigung: 3 Monate, schriftlich.
+
+Ort, Datum: Köln, 18.02.2026
+
+________________________ (Vermieter) · ________________________ (Mieter)
+=====
+KÜNDIGUNG DES ARBEITSVERHÄLTNISSES
+
+Sehr geehrte Frau ⟦name|Giulia Romano⟧,
+
+hiermit kündigen wir das mit Ihnen bestehende Arbeitsverhältnis ordentlich und fristgerecht zum 30.06.2026.
+
+Wir danken Ihnen für Ihre bisherige Mitarbeit im Bereich Marketing. Die Kündigung erfolgt aus dringenden betrieblichen Erfordernissen; das ihr zugrunde liegende Konzept liegt diesem Schreiben bei.
+
+Ihre restlichen Urlaubstage (9 Tage) werden in Natur gewährt. Ihre Arbeitspapiere und das qualifizierte Zeugnis erhalten Sie zum Austrittsdatum. Die Kündigungsfrist beträgt gemäß § 622 BGB sechs Wochen zum Quartalsende.
+
+Wir bedauern diesen Schritt und wünschen Ihnen für die Zukunft alles Gute.
+
+Mit freundlichen Grüßen
+i.A. ⟦name|Viktor Baum⟧
+Leitung Personal, Meridian Werbeagentur GmbH
+⟦address|Ludwigstraße 10⟧ · ⟦address|80333 München⟧
+⟦phone|089 22 11 334⟧
+=====
+ABMAHNUNG
+
+An: ⟦name|Marek Nowak⟧
+Personalnummer 4452
+
+Sehr geehrter Herr ⟦name|Marek Nowak⟧,
+
+hiermit mahnen wir Sie arbeitsrechtlich ab.
+
+Sachverhalt: Am 16.02.2026 sind Sie ohne Entschuldigung und ohne Genehmigung nicht zur Frühschicht (Beginn 06:00 Uhr) erschienen. Der Vorgesetzte ⟦name|Ilka Schröder⟧ konnte Sie telefonisch nicht erreichen; eine Mitteilung erfolgte erst gegen 10:30 Uhr.
+
+Damit haben Sie gegen Ihre arbeitsvertraglichen Pflichten verstoßen. Wir fordern Sie auf, Ihre Arbeitszeiten künftig zuverlässig einzuhalten und unverzüglich eine Vorgesetzten- oder Personalratsperson zu informieren, falls eine Verhinderung eintritt.
+
+Bei erneutem Verstoß müssen Sie mit arbeitsrechtlichen Konsequenzen rechnen.
+
+Diese Abmahnung wird zur Personalakte genommen.
+
+Ort, Datum: Gelsenkirchen, 20.02.2026
+
+________________________
+Personalleitung, Kohle & Stahl Logistik GmbH
+⟦address|Ringstraße 27⟧ · ⟦address|45879 Gelsenkirchen⟧
+=====
+ARBEITSZEUGNIS
+
+Zeugnis für ⟦name|Leon Zimmermann⟧, geboren am ⟦birth_date|02.05.1995⟧
+
+Herr ⟦name|Leon Zimmermann⟧ war vom 01.08.2021 bis zum 31.01.2026 als Softwareentwickler in unserer Entwicklungsabteilung tätig.
+
+Zu seinen Aufgaben gehörten die Konzeption und Implementierung von Webanwendungen, die Pflege bestehender Systeme sowie die technische Dokumentation. ⟦name|Leon Zimmermann⟧ verfügt über sehr gute Kenntnisse in TypeScript und Java. Er arbeitete stets selbstständig, zuverlässig und mit großer Sorgfalt. Auch unter hoher Belastung erzielte er Ergebnisse in sehr guter Qualität.
+
+Sein Verhalten gegenüber Vorgesetzten, Kolleginnen und Kollegen war jederzeit einwandfrei. Wir bedauern sein Ausscheiden und danken ihm für die stets sehr gute Zusammenarbeit. Wir wünschen ⟦name|Leon Zimmermann⟧ beruflich und privat weiterhin alles Gute.
+
+Oldenburg, den 05.02.2026
+
+Norden Digital GmbH
+________________________
+⟦name|Wolfram Kühne⟧, Geschäftsführer
+⟦address|Am Hafen 2⟧ · ⟦address|26135 Oldenburg⟧
+=====
+BEWERBUNG
+
+Betreff: Bewerbung als Mediengestalterin
+
+Sehr geehrte Frau ⟦name|Ottilie Gräf⟧,
+
+mit großem Interesse habe ich Ihre Stellenausschreibung gelesen und bewerbe mich hiermit um die Position der Mediengestalterin Digital und Print.
+
+Mein Name ist ⟦name|Lan Thi Nguyen⟧, ich bin 28 Jahre alt und habe meine Ausbildung zur Mediengestalterin 2022 bei einem Verlag in Leipzig abgeschlossen. Seitdem arbeite ich in einer Agentur und betreue Projekte von der Layoutentwicklung bis zur Druckvorstufe. Besonders reizt mich an Ihrer Ausschreibung die Verbindung von Editorial Design und digitalen Formaten.
+
+Meine Stärken liegen in einem sicheren Umgang mit InDesign, Illustrator und Figma sowie in einer sorgfältigen, strukturierten Arbeitsweise. Gerne überzeuge ich Sie in einem persönlichen Gespräch.
+
+Mit freundlichen Grüßen
+⟦name|Lan Thi Nguyen⟧
+⟦address|Karl-Liebknecht-Straße 18⟧
+⟦address|04107 Leipzig⟧
+⟦phone|0176 88 33 229⟧
+⟦email|lan.nguyen@example.de⟧
+=====
+ARBEITSUNFÄHIGKEITSBESCHEINIGUNG (Mitteilung an Arbeitgeber)
+
+An: Feinmechanik Weber GmbH, Personalabteilung
+Betreff: Krankmeldung
+
+Sehr geehrte Damen und Herren,
+
+hiermit melde ich mich, ⟦name|Sergej Petrow⟧, Personalnummer 2217, für den Zeitraum vom 10.02.2026 bis voraussichtlich 13.02.2026 arbeitsunfähig.
+
+Die Arbeitsunfähigkeitsbescheinigung meines behandelnden Arztes Dr. ⟦name|Andrei Kuznetsov⟧ wurde am 10.02.2026 ausgestellt und der Krankenkasse elektronisch übermittelt. Eine Durchschrift habe ich dem Personalbüro zur Kenntnis übersandt.
+
+Sollte die Arbeitsunfähigkeit über den genannten Zeitraum hinaus andauern, werde ich Sie umgehend informieren.
+
+Mit freundlichen Grüßen
+⟦name|Sergej Petrow⟧
+⟦phone|0151 22 77 994⟧
+⟦email|s.petrow@example.de⟧
+=====
+REISEKOSTENABRECHNUNG
+
+Mitarbeiterin: ⟦name|Cordula Steinbach⟧ · Personalnummer: 5508
+Abrechnungsmonat: Januar 2026
+
+| Datum | Reise von – nach | km (PKW) | km-Satz | Betrag |
+|---|---|---|---|---|
+| 13.01. | Hamburg – Lübeck – Hamburg | 132 | 0,30 € | 39,60 € |
+| 20.01. | Hamburg – Kiel – Hamburg | 186 | 0,30 € | 55,80 € |
+
+Übernachtung (20.01. – 21.01.): 92,50 € inkl. Frühstück
+Verpflegungspauschale (24 h, abzgl. Frühstück): 11,20 €
+
+Gesamtsumme: 199,10 €
+
+Bankverbindung für Erstattung: IBAN ⟦iban⟧
+
+Unterschrift Mitarbeiterin: ________________________
+Genehmigt durch ⟦name|Dietlind Voss⟧ am 03.02.2026.
+=====
+PROTOKOLL – TEAMBESPRECHUNG
+
+Datum: 09.02.2026, 10:00–11:15 Uhr · Ort: Konferenzraum 2, Firmenzentrale Hannover
+Teilnehmende: ⟦name|Emilia Schmidt⟧ (Leitung), ⟦name|Tomasz Zielinski⟧, ⟦name|Fatma Kaya⟧, ⟦name|Thilo Brandt⟧, ⟦name|Aminata Diallo⟧
+Protokoll: ⟦name|Thilo Brandt⟧
+
+TOP 1 – Rückblick: Die Einführung des neuen Warenwirtschaftssystems liegt im Plan. ⟦name|Emilia Schmidt⟧ lobt den Einsatz des Teams.
+
+TOP 2 – Lieferengpässe: ⟦name|Fatma Kaya⟧ berichtet von Verzögerungen bei Baugruppe XT-44. Liefertermin verschiebt sich auf KW 9. Entscheidung: Pufferbestand um 15 % erhöhen.
+
+TOP 3 – Kundenreklamation: ⟦name|Tomasz Zielinski⟧ stellt die Beschwerde des Kunden "Hanse Kontor" vor. Er übernimmt die Klärung bis 13.02.2026.
+
+TOP 4 – Sonstiges: Betriebsausflug am 26.06.2026. ⟦name|Aminata Diallo⟧ sammelt Anmeldungen.
+
+Nächster Termin: 16.02.2026, 10:00 Uhr. Ende der Sitzung: 11:15 Uhr.
+=====
+CHATVERLAUF – FIRMEN-MESSENGER „Quartz"
+
+Kanal #projekt-nordlicht · 11.02.2026
+
+08:42 ⟦name|Jakub Nowak⟧: Morgen zusammen! Wer übernimmt heute die Freigabe des Layouts?
+08:45 ⟦name|Silvia Conti⟧: Ich hab das Paket gestern Abend hochgeladen, müsste freigabereif sein.
+08:47 ⟦name|Jakub Nowak⟧: Danke @⟦name|Silvia Conti⟧, schaue ich mir an.
+09:15 ⟦name|Fatou Diallo⟧: @alle bitte dran denken, die Zeiterfassung bis heute 18:00 Uhr zu bestätigen.
+09:20 ⟦name|Raban von Ahlen⟧: Erledigt.
+09:22 ⟦name|Silvia Conti⟧: Die Kundin hat eben angerufen, Wunschtermin ist jetzt der 02.03.
+09:30 ⟦name|Jakub Nowak⟧: OK, dann müssen wir das Briefing verschieben. Ich blocke 14 Uhr.
+10:02 ⟦name|Emre Yıldız⟧: Hab den Druckdatencheck abgeschlossen, alles grün. 🎉
+10:05 ⟦name|Fatou Diallo⟧: Super, danke @⟦name|Emre Yıldız⟧.
+=====
+INTERNE E-MAIL
+
+Von: ⟦email|thomas.ober@fink-bau.de⟧
+An: vertrieb@fink-bau.de
+Betreff: AW: Angebot AN-4450 – Preisprüfung
+
+Hallo zusammen,
+
+⟦name|Thomas Ober⟧ hier. Zum Angebot AN-4450 für das Bauvorhaben in Radebeul habe ich die Preise noch einmal geprüft. Die Position Gerüstbau liegt aktuell 6 % über dem Rahmenvertrag, das bekommen wir bei der Nachkalkulation aber wieder eingefangen.
+
+Bitte vor Versand noch die Versandadresse des Kunden ⟦name|Zofia Kowalska⟧ korrigieren: Sie hat im Januar um eine Lieferung an die Baustelle gebeten, die neue Adresse liegt mir vor (⟦address|Augustusweg 12⟧, ⟦address|01445 Radebeul⟧).
+
+Den aktualisierten Stand findet ihr im Projektlaufwerk unter „Fink/Bau/Angebote/2026". Rückfragen gern an mich, ich bin bis 16 Uhr erreichbar unter ⟦phone|0173 88 12 540⟧.
+
+Gruß
+⟦name|Thomas Ober⟧
+=====
+KUNDENBESCHWERDE
+
+Eingegangen: 06.02.2026 · Kanal: E-Mail · Bearbeitet von: ⟦name|Hassan Al-Rashid⟧
+
+Kunde: ⟦name|Margarete Oelkers⟧, ⟦address|Schulstraße 5⟧, ⟦address|37603 Holzminden⟧
+Auftragsnummer: 2026-1147
+
+Beschwerde: Frau ⟦name|Margarete Oelkers⟧ meldet, dass der gelieferte Kühlschrank „FrostKönig 320" bei Anlieferung eine Delle an der Tür aufwies. Zudem sei der vereinbarte Liefertermin (03.02.2026, 09:00–12:00 Uhr) um zwei Stunden überschritten worden.
+
+Maßnahme: Termin zur Abholung und Ersatzlieferung vereinbart für 10.02.2026, 08:30 Uhr. Gutschrift über 25,00 € als Kulanz veranlasst.
+
+Status: in Bearbeitung, Wiedervorlage am 12.02.2026.
+=====
+SCHADENANZEIGE – VERSICHERUNG
+
+Versicherungsnehmer: ⟦name|Igor Sokolow⟧
+Versicherungsnummer: VSH-88231-4
+Schadennummer: 2602-00917
+
+Art des Schadens: Wasserschaden / Leitungswasseraustritt
+Schadenort: ⟦address|Feldrain 9⟧, ⟦address|60389 Frankfurt am Main⟧
+Schadentag: 01.02.2026, ca. 14:30 Uhr
+
+Schadensbeschreibung: An einer Heizungsleitung im Badezimmer ist ein Rohr geplatzt. Betroffen sind Flur, Badezimmer und ein angrenzender Raum; Fußboden und Wandbereiche sind durchnässt.
+
+Handwerker: Fa. „Nass-Sanierung Müller", Termin zur Trocknung 03.02.2026.
+
+Der Versicherungsnehmer ⟦name|Igor Sokolow⟧ ist erreichbar unter ⟦phone|0160 55 43 218⟧ oder ⟦email|i.sokolow@example.de⟧.
+=====
+VOLLMACHT
+
+Ich, ⟦name|Gertrud Hartmann⟧, geboren am ⟦birth_date|17.03.1951⟧, wohnhaft ⟦address|Kirchgasse 3⟧, ⟦address|97070 Würzburg⟧,
+
+bevollmächtige hiermit
+
+⟦name|Raban von Ahlen⟧, geboren am ⟦birth_date|08.06.1980⟧, wohnhaft ⟦address|Bamberger Straße 77⟧, ⟦address|97074 Würzburg⟧,
+
+mich in allen Bank- und Vermögensangelegenheiten gegenüber der Mainbank Würzburg zu vertreten. Die Vollmacht umfasst insbesondere die Verfügung über Konten, die Entgegennahme von Kontoauszügen und die Abgabe von Erklärungen. Sie gilt über den Tod hinaus und ist nicht übertragbar.
+
+Diese Vollmacht gilt bis auf Widerruf.
+
+Ort, Datum: Würzburg, den 11.02.2026
+
+________________________
+⟦name|Gertrud Hartmann⟧
+=====
+DATENEXPORT – KUNDENLISTE (CSV, Semikolon-getrennt)
+
+Kundennummer;Anrede;Name;Vorname;Straße;PLZ;Ort;Telefon;E-Mail
+1001;Herr;⟦name|Berg⟧;⟦name|Anna⟧;⟦address|Lindenweg 4⟧;⟦address|12345⟧;⟦address|Musterstadt⟧;⟦phone|0171 2345678⟧;⟦email|anna.berg@example.de⟧
+1002;Frau;⟦name|Schulz⟧;⟦name|Berta⟧;⟦address|Ahornweg 9⟧;⟦address|50667⟧;⟦address|Köln⟧;⟦phone|0221 44 33 22⟧;⟦email|berta.schulz@example.de⟧
+1003;—;⟦name|Yılmaz⟧;⟦name|Deniz⟧;⟦address|Marktplatz 2⟧;⟦address|68159⟧;⟦address|Mannheim⟧;⟦phone|0621 11 22 33⟧;⟦email|deniz.yilmaz@example.de⟧
+1004;Frau;⟦name|Schneider-Brandt⟧;⟦name|Hildegard⟧;⟦address|Eichenstraße 17⟧;⟦address|04105⟧;⟦address|Leipzig⟧;⟦phone|0152 99 88 776⟧;⟦email|h.schneider-brandt@example.de⟧
+1005;Herr;⟦name|Traoré⟧;⟦name|Ibrahim⟧;⟦address|Uferweg 30⟧;⟦address|20095⟧;⟦address|Hamburg⟧;⟦phone|040 55 66 778⟧;⟦email|i.traore@example.de⟧
+=====
+HANDWERKERAUFTRAG
+
+Auftraggeber: ⟦name|Marco Ferrari⟧, ⟦address|Gartenstraße 11⟧, ⟦address|70563 Stuttgart⟧
+Auftragnehmer: Elektro Lorenz GmbH, ⟦address|Talstraße 6⟧, ⟦address|70565 Stuttgart⟧
+
+Auftragsnummer: HW-2026-0034 · Datum: 05.02.2026
+
+Leistungsumfang:
+1. Erneuerung des Sicherungskastens (12 Einheiten) im Einfamilienhaus.
+2. Installation von 8 Unterputz-Steckdosen und 4 Deckenauslässen.
+3. Prüfung der Elektroinstallation nach DIN VDE 0100, Prüfprotokoll.
+
+Material: Fabrikate „Siemens" und „Busch-Jaeger" inklusive. Entsorgung des Altmaterials ist enthalten.
+
+Ausführungszeitraum: 16.02.2026 – 20.02.2026, jeweils 07:30–16:00 Uhr.
+
+Pauschalpreis: 3.890,00 € brutto inkl. 19 % USt. Zahlbar nach Abnahme, 30 Tage netto.
+
+Unterschrift Auftraggeber: ________________________
+Unterschrift Auftragnehmer: ________________________
+=====
+RECHNUNG NR. 2026-221
+
+Druckwerkstatt „Atelier Papier" GbR
+⟦address|Ritterstraße 3⟧
+⟦address|79098 Freiburg im Breisgau⟧
+
+Rechnungsempfänger:
+⟦name|Aminata Diallo⟧
+⟦address|Kronenweg 14⟧
+⟦address|79100 Freiburg im Breisgau⟧
+
+Datum: 17.02.2026 · Kundennummer: 0451
+
+| Pos. | Bezeichnung | Menge | Einzelpreis | Gesamt |
+|---|---|---|---|---|
+| 1 | Visitenkarten, 350 g, beidseitig | 500 St. | 0,06 € | 30,00 € |
+| 2 | Briefpapier A4, 90 g | 1.000 Bl. | 0,08 € | 80,00 € |
+| 3 | Digitaldruck Flyer A5 | 2.000 St. | 0,11 € | 220,00 € |
+
+Nettobetrag 330,00 € · USt. 19 % 62,70 € · Gesamtbetrag 392,70 €.
+
+Bitte zahlen Sie bis 19.03.2026 auf IBAN ⟦iban⟧ (BIC: GENODE61FR1). Bei Fragen: ⟦email|office@atelier-papier.de⟧.
+=====
+2. MAHNUNG
+
+An: ⟦name|Otto Schreiber⟧
+⟦address|Lindenallee 25⟧
+⟦address|91054 Erlangen⟧
+
+Erlangen, den 24.02.2026
+
+Sehr geehrter Herr ⟦name|Otto Schreiber⟧,
+
+trotz unserer Zahlungserinnerung vom 30.01.2026 steht die Rechnung Nr. RE-8830 über 658,00 € aus dem Onlineshop „Werkzeug Direkt" weiterhin offen. Der Zahlungstermin war der 15.02.2026.
+
+Wir fordern Sie hiermit letztmalig auf, den Betrag zuzüglich 2. Mahngebühr in Höhe von 6,00 € und Verzugszinsen bis spätestens 06.03.2026 zu überweisen. Bitte verwenden Sie als Verwendungszweck Ihre Kundennummer 11908.
+
+Sollte bis zu diesem Datum kein Zahlungseingang verzeichnet sein, werden wir das Mahnverfahren einleiten und die Forderung unserem Inkassodienst übergeben.
+
+Mit freundlichen Grüßen
+Werkzeug Direkt GmbH
+⟦phone|09131 88 77 66⟧
+⟦email|mahnung@werkzeug-direkt.de⟧
+=====
+ANGEBOT NR. 2026-17
+
+Für: ⟦name|Zofia Kowalska⟧, ⟦address|Finkenweg 2⟧, ⟦address|01445 Radebeul⟧
+Von: Garten- & Landschaftsbau „Grünwerk" GmbH
+⟦address|Meißner Straße 40⟧ · ⟦address|01445 Radebeul⟧
+
+Datum: 20.02.2026 · Gültig bis: 20.03.2026
+
+Positionen:
+1. Roden alter Rasenfläche, 210 m²: 1.050,00 €
+2. Bodenfräsen und Einebnen: 630,00 €
+3. Rollrasen verlegen inkl. Material, 210 m²: 2.520,00 €
+4. Kantensteine setzen, 42 lfm: 840,00 €
+
+Gesamt netto: 5.040,00 € · 19 % USt.: 957,60 € · Brutto: 5.997,60 €.
+
+Hinweis: Die Arbeiten können ab KW 14 ausgeführt werden. Rückfragen beantwortet ⟦name|Wilhelm Gärtner⟧ unter ⟦phone|0174 33 22 119⟧.
+=====
+INTERNE E-MAIL
+
+Von: ⟦email|l.weber@quadro-soft.de⟧
+An: ⟦email|support-team@quadro-soft.de⟧
+Cc: ⟦email|p.mueller@quadro-soft.de⟧
+Betreff: Rufnummer des Außendienstlers für Rückruf
+
+Liebe Kolleginnen und Kollegen,
+
+beim gestrigen Kundenfall „Spektrum Consult" hat der Außendienst Kollege ⟦name|Jonas Lindemann⟧ um einen Rückruf gebeten. Bitte meldet euch bei ihm bis heute Nachmittag. Seine Durchwahl lautet ⟦phone|0521 66 77 889⟧, alternativ erreicht ihr ihn mobil unter ⟦phone|0159 44 22 335⟧.
+
+Der Kunde wünscht außerdem eine Kopie des Serviceberichts an ⟦email|service@spektrum-consult.de⟧. Ich habe das Ticket bereits angelegt (Ticket 44721).
+
+Danke und Gruß
+⟦name|Lena Weber⟧
+Teamleitung Support
+=====
+CHATVERLAUF – FIRMEN-MESSENGER „Kanal 2 – Buchhaltung"
+
+05.02.2026
+
+13:12 ⟦name|Herr Krüger⟧: Guten Tag, ich hätte eine Frage zur Reisekostenerstattung von ⟦name|Nowak, Marek⟧.
+13:14 ⟦name|Frau Weidner⟧: Einen Moment, ich prüfe den Beleg.
+13:18 ⟦name|Frau Weidner⟧: Der Beleg vom 28.01. ist eingegangen, die Erstattung läuft mit der nächsten Lohnrunde am 28.02.
+13:20 ⟦name|Herr Krüger⟧: Danke. Und wie sieht es mit ⟦name|Petrow⟧ aus?
+13:24 ⟦name|Frau Weidner⟧: Da fehlt noch die Hotelrechnung. Ich habe ⟦name|Petrow⟧ heute Morgen angeschrieben.
+13:26 ⟦name|Herr Krüger⟧: Alles klar, dann warte ich ab.
+13:40 ⟦name|Frau Weidner⟧: Ergänzung: Die Tankbelege von ⟦name|Yusuf Demir⟧ sind vollständig, Erstattung ebenfalls am 28.02. 👍
+13:41 ⟦name|Herr Krüger⟧: Perfekt, danke für die schnelle Klärung.
+=====
+LIEFERSCHEIN NR. LS-1140
+
+Absender: Holzhandel „Nadel & Eiche" GmbH
+⟦address|Sägewerkstraße 8⟧
+⟦address|88212 Ravensburg⟧
+
+Lieferadresse: Baustelle „Seeblick", z. Hd. ⟦name|Karl-Heinz Brandt⟧
+⟦address|Seestraße 1⟧
+⟦address|88045 Friedrichshafen⟧
+
+Datum: 12.02.2026 · Auftrag: 55812
+
+| Pos. | Artikel | Menge |
+|---|---|---|
+| 1 | KVH Fichte 60x120, 4 m | 40 Stk. |
+| 2 | OSB-3 Platte 18 mm | 25 Stk. |
+| 3 | Dachlatte 30x50 | 120 Stk. |
+
+Warenannahme bestätigt durch: ________________________
+Name: ________________________
+=====
+ABMAHNUNG (Mietrecht)
+
+An den Mieter ⟦name|Ilhan Koç⟧
+⟦address|Feldstraße 12⟧
+⟦address|47441 Moers⟧
+
+Sehr geehrter Herr ⟦name|Ilhan Koç⟧,
+
+als Verwalterin des Objekts Feldstraße 12 mahne ich Sie hiermit ab. Trotz mehrfacher Hinweise kam es am 07.02.2026 und erneut am 10.02.2026 zu erheblichen Ruhestörungen (laute Musik, Trampeln) nach 22:00 Uhr. Dies stellt einen Verstoß gegen die Hausordnung und die mietvertraglichen Pflichten dar.
+
+Wir fordern Sie auf, die Nachtruhe von 22:00 bis 07:00 Uhr künftig einzuhalten. Sollten weitere Störungen auftreten, behalten wir uns eine ordentliche oder außerordentliche Kündigung des Mietverhältnisses vor.
+
+Mit freundlichen Grüßen
+⟦name|Sabine Adler⟧
+Hausverwaltung Adler & Partner
+⟦address|Bahnhofstraße 3⟧ · ⟦address|47441 Moers⟧
+⟦phone|02841 22 33 44⟧
+=====
+KRANKMELDUNG (Elternzeit / Kind krank)
+
+An: Personalbüro, Sternklar Handel GmbH
+Betreff: Freistellung nach § 45 SGB V
+
+Sehr geehrte Damen und Herren,
+
+ich, ⟦name|Elif Aksoy⟧, Personalnummer 8834, beantrage für den 13.02.2026 eine Freistellung zur Beaufsichtigung meines erkrankten Kindes. Die ärztliche Bescheinigung des Kinderarztes Dr. ⟦name|Murat Özcan⟧ reiche ich nach.
+
+Mein Kind ⟦name|Mila Aksoy⟧, geboren am ⟦birth_date|12.04.2019⟧, ist bei der Krankenkasse mitversichert. Sollte die Betreuung länger erforderlich sein, melde ich mich umgehend.
+
+Mit freundlichen Grüßen
+⟦name|Elif Aksoy⟧
+⟦phone|0170 88 44 221⟧
+=====
+PROTOKOLL – JÄHRLICHE MIETERVERSAMMLUNG
+
+Datum: 10.02.2026, 19:00 Uhr · Ort: Gemeinschaftsraum, ⟦address|Am Mühlenberg 14⟧, ⟦address|34246 Vellmar⟧
+Anwesend: ⟦name|Herr Falk⟧ (Hausverwaltung), ⟦name|Familie Schröder⟧, ⟦name|Familie Nguyen⟧, ⟦name|Herr Demir⟧, ⟦name|Frau Roth⟧, ⟦name|Herr Kwame Mensah⟧
+Protokoll: ⟦name|Frau Roth⟧
+
+TOP 1 – Bericht Hausverwaltung: Die Heizungsanlage wird im Sommer 2026 erneuert. Die Kosten werden über die Nebenkostenabrechnung 2027 umgelegt.
+
+TOP 2 – Treppenhausreinigung: ⟦name|Herr Demir⟧ moniert die Reinigungsintervalle. Beschluss: wöchentliche Reinigung, Prüfung nach drei Monaten.
+
+TOP 3 – Fahrradkeller: ⟦name|Familie Nguyen⟧ beantragt zusätzliche Fahrradständer. Wird an den Eigentümer weitergeleitet.
+
+Ende: 20:10 Uhr.
+=====
+SCHADENANZEIGE (KFZ)
+
+An: Alpen-Versicherung AG, Schadenservice
+Betreff: Haftpflichtschaden, Schadennummer 2601-3345
+
+Versicherungsnehmer: ⟦name|Chiara Moretti⟧, ⟦address|Blumenweg 6⟧, ⟦address|83734 Hausham⟧
+Fahrzeug: BMW 320i, amtliches Kennzeichen M-XY 4407
+Unfalltag: 03.02.2026, 16:20 Uhr
+
+Schadenshergang: Auf der B307 bei Schliersee geriet das Fahrzeug auf schneeglatter Fahrbahn ins Rutschen und beschädigte einen Leitpfosten sowie eine Schutzplanke. Es entstand kein Personenschaden.
+
+Geschädigte Einrichtung: Straßenbauamt Landkreis Miesbach. Schadenhöhe wird noch ermittelt.
+
+⟦name|Chiara Moretti⟧ ist erreichbar unter ⟦phone|0151 66 22 880⟧ oder ⟦email|c.moretti@example.de⟧.
+=====
+VOLLMACHT (Steuerliche Vertretung)
+
+Hiermit bevollmächtige ich,
+
+⟦name|Wolfram von Steinbach⟧, geboren am ⟦birth_date|23.01.1966⟧, ⟦address|Schlossallee 5⟧, ⟦address|34560 Fritzlar⟧,
+
+die Steuerberatungskanzlei „Contabilis" (⟦name|Annelie Roth⟧, Steuerberaterin), mich in allen steuerlichen Angelegenheiten gegenüber dem Finanzamt Fritzlar zu vertreten. Die Vollmacht umfasst die Abgabe und Entgegennahme von Erklärungen, die Einsicht in Akten sowie die Vertretung in Einspruchsverfahren.
+
+Die Vollmacht erlischt durch schriftlichen Widerruf.
+
+Fritzlar, den 14.02.2026
+
+________________________
+⟦name|Wolfram von Steinbach⟧
+=====
+DATENEXPORT – MITARBEITERSTAMMDATEN (CSV, Semikolon-getrennt)
+
+Personalnr;Name;Vorname;Geburtsdatum;Straße;PLZ;Ort;IBAN;SteuerID
+4711;⟦name|Wagner⟧;⟦name|Heinrich⟧;⟦birth_date|14.09.1972⟧;⟦address|Lerchenweg 6⟧;⟦address|26123⟧;⟦address|Oldenburg⟧;⟦iban⟧;⟦tax_id⟧
+4712;⟦name|Demir⟧;⟦name|Aylin⟧;⟦birth_date|30.05.1985⟧;⟦address|Weinbergstraße 15⟧;⟦address|56329⟧;⟦address|St. Goar⟧;⟦iban⟧;⟦tax_id⟧
+4713;⟦name|Nguyen⟧;⟦name|Lan Thi⟧;⟦birth_date|02.11.1997⟧;⟦address|Karl-Liebknecht-Straße 18⟧;⟦address|04107⟧;⟦address|Leipzig⟧;⟦iban⟧;⟦tax_id⟧
+4714;⟦name|Romano⟧;⟦name|Giulia⟧;⟦birth_date|19.08.1991⟧;⟦address|Tulpenweg 2⟧;⟦address|80333⟧;⟦address|München⟧;⟦iban⟧;⟦tax_id⟧
+4715;⟦name|Mensah⟧;⟦name|Kwame⟧;⟦birth_date|07.02.1979⟧;⟦address|Heidestraße 44⟧;⟦address|50931⟧;⟦address|Köln⟧;⟦iban⟧;⟦tax_id⟧
+=====
+HANDWERKERAUFTRAG (Malerarbeiten)
+
+Auftraggeber: ⟦name|Berta Schulz⟧, ⟦address|Ahornweg 9⟧, ⟦address|50667 Köln⟧
+Auftragnehmer: Malerfachbetrieb „Farbe & Form" Inh. ⟦name|Antonio Bianchi⟧
+
+Auftrag vom 08.02.2026
+
+Leistungen:
+1. Abkleben und Abdecken der Räume (Flur, Wohnzimmer, 2 Schlafzimmer).
+2. Wände tapezieren mit Raufaser, 210 m², inkl. Material.
+3. Anstrich weiß, zweimal, 210 m².
+
+Gesamtpreis: 2.940,00 € brutto. Anzahlung 30 % bei Auftragsvergabe, Rest nach Abnahme.
+
+Ausführungszeitraum: 23.02.2026 – 27.02.2026, Beginn jeweils 08:00 Uhr.
+
+Unterschrift Auftraggeberin: ________________________
+Unterschrift Auftragnehmer: ________________________
+=====
+KÜNDIGUNG (Mietverhältnis durch Mieter)
+
+An die Hausverwaltung Adler & Partner, z. Hd. ⟦name|Sabine Adler⟧
+⟦address|Bahnhofstraße 3⟧ · ⟦address|47441 Moers⟧
+
+Betreff: Kündigung des Mietverhältnisses, ⟦address|Feldstraße 12⟧, ⟦address|47441 Moers⟧
+
+Sehr geehrte Frau ⟦name|Adler⟧,
+
+hiermit kündige ich, ⟦name|Ilhan Koç⟧, das Mietverhältnis für die Wohnung Feldstraße 12, Moers, fristgerecht zum 30.04.2026.
+
+Ich bitte um Bestätigung der Kündigung sowie um einen Termin zur Wohnungsübergabe und Rückgabe der Kaution. Für Rückfragen erreichen Sie mich unter ⟦phone|0157 22 99 441⟧ oder ⟦email|ilhan.koc@example.de⟧.
+
+Mit freundlichen Grüßen
+⟦name|Ilhan Koç⟧
+=====
+INTERNE E-MAIL
+
+Von: ⟦email|personal@sternklar-handel.de⟧
+An: alle-mitarbeiter@sternklar-handel.de
+Betreff: Neue Kollegin im Vertrieb – Vorstellung
+
+Liebe Kolleginnen und Kollegen,
+
+zum 01.03.2026 verstärkt ⟦name|Yasmine Haddad⟧ unser Vertriebsteam am Standort Kassel. Sie übernimmt die Region Nordhessen und ist ab dann unter ⟦email|y.haddad@sternklar-handel.de⟧ sowie unter der Durchwahl ⟦phone|0561 22 44 66⟧ erreichbar.
+
+Ein kurzes Willkommen in ihrer ersten Woche wäre schön. Wer sie vorab erreichen möchte, kann dies über das Firmenverzeichnis tun.
+
+Herzliche Grüße
+Personalabteilung
+⟦name|Gundula Franke⟧
+=====
+BEWERBUNG (Initiativ)
+
+Sehr geehrte Damen und Herren,
+
+mit dieser Initiativbewerbung möchte ich mich bei Ihnen als Zerspanungsmechaniker vorstellen. Mein Name ist ⟦name|Yusuf Demir⟧, ich bin 31 Jahre alt und habe meine Ausbildung bei einem Automobilzulieferer in Stuttgart absolviert. Zuletzt war ich fünf Jahre bei einem Werkzeugbauer in Esslingen beschäftigt und dort für die Programmierung und Bedienung von CNC-Fräsen verantwortlich.
+
+Ich arbeite sorgfältig, teamorientiert und bin bereit für Schichtarbeit. Über die Einladung zu einem Vorstellungsgespräch freue ich mich sehr.
+
+Mit freundlichen Grüßen
+⟦name|Yusuf Demir⟧
+⟦address|Bachstraße 23⟧
+⟦address|73728 Esslingen am Neckar⟧
+⟦phone|0157 11 88 332⟧
+⟦email|yusuf.demir@example.de⟧
+=====
+REISEKOSTENABRECHNUNG (Bahn)
+
+Mitarbeiter: ⟦name|Hakan Çelik⟧ · Personalnummer: 7790 · Monat: Februar 2026
+
+| Datum | Strecke | Verkehrsmittel | Kosten |
+|---|---|---|---|
+| 04.02. | Berlin – Hamburg (ICE) | Bahn | 129,90 € |
+| 05.02. | Hamburg – Berlin (ICE) | Bahn | 129,90 € |
+| 04.02. | Taxi Hbf – Kunde | Taxi | 18,50 € |
+
+Übernachtung (04.02.): 128,00 €
+Verpflegungspauschale: 28,00 €
+
+Gesamt: 434,30 €
+
+Erstattung auf IBAN ⟦iban⟧.
+
+Unterschrift: ________________________
+Genehmigt: ⟦name|Margarethe Kern⟧, 12.02.2026
+=====
+KUNDENBESCHWERDE (Telefonisch)
+
+Aufgenommen am 14.02.2026, 11:05 Uhr durch ⟦name|Rania Khalil⟧, Kundenservice
+
+Anrufer: ⟦name|Ursula Brandt⟧, ⟦address|Buchenweg 8⟧, ⟦address|65510 Idstein⟧
+Kundennummer: 66012
+
+Sachverhalt: Frau ⟦name|Ursula Brandt⟧ beschwert sich über die Lieferverzögerung ihres Esstisches (Bestellnummer BE-77812). Der zugesagte Liefertermin 12.02.2026 wurde nicht eingehalten, eine Benachrichtigung erfolgte nicht.
+
+Vereinbarung: Rückruf durch die Spedition bis 15.02.2026, 12:00 Uhr. Gutschrift der Lieferpauschale in Höhe von 39,90 € wurde veranlasst.
+
+Weiterleitung an: Speditionsdisposition, z. Hd. ⟦name|Matteo Rossi⟧.
+=====
+PROTOKOLL – SCHULUNG „Datenschutz"
+
+Datum: 17.02.2026, 13:00–15:00 Uhr · Referentin: ⟦name|Dr. Ilka Schröder⟧
+Teilnehmende: ⟦name|Piotr Kowalski⟧, ⟦name|Aisha Toure⟧, ⟦name|Hermann Vogt⟧, ⟦name|Natalia Orlowa⟧, ⟦name|Finn Petersen⟧, ⟦name|Zeynep Aydın⟧
+Protokoll: ⟦name|Finn Petersen⟧
+
+Inhalt: Grundlagen der DSGVO, Umgang mit personenbezogenen Daten, Meldewege bei Datenpannen. ⟦name|Dr. Ilka Schröder⟧ erläuterte anhand von Praxisbeispielen die Pflichten bei Auskunftsersuchen.
+
+Fragen: ⟦name|Aisha Toure⟧ fragte nach der Speicherdauer von Bewerbungsunterlagen. Antwort: sechs Monate nach Abschluss des Verfahrens.
+
+Abschluss: Alle Teilnehmenden erhalten ein Zertifikat. Ende: 15:00 Uhr.
+=====
+RECHNUNG NR. 26-0558
+
+Atelier Kunterbunt, Inh. ⟦name|Kofi Mensah⟧
+⟦address|Brunnenstraße 19⟧
+⟦address|60311 Frankfurt am Main⟧
+
+An: ⟦name|Marlene Reuter⟧, ⟦address|Gustav-Adolf-Straße 7⟧, ⟦address|60433 Frankfurt am Main⟧
+
+Datum: 15.02.2026 · Leistungszeitraum: Februar 2026
+
+Beschreibung: Fotografie und Bildbearbeitung – Produktserie „Frühjahrskollektion"
+Honorar Fotografie: 640,00 €
+Bildbearbeitung (22 Bilder): 440,00 €
+Nutzungsrecht Print, 12 Monate: 180,00 €
+
+Zwischensumme 1.260,00 € · 7 % USt. 88,20 € · Gesamt 1.348,20 €.
+
+Zahlbar bis 17.03.2026 auf IBAN ⟦iban⟧ · BIC: GENODE51FRA.
+=====
+ABMAHNUNG (Arbeitsrecht – Verstoß gegen Sicherheitsvorschriften)
+
+Personalabteilung – vertraulich
+
+An: ⟦name|Tatjana Morosowa⟧, Personalnummer 9912
+
+Sehr geehrte Frau ⟦name|Morosowa⟧,
+
+am 09.02.2026 haben Sie im Hochregallager die vorgeschriebene Schutzausrüstung (Sicherheitsschuhe, Helm) nicht getragen. Dies wurde vom Sicherheitsbeauftragten ⟦name|Veit Langer⟧ dokumentiert. Der Verstoß ist bereits der zweite innerhalb von sechs Wochen.
+
+Wir weisen Sie nachdrücklich auf die Einhaltung der Arbeitsschutzvorschriften hin. Eine Wiederholung führt zu weiteren arbeitsrechtlichen Maßnahmen.
+
+Diese Abmahnung wird Teil der Personalakte.
+
+Bielefeld, den 13.02.2026
+
+________________________
+Werkleitung, Ostwestfalen-Lager GmbH
+⟦address|Industrieweg 15⟧ · ⟦address|33659 Bielefeld⟧
+=====
+CHATVERLAUF – FIRMEN-MESSENGER „Projekt Pegasus"
+
+12.02.2026
+
+09:10 ⟦name|Alessandro⟧: Morgen! Das Kick-off ist für heute 10 Uhr angesetzt, Raum 3. Etage.
+09:12 ⟦name|Fatma⟧: Bin dabei. Schickst du den Link zum Aufgabenboard nochmal?
+09:14 ⟦name|Alessandro⟧: Kommt gleich per Mail an dich.
+09:31 ⟦name|Trang⟧: Kurze Info, ich bin ab 14 Uhr im Kundentermin bei der Firma „Terra Bau".
+09:33 ⟦name|Alessandro⟧: Notiert. Dann verschieben wir die Abstimmung auf morgen 09:30.
+09:40 ⟦name|Fatma⟧: Passt für mich.
+09:52 ⟦name|Sergej⟧: Ich habe die Unterlagen fürs Kick-off fertig und lege sie in den gemeinsamen Ordner.
+09:55 ⟦name|Alessandro⟧: Top, danke @⟦name|Sergej⟧. Bis gleich.
+=====
+VOLLMACHT (Vertretung vor Gericht)
+
+Ich, ⟦name|Margarethe Kern⟧, geboren am ⟦birth_date|05.10.1958⟧, wohnhaft ⟦address|Am Anger 12⟧, ⟦address|07607 Eisenberg⟧,
+
+erteile hiermit Rechtsanwältin ⟦name|Dr. Mechthild Lorenz⟧, Kanzlei Lorenz & Collegen, ⟦address|Markt 5⟧, ⟦address|07545 Gera⟧, Vollmacht, mich in der Zivilsache gegen die Firma „Baustoffhandel Thüringen GmbH" vor Gericht zu vertreten. Die Vollmacht umfasst sämtliche zur zweckentsprechenden Rechtsverfolgung erforderlichen Erklärungen und Rechtshandlungen.
+
+Eisenberg, den 16.02.2026
+
+________________________
+⟦name|Margarethe Kern⟧

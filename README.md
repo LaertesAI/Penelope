@@ -258,7 +258,9 @@ it. A `$name(...)` call runs an agent; the same form in `/orchestrate` or on the
 
 `/search WORDS` runs the ranked search, `/research QUESTION` runs the cited research report, and `penelope research
 QUESTION` does the same on the command line. The design, engine table and limits are in
-[`docs/SEARCH.md`](docs/SEARCH.md).
+[`docs/SEARCH.md`](docs/SEARCH.md). `/research deep QUESTION` and `penelope research --deep QUESTION` run the multi-round
+method with a plan, parallel researchers, a gap loop, checked citations and an assumptions list; see
+[`docs/DEEP-RESEARCH.md`](docs/DEEP-RESEARCH.md).
 
 The side panel shows the woven square. Its loose thread at the lower right takes the colour of the mood:
 

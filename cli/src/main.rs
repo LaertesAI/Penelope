@@ -49,9 +49,12 @@ mod platform;
 mod plugins;
 #[allow(dead_code)]
 mod proof;
+mod pii;
 mod privacy;
+mod privacy_bench;
 mod providers;
 mod research;
+mod deepresearch;
 mod route;
 mod scout;
 mod scrape;
@@ -147,6 +150,8 @@ penelope search fanout on|off  ask every configured engine at once and merge the
 penelope search health [--probe]
                               the last call of each engine
 penelope research QUESTION    search, read the best pages and print a cited report
+penelope research --deep [--max-rounds N] [--budget EUR] QUESTION
+                              deep research: plan, parallel researchers, gap loop, cited report, re-check, assumptions
 penelope scout TASK           let the weaker model look something up with its own tool calls
 penelope run [--ask QUESTION] COMMAND
                               run a command, long output condensed by the weaker model
@@ -179,6 +184,11 @@ penelope tool list            the tools Penelope wrote for this project
 penelope tool call NAME JSON  call one tool through the same gate a model uses
 penelope route                the roles, their tools and their models
 penelope mode [NAME]          auto, manual, safe, review, privacy or power
+penelope privacy factory --out DIR [--seed N] [--count N]
+                              write synthetic German business documents with known personal data
+penelope privacy bench [--seed N] [--count N] [--file MARKED.txt] [--view raw|read|grep|crlf] [--model [--cloud]] [--misses N] [--json]
+                              recall and precision of the privacy filter per kind of personal data
+penelope privacy scan FILE... masks the privacy filter would set in any file, per 1,000 lines
 penelope agents               the agents written with $name(...)
 penelope skills               the skills Penelope wrote for this project
 penelope run-agent NAME --goal TEXT
@@ -449,6 +459,10 @@ fn main() {
                 }
             }
         }
+        "privacy" => match privacy_bench::cli(&ctx, &args[1..]) {
+            Ok(text) => print!("{}", text),
+            Err(e) => { loom::warn(&e); std::process::exit(2); }
+        },
         "factory" => match factories::cli(&ctx, &args[1..]) {
             Ok(text) => print!("{}", text),
             Err(e) => { loom::warn(&e); std::process::exit(2); }
@@ -791,6 +805,9 @@ fn main() {
                 Ok((hits, engines)) => println!("{}", search::format_hits(&hits, &q, &engines)),
                 Err(e) => { loom::warn(&e); std::process::exit(2); }
             }
+        }
+        "research" if args.iter().any(|a| a == "--deep") => {
+            println!("{}", deepresearch::run(&ctx, &deepresearch::Params { verbose: true, ..deepresearch::parse_args(&args[1..]) }));
         }
         "research" => {
             let mut depth = "standard".to_string();
