@@ -150,6 +150,7 @@ fn call_raw_inner(ctx: &Ctx, name: &str, a: &Value) -> Result<String, String> {
             _ => Ok(tools::mcp_servers(ctx, a["probe"].as_bool().unwrap_or(false))),
         },
         "mcp_call" => Ok(tools::mcp_call(ctx, &s("server"), &s("tool"), &a["arguments"])),
+        "tool_search" => Ok(tools::guard(ctx, &crate::toolsearch::tool(ctx, a))),
         "session_search" => Ok(tools::session_search(ctx, &s("query"), n("limit"))),
         "http_request" => Ok(tools::http_request(ctx, a)),
         "json_query" => Ok(tools::json_query(ctx, &s("path"), &s("pointer"))),

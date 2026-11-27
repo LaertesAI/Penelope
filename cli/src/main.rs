@@ -56,6 +56,7 @@ mod sessions;
 mod skills;
 mod spec;
 mod startup;
+mod toolsearch;
 mod tools;
 mod tui;
 mod update;

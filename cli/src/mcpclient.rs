@@ -288,6 +288,9 @@ impl Drop for Server {
 /// Runs one operation on the process of a server, starting it on demand. A transport error drops the process so that
 /// the next call starts a clean one; a JSON-RPC error leaves it running.
 fn with_server<T>(ctx: &Ctx, name: &str, server: &Value, f: impl FnOnce(&mut Server) -> Result<T, String>) -> Result<T, String> {
+    if server["unvetted"].as_bool().unwrap_or(false) {
+        return Err(format!("NOT started. MCP server {} came from tool search and its package was not scanned. /mcp allow {} is the yes that lets it run.", name, name));
+    }
     let signature = signature_of(server);
     let cell = cell_for(ctx, name);
     let mut slot = cell.lock().unwrap_or_else(|e| e.into_inner());
@@ -327,6 +330,30 @@ pub fn probe(ctx: &Ctx, server: &str) -> Result<Vec<ToolInfo>, String> {
         description: t["description"].as_str().unwrap_or("").to_string(),
         input_schema: if t["inputSchema"].is_null() { t["input_schema"].clone() } else { t["inputSchema"].clone() },
     }).collect())
+}
+
+/// The tools that running servers already listed in this session, as (server, tool). No server is started and no
+/// request is sent; a server that is busy or not started adds nothing. Tool search reads this.
+pub fn cached_tools_all(ctx: &Ctx) -> Vec<(String, ToolInfo)> {
+    let prefix = format!("{}|", ctx.root.display());
+    let cells: Vec<(String, Cell)> = {
+        let map = pool().lock().unwrap_or_else(|e| e.into_inner());
+        map.iter().filter_map(|(k, c)| k.strip_prefix(&prefix).map(|n| (n.to_string(), c.clone()))).collect()
+    };
+    let mut out = Vec::new();
+    for (name, cell) in cells {
+        if !crate::agents::mcp_allowed(&name) { continue; }
+        let Ok(slot) = cell.try_lock() else { continue };
+        let Some(server) = slot.as_ref().filter(|s| s.alive) else { continue };
+        for t in server.tools.iter().flatten() {
+            out.push((name.clone(), ToolInfo {
+                name: t["name"].as_str().unwrap_or("").to_string(),
+                description: t["description"].as_str().unwrap_or("").to_string(),
+                input_schema: if t["inputSchema"].is_null() { t["input_schema"].clone() } else { t["inputSchema"].clone() },
+            }));
+        }
+    }
+    out
 }
 
 /// The tool list this process already holds for a server, or None when the server is not running or has not listed its
