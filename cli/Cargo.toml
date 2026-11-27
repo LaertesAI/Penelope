@@ -17,7 +17,7 @@ regex = "1"
 ureq = { version = "2", features = ["json"] }
 zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 rhai = { version = "1", features = ["serde"] }
-jsonschema = "0.26"
+jsonschema = { version = "0.26", default-features = false }
 
 [profile.release]
 opt-level = 2

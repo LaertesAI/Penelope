@@ -45,18 +45,18 @@ Die Entscheidung bleibt. Die Binärdatei liegt unter der Marke von 20 MiB, der S
 
 | Funktion | Verhalten |
 |---|---|
-| `agent(prompt, opts)` | Startet einen Teil. `opts`: `model` (Rolle oder Name), `effort`, `schema` (JSON-Schema als Map oder JSON-Text, Antwort geprüft und als Map zurück), `label`, `phase`, `worktree` (eigener Git-Worktree, bleibt nach dem Lauf stehen und steht mit Pfad und Zweig im Journal). |
+| `agent(prompt, opts)` | Startet einen Teil. `opts`: `model` (Rolle oder Name), `effort` (ersetzt den Effort der Rolle, auch ohne `model`; ohne `effort` bleibt der Effort der Rolle), `schema` (JSON-Schema als Map oder JSON-Text, Antwort geprüft und als Map zurück; ein `$ref` auf eine Datei oder URL wird abgelehnt), `label`, `phase`, `worktree` (eigener Git-Worktree, bleibt nach dem Lauf stehen und steht mit Pfad und Zweig im Journal; ein fortgesetzter Lauf arbeitet im selben Worktree weiter). |
 | `parallel([...])` | Startet alle Einträge und wartet auf alle. Jeder Eintrag ist eine Map mit `prompt` und `opts`, `schema` wird je Eintrag geprüft. Höchstens `max_parallel` Einträge. Kein `worktree` innerhalb von `parallel`. |
 | `pipeline(items, [stage1, stage2, ...])` | Schickt jedes Element durch die Stufen. Stufe 2 eines Elements startet, sobald Stufe 1 fertig ist, ohne Sperre für andere Elemente. Jede Stufe hat einen Journal-Schlüssel, wird sofort journalisiert und nach einem Absturz aus dem Journal bedient. Das Schema einer Stufe wird geprüft, bevor ihr Ergebnis an die nächste Stufe geht. |
 | `phase(title)` | Setzt die Phase im Journal und in der Baumansicht. |
 | `log(text)` | Schreibt eine Zeile ins Journal. |
 | `args` | Die Argumente des Laufs als Map. |
-| `budget` | Die Grenze für gerechnete Kosten und Tokens. Wird sie überschritten, stoppt der Lauf vor dem nächsten Agenten. |
-| `workflow(name, args)` | Ruft einen gespeicherten Workflow auf, eine Ebene tief. Das Restbudget geht mit, die Kosten des inneren Laufs zählen zum äußeren. |
+| `budget` | Die Grenze für gerechnete Kosten und Tokens. Wird sie überschritten, stoppt der Lauf vor dem nächsten Agenten. Die Euro-Grenze und `session_budget_eur` stoppen auch einen laufenden Agenten in dem Aufruf, der sie überschreitet. |
+| `workflow(name, args)` | Ruft einen gespeicherten Workflow aus `.penelope/workflows` auf, eine Ebene tief. Der Name besteht aus Buchstaben, Ziffern, `-` und `_`; ein Pfad wie `/tmp/x` oder `../x` wird abgelehnt. Das Restbudget geht mit, die Kosten des inneren Laufs zählen zum äußeren. |
 | `loop_until(condition, step, {max_iterations})` | Wiederholt den Schritt, bis die Bedingung wahr ist oder die maximale Zahl an Runden erreicht ist. Jede Runde steht im Journal mit Grund. |
 | `ask(questions)` | Stellt dem Nutzer mehrere Fragen. Feste Antworten, Mehrfachauswahl, freie Antwort. Dieselbe Logik wie das Rückfragefenster. |
 
-Der Journal-Schlüssel ist FNV-1a über Prompt und Optionen. `agent` und `parallel` tragen ihn je Aufruf ein, `pipeline` je Stufe. Ein abgeschlossener Aufruf mit gleichem Prompt und gleichen Optionen kommt aus dem Journal. Der Stop-Marker `.penelope/workflows/<id>/stop` wird vor jedem Agenten, vor jedem Parallelblock und vor jeder Loop-Runde geprüft; `/workflow stop ID` wirkt damit auch aus einem zweiten Prozess.
+Die Lauf-ID ist Name, Datum und Uhrzeit auf die Millisekunde; zwei Läufe in derselben Millisekunde bekommen `-2`. Der Journal-Schlüssel ist FNV-1a über Prompt und Optionen, in `loop_until` zusätzlich über die Runde. `agent` und `parallel` tragen ihn je Aufruf ein, `pipeline` je Stufe. Ein abgeschlossener Aufruf mit gleichem Prompt und gleichen Optionen kommt aus dem Journal. Der Stop-Marker `.penelope/workflows/<id>/stop` wird vor jedem Agenten, vor jedem Parallelblock und vor jeder Loop-Runde geprüft; `/workflow stop ID` wirkt damit auch aus einem zweiten Prozess.
 
 ## C2b: Grenzen aus der Klärung
 
@@ -65,8 +65,8 @@ Ein Cluster liest `clusters/ID/spec.json` vor dem ersten Agenten. Nur ein bestä
 | Spec-Feld | Profilfeld | Beispiel |
 |---|---|---|
 | `budget` | `budget_eur` | `"5 EUR"`, `"1,5 EUR"`, `"20 €"` |
-| `max_iterations` | `max_steps` (1 bis 30) | `"10 iterations"` |
-| `abort` | `stuck_after` (1 bis 100) | `"Stuck for 3 reports"`, `"first failed check"` wird 1, `"never"` wird 100 |
+| `max_iterations` | `retries` (Runden minus 1, 0 bis 29); `max_steps` je Teil bleibt | `"10 iterations"` wird 9 Wiederholungen |
+| `abort` | `stuck_after` (1 bis 100), bei `"first failed check"` `retries` 0 | `"Stuck for 3 reports"`, `"first failed check"` endet beim ersten FAIL des Prüfers, `"never"` wird 100 |
 
 Ein Token-Budget ändert `budget_eur` nicht. Ein Entwurf ohne `confirmed` ändert nichts. Die Funktion ist `apply_spec_limits` in `clusters.rs`, mit Test.
 
@@ -94,7 +94,7 @@ Grenzen: `worktree` gilt nur für `agent`, nicht für Einträge in `parallel`. E
 
 ## C5: Tests
 
-- Sandbox: kein Dateizugriff, kein Netz, kein Prozess aus dem Skript.
+- Sandbox: kein Dateizugriff, kein Netz, kein Prozess aus dem Skript. `import` lädt kein Modul, `print` und `debug` schreiben ins Journal, nicht auf den Bildschirm.
 - Schema: eine Antwort, die nicht zum Schema passt, wird abgelehnt.
 - `parallel` und `pipeline` mit einem falschen Modell.
 - Budgetgrenze: der Lauf stoppt vor dem nächsten Agenten.

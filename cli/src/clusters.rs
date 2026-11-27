@@ -2270,33 +2270,46 @@ pub fn run_cluster(ctx: &Ctx, id: &str) -> Result<String, String> {
     run_cluster_inner(ctx, id, None)
 }
 
-/// One model call with the tool loop, for a workflow part. The part has no cluster state on disk.
-/// `run_once` with a cancel flag. The workflow passes its own flag so `/workflow stop` can end a running agent.
+/// The role and the model setting of one workflow agent. A role name or `main`/`weak` resolves to its setting; a
+/// bare model name keeps the main provider and replaces its model. An effort the script names replaces the effort of
+/// every one of these, so `agent(p, #{effort: "low"})` runs the role's model at low effort. An empty effort keeps it.
+pub(crate) fn workflow_setting(ctx: &Ctx, model: &Value, effort: &str) -> Result<(String, Value), String> {
+    let name = model.as_str().unwrap_or("").trim().to_string();
+    let (role, mut setting) = if model.is_object() {
+        ("worker".to_string(), model.clone())
+    } else {
+        match name.as_str() {
+            "" => ("worker".to_string(), resolve_model(ctx, "workflow agent", &Value::Null, "worker")?),
+            "main" | "weak" => ("worker".to_string(), resolve_model(ctx, "workflow agent", &Value::String(name.clone()), "worker")?),
+            role if crate::route::role_names().iter().any(|r| *r == role) =>
+                (role.to_string(), resolve_model(ctx, "workflow agent", &Value::Null, role)?),
+            _ => {
+                let mut setting = ctx.cfg["main"].clone();
+                if !setting.is_object() { setting = json!({}); }
+                setting["model"] = json!(name);
+                ("worker".to_string(), setting)
+            }
+        }
+    };
+    if !effort.trim().is_empty() && setting.is_object() {
+        setting["effort"] = json!(effort.trim());
+    }
+    Ok((role, setting))
+}
+
+/// One model call with the tool loop, for a workflow part. The part has no cluster state on disk. The workflow passes
+/// its own cancel flag, so `/workflow stop` ends a running agent, and its euro baseline: `budget_eur` of the workflow
+/// and `session_budget_eur` both stop the tool loop inside the call that crosses them.
 pub(crate) fn run_once_cancel(
     ctx: &Ctx,
     prompt: &str,
     model: Value,
     effort: &str,
     cancel: &AtomicBool,
+    budget_eur: f64,
+    eur_before: f64,
 ) -> Result<String, String> {
-    let name = model.as_str().unwrap_or("").to_string();
-    let (role, model) = match name.as_str() {
-        "main" | "weak" => ("worker".to_string(), Value::String(name)),
-        "worker" | "judge" | "scout" | "router" => (name, Value::Null),
-        _ if model.is_string() => {
-            // A bare model name keeps the main provider and replaces its model and effort. This makes
-            // `agent(..., #{model: "sonnet", effort: "low"})` a real setting instead of an unknown role.
-            let mut setting = ctx.cfg["main"].clone();
-            if setting.is_object() {
-                setting["model"] = json!(name);
-                setting["effort"] = json!(effort);
-                ("worker".to_string(), setting)
-            } else {
-                ("worker".to_string(), json!({"model": name, "effort": effort}))
-            }
-        }
-        _ => ("worker".to_string(), json!({"model": model, "effort": effort})),
-    };
+    let (role, model) = workflow_setting(ctx, &model, effort)?;
     let part = Part { name: "workflow".to_string(), role, slot: "workflow".to_string(),
                       task: String::new(), task_type: String::new(), model, mcp: Vec::new(), depends_on: Vec::new(), quorum: 0 };
     let c = Cluster { id: "workflow".to_string(), name: "workflow".to_string(), profile: "workflow".to_string(),
@@ -2307,14 +2320,17 @@ pub(crate) fn run_once_cancel(
                       quorum_agreed: 0, quorum_escalated: 0, shadow: false, shadow_of: String::new(),
                       match_rate: None, parts: Vec::new() };
     let system = "You are a worker part of a Penelope workflow. Do the task and report the evidence.";
-    let limits = Limits { cluster: 0.0, cluster_before: 0.0, session: 0.0, session_before: 0.0 };
+    let limits = Limits { cluster: budget_eur.max(0.0), cluster_before: eur_before,
+                          session: crate::cost::session_budget(ctx), session_before: eur_before };
+    if let Some(stop) = limits.over(ctx) {
+        return Err(stop.replacen("BUDGET: the cluster", "BUDGET: the workflow", 1));
+    }
     let watch = Arc::new(Mutex::new(Watch::new(usize::MAX)));
-    let done = run_model(ctx, &c, &part, system, prompt, 20, cancel, limits, &watch)?;
+    let done = run_model(ctx, &c, &part, system, prompt, 20, cancel, limits, &watch)
+        .map_err(|e| e.replacen("BUDGET: the cluster", "BUDGET: the workflow", 1))?;
     Ok(done.text)
 }
 
-/// `run_cluster` with the euro baseline of the whole orchestration. Every cluster of one session therefore shares one
-/// `session_budget_eur`, beside its own `budget_eur`.
 /// The limits the person agreed in the clarification dialog. `clusters/ID/spec.json` is written before the run and
 /// carries the answers as text, for example `"budget": "5 EUR"`, `"max_iterations": "10 iterations"` and
 /// `"abort": "Stuck for 3 reports"`. The profile is the default; the agreed spec wins. A spec without `confirmed`
@@ -2330,13 +2346,18 @@ fn apply_spec_limits(ctx: &Ctx, id: &str, profile: &mut Profile) {
             profile.budget_eur = eur;
         }
     }
-    if let Some(steps) = spec["max_iterations"].as_str().and_then(first_number) {
-        profile.max_steps = steps.clamp(1, 30);
+    // "3 iterations" are 3 rounds of workers and validator: the first round and 2 retries. The tool steps per part
+    // stay as the profile sets them.
+    if let Some(rounds) = spec["max_iterations"].as_str().and_then(first_number) {
+        profile.retries = rounds.clamp(1, 30) - 1;
     }
     if let Some(abort) = spec["abort"].as_str() {
         let lower = abort.to_ascii_lowercase();
         if lower.contains("first failed") || lower.contains("first failing") {
-            profile.stuck_after = 1;
+            // The first FAIL of the validator ends the cluster: no retry round. The validator must run, so the
+            // one-model shortcut is off. The zombie watch keeps its own count.
+            profile.retries = 0;
+            profile.single_model = false;
         } else if lower.contains("never") {
             profile.stuck_after = 100;
         } else if let Some(n) = first_number(abort) {
@@ -2399,6 +2420,8 @@ fn parse_eur(text: &str) -> Option<f64> {
     number.parse::<f64>().ok().filter(|n| *n > 0.0)
 }
 
+/// `run_cluster` with the euro baseline of the whole orchestration. Every cluster of one session therefore shares one
+/// `session_budget_eur`, beside its own `budget_eur`.
 fn run_cluster_inner(ctx: &Ctx, id: &str, session_before: Option<f64>) -> Result<String, String> {
     let mut c = load(ctx, id)?;
     if c.state == "killed" { return Ok(format!("cluster {} was already killed", id)); }
@@ -3695,8 +3718,9 @@ mod tests {
         let path = cluster_dir(&ctx, &c.id).join("spec.json");
         assert!(path.is_file(), "the spec must exist before the run: {}", said);
         let mut p = profile(&ctx, "solo").unwrap();
+        let steps = p.max_steps;
         apply_spec_limits(&ctx, &c.id, &mut p);
-        assert_eq!((p.budget_eur, p.max_steps, p.stuck_after), (0.000001, 1, 2));
+        assert_eq!((p.budget_eur, p.retries, p.max_steps, p.stuck_after), (0.000001, 0, steps, 2));
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -3713,7 +3737,22 @@ mod tests {
         }).to_string()).unwrap();
         let mut got = p.clone();
         apply_spec_limits(&ctx, &c.id, &mut got);
-        assert_eq!((got.budget_eur, got.max_steps, got.stuck_after), (1.5, 10, 3));
+        // 10 iterations are 10 rounds (9 retries). The tool steps per part keep the profile value.
+        assert_eq!((got.budget_eur, got.retries, got.max_steps, got.stuck_after), (1.5, 9, p.max_steps, 3));
+        // "First failed check" ends at the first FAIL of the validator. It does not turn the zombie watch to 1, which
+        // would kill the cluster at its first tool call.
+        fs::write(d.join("spec.json"), json!({
+            "confirmed": true, "max_iterations": "10 iterations", "abort": "First failed check"
+        }).to_string()).unwrap();
+        let mut first_fail = p.clone();
+        first_fail.single_model = true;
+        apply_spec_limits(&ctx, &c.id, &mut first_fail);
+        assert_eq!((first_fail.retries, first_fail.stuck_after, first_fail.single_model), (0, p.stuck_after, false));
+        let mut watch = Watch::new(first_fail.stuck_after);
+        let part = Part { name: "one".to_string(), role: "worker".to_string(), slot: "one".to_string(), task: String::new(),
+                          task_type: String::new(), model: Value::Null, mcp: Vec::new(), depends_on: Vec::new(), quorum: 0 };
+        assert!(watch.note_call(&ctx, &c, &part, "read_file", &json!({"path": "a"}), "text").is_none(),
+                "the first tool call must not count as stuck");
         // A draft is not an agreement: it changes nothing.
         fs::write(d.join("spec.json"), json!({"confirmed": false, "budget": "9 EUR"}).to_string()).unwrap();
         let mut draft = p.clone();
@@ -3736,7 +3775,7 @@ mod tests {
         }).to_string()).unwrap();
         let mut from_profile = profile(&ctx, "specprof").unwrap();
         apply_spec_limits(&ctx, &c.id, &mut from_profile);
-        assert_eq!((from_profile.budget_eur, from_profile.max_steps), (2.0, 7));
+        assert_eq!((from_profile.budget_eur, from_profile.retries, from_profile.max_steps), (2.0, 6, 12));
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -4118,6 +4157,52 @@ mod tests {
         let c = load(&ctx, &c.id).unwrap();
         assert!(c.error.starts_with("BUDGET: the session"), "{}", c.error);
         assert_eq!(seen.lock().unwrap().len(), 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_workflow_agent_stops_at_the_session_and_the_workflow_budget() {
+        for (session, workflow, cause) in [(0.01, 0.0, "BUDGET: the session"), (0.0, 0.01, "BUDGET: the workflow")] {
+            let (address, seen) = crate::llm::fake::serve_parallel(vec![
+                (200, tool_reply_usage("read", json!({"path": "hello.txt"}), 1_000_000, 1_000_000), 0),
+                (200, text_reply("never"), 0),
+            ]);
+            let (mut ctx, dir) = ctx();
+            priced_models(&mut ctx, &address);
+            ctx.cfg["session_budget_eur"] = json!(session);
+            let before = crate::cost::total_eur(&ctx);
+            let out = run_once_cancel(&ctx, "read one file", json!("main"), "", &AtomicBool::new(false), workflow, before);
+            assert!(out.as_ref().unwrap_err().starts_with(cause), "{:?}", out);
+            assert_eq!(seen.lock().unwrap().len(), 1, "the call that crossed the limit is the last one");
+            let _ = fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn a_cancelled_workflow_agent_sends_no_request() {
+        let (address, seen) = crate::llm::fake::serve_parallel(vec![(200, text_reply("never"), 0)]);
+        let (mut ctx, dir) = ctx();
+        fake_models(&mut ctx, &address);
+        let out = run_once_cancel(&ctx, "go", json!("main"), "", &AtomicBool::new(true), 0.0, 0.0);
+        assert!(out.is_err(), "{:?}", out);
+        assert!(seen.lock().unwrap().is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_workflow_effort_replaces_the_effort_of_a_role_and_of_main() {
+        let (mut ctx, dir) = ctx();
+        fake_models(&mut ctx, "http://127.0.0.1:9");
+        ctx.cfg["main"]["effort"] = json!("high");
+        ctx.cfg["roles"]["worker"] = ctx.cfg["main"].clone();
+        for model in ["worker", "main", "", "judge", "other-model"] {
+            let (_, setting) = workflow_setting(&ctx, &json!(model), "low").unwrap();
+            assert_eq!(setting["effort"], json!("low"), "{}", model);
+        }
+        let (role, setting) = workflow_setting(&ctx, &json!("judge"), "").unwrap();
+        assert_eq!((role.as_str(), &setting["effort"]), ("judge", &ctx.cfg["roles"]["judge"]["effort"]));
+        let (_, bare) = workflow_setting(&ctx, &json!("other-model"), "").unwrap();
+        assert_eq!((&bare["model"], &bare["effort"]), (&json!("other-model"), &json!("high")));
         let _ = fs::remove_dir_all(&dir);
     }
 

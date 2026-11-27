@@ -54,6 +54,22 @@ pub fn create(project: &Path, name: &str) -> Result<(PathBuf, String), String> {
     Ok((path, branch))
 }
 
+/// `create`, but a worktree of this name that already sits on its own branch is used again. A resumed workflow names
+/// the same worktree as the failed run before it, so the retry continues there instead of failing on `already exists`.
+pub fn create_or_reuse(project: &Path, name: &str) -> Result<(PathBuf, String), String> {
+    let safe = safe_name(name);
+    let path = worktrees(project).join(&safe);
+    let branch = format!("agent/{}", safe);
+    if path.is_dir() {
+        let head = git(&path, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+        if head.trim() == branch {
+            return Ok((path, branch));
+        }
+        return Err(format!("{} exists on branch {}, not {}", path.display(), head.trim(), branch));
+    }
+    create(project, name)
+}
+
 pub fn new(ctx: &Ctx, cwd: &str, name: &str) -> String {
     let _ = ctx;
     let project = match project(cwd) { Ok(p) => p, Err(e) => return format!("NOT created. {}", e) };
@@ -180,7 +196,8 @@ mod tests {
     use super::*;
 
     fn repo() -> (std::path::PathBuf, crate::config::Ctx) {
-        let dir = std::env::temp_dir().join(format!("penelope-work-{}", std::process::id()));
+        // One folder per test thread: two tests of this module run at the same time.
+        let dir = std::env::temp_dir().join(format!("penelope-work-{}-{:?}", std::process::id(), std::thread::current().id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let run = |args: &[&str]| {
@@ -215,6 +232,18 @@ mod tests {
         assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "one\ntwo\n");
         assert!(remove(&ctx, &cwd, "task", true).contains("removed"));
         assert!(!tree.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_second_create_of_the_same_worktree_reuses_it() {
+        let (dir, _ctx) = repo();
+        let (first, branch) = create_or_reuse(&dir, "wf-run-part").unwrap();
+        std::fs::write(first.join("a.txt"), "changed\n").unwrap();
+        let (again, branch_again) = create_or_reuse(&dir, "wf-run-part").unwrap();
+        assert_eq!((&again, &branch_again), (&first, &branch));
+        assert_eq!(std::fs::read_to_string(again.join("a.txt")).unwrap(), "changed\n");
+        assert!(create(&dir, "wf-run-part").unwrap_err().contains("already exists"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

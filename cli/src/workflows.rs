@@ -77,6 +77,8 @@ struct State {
     spent_tokens: u64,
     budget_eur: f64,
     budget_tokens: u64,
+    /// `total_eur` when the run started. A running agent stops inside the call that crosses `budget_eur` from here.
+    start_eur: f64,
     max_parallel: usize,
     depth: usize,
     /// The loop round of `loop_until`. It is part of the journal key, so round 2 is a new call, not the memoized
@@ -172,6 +174,7 @@ fn run_with_stop(
     effort: &str,
     cancel: &Arc<AtomicBool>,
     stop: &Path,
+    budget: (f64, f64),
 ) -> Result<String, String> {
     if cancel.load(Ordering::SeqCst) || stop.is_file() {
         return Err("workflow stopped".to_string());
@@ -191,7 +194,7 @@ fn run_with_stop(
             }
         })
     };
-    let out = crate::clusters::run_once_cancel(ctx, prompt, model, effort, cancel);
+    let out = crate::clusters::run_once_cancel(ctx, prompt, model, effort, cancel, budget.0, budget.1);
     done.store(true, Ordering::SeqCst);
     let _ = watcher.join();
     out
@@ -210,15 +213,26 @@ fn load_resume(dir: &Path) -> HashMap<String, Value> {
     out
 }
 
+/// A `$ref` to another document is refused. The schema comes from the script, and a reference to `https://` or
+/// `file://` would read a URL or a file outside the network and privacy layer.
+struct NoRetrieve;
+
+impl jsonschema::Retrieve for NoRetrieve {
+    fn retrieve(&self, uri: &jsonschema::Uri<&str>) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+        Err(format!("a workflow schema may not load {}", uri.as_str()).into())
+    }
+}
+
 fn validate(schema: &Value, value: &Value) -> Result<(), String> {
-    let validator = jsonschema::validator_for(schema).map_err(|e| format!("schema: {}", e))?;
+    let validator = jsonschema::options().with_retriever(NoRetrieve).build(schema).map_err(|e| format!("schema: {}", e))?;
     validator.validate(value).map_err(|e| format!("answer does not match the schema: {}", e))
 }
 
 fn opts_model(opts: &Map) -> (Value, String) {
     let model = opts.get("model").map(|v| v.to_string()).filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| "worker".to_string());
-    let effort = opts.get("effort").map(|v| v.to_string()).unwrap_or_else(|| "high".to_string());
+    // No effort keeps the effort of the role's model; a named effort replaces it.
+    let effort = opts.get("effort").map(|v| v.to_string()).unwrap_or_default();
     (Value::String(model), effort)
 }
 
@@ -270,15 +284,17 @@ fn run_agent(st: &mut State, prompt: &str, opts: &Map) -> Result<Dynamic, Box<Ev
     let ctx = workflow_ctx(&st.ctx);
     let cancel = st.cancel.clone();
     let stop_path = st.dir.join("stop");
+    let budget = (st.budget_eur, st.start_eur);
     let (model, effort) = opts_model(opts);
     let mut kept = Value::Null;
     let text = if worktree {
         let name = format!("wf-{}-{}-{}", st.id, if label.is_empty() { "part" } else { &label }, &k[..8]);
-        let (path, branch) = crate::work::create(&project(&ctx), &name)
+        // A resumed run names the same worktree as the failed run before it and continues there.
+        let (path, branch) = crate::work::create_or_reuse(&project(&ctx), &name)
             .map_err(|e| fail(format!("worktree: {}", e)))?;
         let goal = format!("{}\n\nWork in this worktree. The check is hidden.", prompt);
         let out = crate::eval::with_task_cwd(&path, || {
-            run_with_stop(&ctx, &goal, model.clone(), &effort, &cancel, &stop_path)
+            run_with_stop(&ctx, &goal, model.clone(), &effort, &cancel, &stop_path, budget)
         });
         // The worktree stays: a build workflow must be able to inspect and use its result. The journal names it,
         // and a later step without a schema also finds the path in its prompt.
@@ -289,7 +305,7 @@ fn run_agent(st: &mut State, prompt: &str, opts: &Map) -> Result<Dynamic, Box<Ev
         }
         text
     } else {
-        run_with_stop(&ctx, prompt, model, &effort, &cancel, &stop_path).map_err(|e| fail(e))?
+        run_with_stop(&ctx, prompt, model, &effort, &cancel, &stop_path, budget).map_err(|e| fail(e))?
     };
     let after = crate::cost::total_eur(&st.ctx);
     let after_tokens = crate::cost::total_tokens(&st.ctx);
@@ -316,6 +332,17 @@ fn run_agent(st: &mut State, prompt: &str, opts: &Map) -> Result<Dynamic, Box<Ev
 
 fn engine(state: Rc<RefCell<State>>) -> Engine {
     let mut e = Engine::new();
+    // `Engine::new` loads `import "path"` from the file system and writes `print` and `debug` to stdout, which is the
+    // TUI screen. A workflow has neither: an import fails, and print and debug go to the journal.
+    e.set_module_resolver(rhai::module_resolvers::DummyModuleResolver::new());
+    let s = state.clone();
+    e.on_print(move |text| {
+        if let Ok(st) = s.try_borrow() { let _ = journal_line(&st.dir, &json!({"log": text})); }
+    });
+    let s = state.clone();
+    e.on_debug(move |text, _source, _pos| {
+        if let Ok(st) = s.try_borrow() { let _ = journal_line(&st.dir, &json!({"log": text})); }
+    });
     e.set_max_operations(10_000_000);
     e.set_max_expr_depths(64, 64);
     e.set_max_string_size(1_000_000);
@@ -354,6 +381,7 @@ fn engine(state: Rc<RefCell<State>>) -> Engine {
         let ctx = workflow_ctx(&st.ctx);
         let cancel = st.cancel.clone();
         let stop = st.dir.join("stop");
+        let budget = (st.budget_eur, st.start_eur);
         let before = crate::cost::total_eur(&st.ctx);
         let before_tokens = crate::cost::total_tokens(&st.ctx);
         let mut values: Vec<Option<Value>> = vec![None; jobs.len()];
@@ -374,7 +402,7 @@ fn engine(state: Rc<RefCell<State>>) -> Engine {
             let cancel = cancel.clone();
             let stop = stop.clone();
             handles.push(std::thread::spawn(move || -> Result<(usize, String, Value), String> {
-                let text = run_with_stop(&c, &prompt, model, &effort, &cancel, &stop)?;
+                let text = run_with_stop(&c, &prompt, model, &effort, &cancel, &stop, budget)?;
                 let value = finish_call(&dir, &key, &phase, &label, text, schema.as_ref())?;
                 Ok((index, key, value))
             }));
@@ -430,6 +458,7 @@ fn engine(state: Rc<RefCell<State>>) -> Engine {
         let cancel = st.cancel.clone();
         let stop = st.dir.join("stop");
         let dir = st.dir.clone();
+        let budget = (st.budget_eur, st.start_eur);
         let before = crate::cost::total_eur(&st.ctx);
         let before_tokens = crate::cost::total_tokens(&st.ctx);
         let resume = st.resume.clone();
@@ -456,7 +485,7 @@ fn engine(state: Rc<RefCell<State>>) -> Engine {
                     let value = if let Some(v) = resume.get(&k) {
                         v.clone()
                     } else {
-                        let text = run_with_stop(&c, &prompt, model, &effort, &cancel, &stop)?;
+                        let text = run_with_stop(&c, &prompt, model, &effort, &cancel, &stop, budget)?;
                         finish_call(&dir, &k, &phase, &label, text, schema.as_ref())?
                     };
                     current = value.as_str().map(str::to_string).unwrap_or_else(|| value.to_string());
@@ -551,7 +580,7 @@ fn engine(state: Rc<RefCell<State>>) -> Engine {
             let tokens = if st.budget_tokens > 0 { st.budget_tokens.saturating_sub(st.spent_tokens) } else { 0 };
             (workflow_ctx(&st.ctx), st.depth + 1, eur, tokens, st.cancel.clone())
         };
-        let path = ctx.root.join("workflows").join(format!("{}.rhai", name.as_str()));
+        let path = named_path(&ctx, name.as_str()).map_err(|e| fail(e))?;
         if !path.is_file() { return Err(fail(format!("no workflow at {}", path.display()))); }
         let value = rhai::serde::from_dynamic::<Value>(&Dynamic::from_map(args)).map_err(|e| fail(e.to_string()))?;
         let result = run_script(&ctx, &path, RunOptions {
@@ -572,12 +601,15 @@ fn engine(state: Rc<RefCell<State>>) -> Engine {
 fn run_script(ctx: &Ctx, path: &Path, options: RunOptions, depth: usize) -> Result<RunResult, String> {
     let script = fs::read_to_string(path).map_err(|e| format!("cannot read {}: {}", path.display(), e))?;
     let name = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "workflow".to_string());
-    let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
-    let id = options.resume_id.clone().filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| format!("{}-{}", sanitize(&name), crate::sessions::stamp(ms)));
-    let id = sanitize(&id);
-    let dir = ctx.root.join("workflows").join(&id);
-    fs::create_dir_all(&dir).map_err(|e| format!("cannot make {}: {}", dir.display(), e))?;
+    let (id, dir) = match options.resume_id.clone().filter(|s| !s.trim().is_empty()) {
+        Some(resume) => {
+            let id = sanitize(&resume);
+            let dir = ctx.root.join("workflows").join(&id);
+            fs::create_dir_all(&dir).map_err(|e| format!("cannot make {}: {}", dir.display(), e))?;
+            (id, dir)
+        }
+        None => new_run_dir(ctx, &name)?,
+    };
     // A stop marker from an earlier run is stale. A new run of the same id starts clean.
     let _ = fs::remove_file(dir.join("stop"));
     let resume = load_resume(&dir);
@@ -589,6 +621,7 @@ fn run_script(ctx: &Ctx, path: &Path, options: RunOptions, depth: usize) -> Resu
         spent_tokens: 0,
         budget_eur: options.budget_eur,
         budget_tokens: options.budget_tokens,
+        start_eur: crate::cost::total_eur(ctx),
         max_parallel: options.max_parallel.max(1).min(8),
         depth,
         loop_round: 0,
@@ -646,9 +679,19 @@ pub fn run(ctx: &Ctx, path: &Path, options: RunOptions) -> Result<RunResult, Str
     run_script(ctx, path, options, 0)
 }
 
+/// The file of a saved workflow. A name is letters, digits, `-` and `_`, so `/tmp/x` or `../../x` cannot reach a
+/// script outside `.penelope/workflows`.
+fn named_path(ctx: &Ctx, name: &str) -> Result<PathBuf, String> {
+    let ok = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if !ok {
+        return Err(format!("a workflow name is letters, digits, - and _, got {:?}", name));
+    }
+    Ok(ctx.root.join("workflows").join(format!("{}.rhai", name)))
+}
+
 /// Run a saved workflow by name under `.penelope/workflows`.
 pub fn run_named(ctx: &Ctx, name: &str, options: RunOptions) -> Result<RunResult, String> {
-    let path = ctx.root.join("workflows").join(format!("{}.rhai", name));
+    let path = named_path(ctx, name)?;
     if !path.is_file() {
         return Err(format!("no workflow named {} at {}", name, path.display()));
     }
@@ -710,6 +753,27 @@ pub fn stop(ctx: &Ctx, id: &str) -> Result<String, String> {
     Ok(format!("workflow {} will stop before the next agent and checks the marker inside a running one", id))
 }
 
+/// The id of a new run: name, date and time to the millisecond. `create_dir` is atomic, so two runs in the same
+/// millisecond get `-2`, `-3` and never share a journal.
+fn new_run_dir(ctx: &Ctx, name: &str) -> Result<(String, PathBuf), String> {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let (secs, ms) = (now.as_secs(), now.subsec_millis());
+    let day = crate::sessions::stamp(secs);
+    let base = format!("{}-{}{:02}-{:03}", sanitize(name), sanitize(&day.replace(':', "")), secs % 60, ms);
+    let parent = ctx.root.join("workflows");
+    fs::create_dir_all(&parent).map_err(|e| format!("cannot make {}: {}", parent.display(), e))?;
+    for n in 1..1000 {
+        let id = if n == 1 { base.clone() } else { format!("{}-{}", base, n) };
+        let dir = parent.join(&id);
+        match fs::create_dir(&dir) {
+            Ok(()) => return Ok((id, dir)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("cannot make {}: {}", dir.display(), e)),
+        }
+    }
+    Err(format!("no free run id for {}", base))
+}
+
 fn sanitize(name: &str) -> String {
     name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' }).collect()
 }
@@ -718,12 +782,125 @@ fn sanitize(name: &str) -> String {
 mod tests {
     use super::*;
 
+    fn bare_state(ctx: &Ctx, dir: &Path) -> Rc<RefCell<State>> {
+        Rc::new(RefCell::new(State {
+            ctx: ctx.clone(), id: "bare".to_string(), dir: dir.to_path_buf(),
+            spent_eur: 0.0, spent_tokens: 0, budget_eur: 0.0, budget_tokens: 0, start_eur: 0.0,
+            max_parallel: 4, depth: 0, loop_round: 0, cancel: Arc::new(AtomicBool::new(false)),
+            resume: HashMap::new(), ask: None,
+        }))
+    }
+
     #[test]
-    fn a_script_cannot_read_files_or_open_a_network() {
-        let engine = Engine::new();
-        for script in ["read_file(\"/etc/passwd\")", "http(\"https://example.com\")", "run_command(\"rm -rf /\")"] {
+    fn a_script_cannot_read_files_import_modules_or_print_to_the_screen() {
+        let dir = std::env::temp_dir().join(format!("penelope-workflow-sandbox-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let ctx = crate::config::load(&dir.join(".penelope"));
+        // A module that exists on disk: `Engine::new` would load it with `import`.
+        fs::write(dir.join("evil.rhai"), "export const SECRET = 42;").unwrap();
+        let engine = engine(bare_state(&ctx, &dir));
+        let module = dir.join("evil").to_string_lossy().replace('\\', "/");
+        let import = format!("import \"{}\" as m; m::SECRET", module);
+        for script in ["read_file(\"/etc/passwd\")", "http(\"https://example.com\")", "run_command(\"rm -rf /\")",
+                       import.as_str()] {
             assert!(engine.eval::<Dynamic>(script).is_err(), "{} must fail", script);
         }
+        let _ = engine.eval::<Dynamic>("print(\"to the journal\"); debug(\"also\");").unwrap();
+        let journal = fs::read_to_string(dir.join("journal.jsonl")).unwrap();
+        assert!(journal.contains("to the journal") && journal.contains("also"), "{}", journal);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_schema_may_not_load_a_file_or_a_url() {
+        let dir = std::env::temp_dir().join(format!("penelope-workflow-ref-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let other = dir.join("other.json");
+        fs::write(&other, r#"{"type": "string"}"#).unwrap();
+        let file_uri = format!("file://{}", other.to_string_lossy().replace('\\', "/"));
+        let file_uri = if file_uri.starts_with("file:///") { file_uri } else { file_uri.replacen("file://", "file:///", 1) };
+        for target in [file_uri.as_str(), "https://127.0.0.1:9/schema.json"] {
+            let schema = json!({"$ref": target});
+            let err = validate(&schema, &json!("text")).unwrap_err();
+            assert!(err.contains("may not load"), "{}: {}", target, err);
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_nested_workflow_name_cannot_leave_the_workflow_folder() {
+        let (ctx, dir) = ctx_with_fake(Vec::new());
+        let outside = dir.join("outside.rhai");
+        fs::write(&outside, "phase(\"outside ran\"); 1").unwrap();
+        let outside_name = outside.with_extension("").to_string_lossy().replace('\\', "/");
+        for name in [outside_name.as_str(), "../../outside", "..\\outside"] {
+            let path = dir.join("nest.rhai");
+            fs::write(&path, format!("workflow({:?}, #{{}})", name)).unwrap();
+            let err = run(&ctx, &path, RunOptions { confirm: false, ..RunOptions::default() }).unwrap_err();
+            assert!(err.contains("workflow name"), "{}: {}", name, err);
+            assert!(run_named(&ctx, name, RunOptions { confirm: false, ..RunOptions::default() }).unwrap_err().contains("workflow name"));
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn two_runs_in_the_same_millisecond_get_two_journals() {
+        let (ctx, dir) = ctx_with_fake(Vec::new());
+        let (a, dir_a) = new_run_dir(&ctx, "review").unwrap();
+        let (b, dir_b) = new_run_dir(&ctx, "review").unwrap();
+        assert_ne!(a, b);
+        assert_ne!(dir_a, dir_b);
+        // review-YYYY-MM-DD-HHMMSS-mmm: the date is real, not a millisecond count read as seconds.
+        let year: u32 = a.split('-').nth(1).unwrap().parse().unwrap();
+        assert!((2020..2200).contains(&year), "{}", a);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_parallel_part_keeps_the_finished_one_for_the_resume() {
+        let ok = json!({"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "done"}}],
+                        "usage": {"prompt_tokens": 10, "completion_tokens": 2}}).to_string();
+        let (ctx, dir) = ctx_with_fake(vec![(200, ok.clone()), (400, "{\"error\": \"bad\"}".to_string())]);
+        let path = dir.join("par.rhai");
+        fs::write(&path, "parallel([#{prompt: \"a\", opts: #{}}, #{prompt: \"b\", opts: #{}}])").unwrap();
+        let first = run(&ctx, &path, RunOptions { confirm: false, max_parallel: 4, resume_id: Some("par-run".to_string()),
+                                                  ..RunOptions::default() });
+        assert!(first.is_err(), "one part failed");
+        let journal = fs::read_to_string(ctx.root.join("workflows").join("par-run").join("journal.jsonl")).unwrap();
+        assert_eq!(journal.lines().filter(|l| l.contains("\"done\"")).count(), 1, "{}", journal);
+        // The resume asks the model only for the part that failed.
+        let (address, seen) = crate::llm::fake::serve(vec![(200, ok)]);
+        let mut ctx = ctx;
+        ctx.cfg["main"]["base_url"] = json!(format!("{}/v1", address));
+        ctx.cfg["roles"]["worker"] = ctx.cfg["main"].clone();
+        let second = run(&ctx, &path, RunOptions { confirm: false, max_parallel: 4, resume_id: Some("par-run".to_string()),
+                                                   ..RunOptions::default() }).unwrap();
+        assert_eq!(second.output, json!(["done", "done"]));
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_pipeline_keeps_stage_one_when_stage_two_fails() {
+        let ok = json!({"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "first"}}],
+                        "usage": {"prompt_tokens": 10, "completion_tokens": 2}}).to_string();
+        let (ctx, dir) = ctx_with_fake(vec![(200, ok.clone()), (400, "{\"error\": \"bad\"}".to_string())]);
+        let path = dir.join("pipe2.rhai");
+        fs::write(&path, "pipeline([\"a\"], [#{prompt: \"one {item}\"}, #{prompt: \"two {item}\"}])").unwrap();
+        let options = || RunOptions { confirm: false, resume_id: Some("pipe-run".to_string()), ..RunOptions::default() };
+        assert!(run(&ctx, &path, options()).is_err(), "stage two failed");
+        let (address, seen) = crate::llm::fake::serve(vec![(200, ok)]);
+        let mut ctx = ctx;
+        ctx.cfg["main"]["base_url"] = json!(format!("{}/v1", address));
+        ctx.cfg["roles"]["worker"] = ctx.cfg["main"].clone();
+        let second = run(&ctx, &path, options()).unwrap();
+        assert_eq!(second.output, json!([["first", "first"]]));
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1, "stage one comes from the journal");
+        assert!(seen[0].body.to_string().contains("two first"), "{}", seen[0].body);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -837,7 +1014,7 @@ mod tests {
         fs::create_dir_all(stop.parent().unwrap()).unwrap();
         fs::write(&stop, b"1").unwrap();
         let out = run_with_stop(&ctx, "go", json!("worker"), "low",
-                                &Arc::new(AtomicBool::new(false)), &stop);
+                                &Arc::new(AtomicBool::new(false)), &stop, (0.0, 0.0));
         assert!(out.unwrap_err().contains("stopped"));
         let _ = fs::remove_dir_all(&dir);
     }
@@ -851,7 +1028,8 @@ mod tests {
         fs::write(&path, "agent(\"one\", #{}); agent(\"two\", #{})").unwrap();
         let out = run(&ctx, &path, RunOptions { confirm: false, budget_eur: 0.0000001, ..RunOptions::default() });
         assert!(out.is_err(), "the second agent must not run");
-        assert!(out.unwrap_err().contains("budget"));
+        // The first agent already crosses the tiny limit inside its call; either way no second agent starts.
+        assert!(out.unwrap_err().to_ascii_lowercase().contains("budget"));
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -890,7 +1068,7 @@ mod tests {
         fs::create_dir_all(&run_dir).unwrap();
         let state = State {
             ctx: ctx.clone(), id: "stop-check".to_string(), dir: run_dir.clone(),
-            spent_eur: 0.0, spent_tokens: 0, budget_eur: 0.0, budget_tokens: 0,
+            spent_eur: 0.0, spent_tokens: 0, budget_eur: 0.0, budget_tokens: 0, start_eur: 0.0,
             max_parallel: 4, depth: 0, loop_round: 0, cancel: Arc::new(AtomicBool::new(false)),
             resume: HashMap::new(), ask: None,
         };
