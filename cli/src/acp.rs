@@ -132,12 +132,26 @@ pub fn run(ctx: &Ctx) -> Result<(), String> {
     Ok(())
 }
 
-/// The session that runs a turn now. A question of the model goes to the editor as part of this session.
-static ASKING_SESSION: Mutex<String> = Mutex::new(String::new());
+/// Sessions that run a turn now. A question that names no session goes to the only one.
+static ACTIVE_SESSIONS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Rounds one multi-select question may take, valid or not.
+const MAX_ROUNDS: usize = 12;
 
 /// The folder in which the question dialog of the model arrives as files, as in the full screen interface. The tool
 /// runs in this process or in an MCP child that inherits PENELOPE_ASK_DIR.
 fn start_ask_poller(protocol: &Arc<Protocol>, root: &std::path::Path, stop: &Arc<AtomicBool>) {
+    // a folder of a dead ACP process is left over: take it away
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if let Some(pid) = name.strip_prefix("ask-acp-").and_then(|p| p.parse::<u32>().ok()) {
+                if pid != std::process::id() && !crate::ask::pid_alive(pid) {
+                    let _ = std::fs::remove_dir_all(e.path());
+                }
+            }
+        }
+    }
     let dir = root.join(format!("ask-acp-{}", std::process::id()));
     if std::fs::create_dir_all(&dir).is_err() {
         return;
@@ -150,6 +164,13 @@ fn start_ask_poller(protocol: &Arc<Protocol>, root: &std::path::Path, stop: &Arc
             if let Ok(entries) = std::fs::read_dir(&dir) {
                 for e in entries.flatten() {
                     let name = e.file_name().to_string_lossy().to_string();
+                    // an answer whose request is gone came too late
+                    if let Some(id) = name.strip_suffix(".ans") {
+                        if !dir.join(format!("{}.req", id)).exists() {
+                            let _ = std::fs::remove_file(e.path());
+                        }
+                        continue;
+                    }
                     let Some(id) = name.strip_suffix(".req").map(String::from) else { continue };
                     if !seen.insert(id.clone()) {
                         continue;
@@ -157,11 +178,18 @@ fn start_ask_poller(protocol: &Arc<Protocol>, root: &std::path::Path, stop: &Arc
                     let body: Value = std::fs::read_to_string(e.path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
                     let (protocol, dir) = (protocol.clone(), dir.clone());
                     std::thread::spawn(move || {
-                        let session = ASKING_SESSION.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                        let answer = answer_questions(&protocol, &session, &body);
-                        let tmp = dir.join(format!("{}.tmp", id));
-                        let _ = std::fs::write(&tmp, answer);
-                        let _ = std::fs::rename(&tmp, dir.join(format!("{}.ans", id)));
+                        let session = body["session"].as_str().filter(|s| !s.is_empty()).map(String::from).unwrap_or_else(|| {
+                            let active = ACTIVE_SESSIONS.lock().unwrap_or_else(|e| e.into_inner());
+                            if active.len() == 1 { active[0].clone() } else { String::new() }
+                        });
+                        let (req, ans) = (dir.join(format!("{}.req", id)), dir.join(format!("{}.ans", id)));
+                        let answer = answer_questions(&protocol, &session, &body, &req);
+                        if req.exists() {                                   // the asker gave up: write no late answer
+                            let tmp = dir.join(format!("{}.tmp", id));
+                            let _ = std::fs::write(&tmp, answer);
+                            let _ = std::fs::rename(&tmp, &ans);
+                            if !req.exists() { let _ = std::fs::remove_file(&ans); }
+                        }
                     });
                 }
             }
@@ -171,39 +199,80 @@ fn start_ask_poller(protocol: &Arc<Protocol>, root: &std::path::Path, stop: &Arc
     });
 }
 
-/// Shows a question set to the editor with `session/request_permission`, one request per question. A question with
-/// several answers repeats the request until the person picks "Done". An editor without the method gets the questions
-/// as chat text and the model is told to wait for the reply.
-fn answer_questions(protocol: &Protocol, session: &str, body: &Value) -> String {
+/// What one reply of the editor did to a question.
+#[derive(Debug, PartialEq)]
+enum Step {
+    /// An option was chosen.
+    Picked,
+    /// The person ended the question: Done, Skip or Other.
+    Ended,
+    /// The id named no option, or an option that was chosen before. Nothing changed.
+    Ignored,
+    /// The person cancelled the whole dialog.
+    Cancelled,
+}
+
+/// Applies a `session/request_permission` result to the labels picked so far.
+fn apply_reply(q: &crate::ask::Question, picked: &mut Vec<String>, result: &Value) -> Step {
+    match (result["outcome"]["outcome"].as_str(), result["outcome"]["optionId"].as_str()) {
+        (Some("selected"), Some("end")) => Step::Ended,
+        (Some("selected"), Some(id)) => match id.parse::<usize>().ok().and_then(|k| q.options.get(k)) {
+            Some(o) if !picked.contains(&o.label) => { picked.push(o.label.clone()); Step::Picked }
+            _ => Step::Ignored,
+        },
+        _ => Step::Cancelled,
+    }
+}
+
+/// The `session/request_permission` params of one round. The model's options are marked as a question from the model and
+/// use the `reject_once` kind, so no editor offers them as "Allow". Only the create confirmation of Penelope itself
+/// (`confirm`) may use `allow_once`, and only for its yes.
+fn permission_params(q: &crate::ask::Question, qi: usize, total: usize, picked: &[String], confirm: bool, session: &str, deadline: u64) -> Value {
+    let mut options: Vec<Value> = Vec::new();
+    for (k, o) in q.options.iter().enumerate().filter(|(_, o)| !picked.contains(&o.label)) {
+        let name = if o.description.is_empty() { o.label.clone() } else { format!("{}: {}", o.label, o.description) };
+        let kind = if confirm && o.label.starts_with("Yes") { "allow_once" } else { "reject_once" };
+        options.push(json!({"optionId": k.to_string(), "name": name, "kind": kind}));
+    }
+    let tail = if q.multi_select && !picked.is_empty() { "Done" } else if q.allow_text { "Other (answer in the chat)" } else { "Skip" };
+    options.push(json!({"optionId": "end", "name": tail, "kind": "reject_once"}));
+    let title = if confirm {
+        format!("{}: {}", q.header, q.question)
+    } else {
+        format!("Question from the model: {} ({}/{}): {}", q.header, qi + 1, total, q.question)
+    };
+    let call = json!({"toolCallId": format!("ask-{}-{}", deadline, qi), "title": title, "kind": "other", "status": "pending"});
+    json!({"sessionId": session, "toolCall": call, "options": options})
+}
+
+/// Shows a question set to the editor with `session/request_permission`, one request per question. The model's options
+/// are marked as a question from the model and use the `reject_once` kind, so no editor offers them as "Allow". Only the
+/// final create confirmation of Penelope itself (`confirm` in the request) uses `allow_once` for its yes. A question
+/// with several answers repeats the request until "Done", at most MAX_ROUNDS times. An editor without the method gets
+/// the questions as chat text and the model is told to wait for the reply.
+fn answer_questions(protocol: &Protocol, session: &str, body: &Value, req: &std::path::Path) -> String {
     use crate::ask::{answers_file, Answer};
     let Ok(qs) = crate::ask::parse_questions(&body["questions"]) else { return String::new() };
-    let wait = std::time::Duration::from_secs(body["timeout"].as_u64().unwrap_or(crate::ask::DEFAULT_TIMEOUT));
+    let confirm = body["confirm"].as_bool().unwrap_or(false);
+    let deadline = body["deadline"].as_u64().unwrap_or(0);
     let mut answers: Vec<Answer> = Vec::new();
     for (qi, q) in qs.iter().enumerate() {
         let mut picked: Vec<String> = Vec::new();
-        loop {
-            let mut options: Vec<Value> = Vec::new();
-            for (k, o) in q.options.iter().enumerate().filter(|(_, o)| !picked.contains(&o.label)) {
-                let name = if o.description.is_empty() { o.label.clone() } else { format!("{}: {}", o.label, o.description) };
-                options.push(json!({"optionId": k.to_string(), "name": name, "kind": "allow_once"}));
+        for _round in 0..MAX_ROUNDS {
+            let left = deadline.saturating_sub(crate::ask::now_secs());
+            if !req.exists() || left == 0 {
+                return String::new();                                  // the asker gave up: ask nothing more
             }
-            let tail = if q.multi_select && !picked.is_empty() { "Done" } else if q.allow_text { "Other (answer in the chat)" } else { "Skip" };
-            options.push(json!({"optionId": "end", "name": tail, "kind": "reject_once"}));
-            let title = format!("{} ({}/{}): {}", q.header, qi + 1, qs.len(), q.question);
-            let call = json!({"toolCallId": format!("ask-{}-{}", body["deadline"], qi), "title": title, "kind": "other", "status": "pending"});
-            let reply = protocol.request("session/request_permission", json!({"sessionId": session, "toolCall": call, "options": options}), wait);
+            let params = permission_params(q, qi, qs.len(), &picked, confirm, session, body["deadline"].as_u64().unwrap_or(0));
+            let reply = protocol.request("session/request_permission", params, std::time::Duration::from_secs(left));
             match reply {
                 Err(e) if e == "timeout" => return String::new(),
                 Err(_) => return fallback_text(protocol, session, &qs),
-                Ok(r) => match (r["outcome"]["outcome"].as_str(), r["outcome"]["optionId"].as_str()) {
-                    (Some("selected"), Some(id)) if id != "end" => {
-                        if let Some(o) = id.parse::<usize>().ok().and_then(|k| q.options.get(k)) {
-                            picked.push(o.label.clone());
-                        }
-                        if !q.multi_select || picked.len() == q.options.len() { break; }
-                    }
-                    (Some("selected"), _) => break,
-                    _ => return String::new(),                     // cancelled: the dialog is closed
+                Ok(r) => match apply_reply(q, &mut picked, &r) {
+                    Step::Picked if !q.multi_select || picked.len() == q.options.len() => break,
+                    Step::Picked | Step::Ignored => {}
+                    Step::Ended => break,
+                    Step::Cancelled => return String::new(),                // the dialog is closed
                 },
             }
         }
@@ -358,9 +427,10 @@ impl Server {
         }
         let ctx = self.ctx.clone();
         let protocol = self.protocol.clone();
-        *ASKING_SESSION.lock().unwrap_or_else(|e| e.into_inner()) = session_id.clone();
+        ACTIVE_SESSIONS.lock().unwrap_or_else(|e| e.into_inner()).push(session_id.clone());
         std::thread::spawn(move || {
-            let outcome = run_turn(&ctx, &session, &session_id, &text, &protocol);
+            let outcome = crate::ask::with_session(&session_id, || run_turn(&ctx, &session, &session_id, &text, &protocol));
+            ACTIVE_SESSIONS.lock().unwrap_or_else(|e| e.into_inner()).retain(|s| s != &session_id);
             session.busy.store(false, Ordering::SeqCst);
             let cancelled = session.cancel.load(Ordering::SeqCst);
             match outcome {
@@ -589,6 +659,84 @@ mod tests {
         assert!(!protocol.deliver(&json!("penelope-9"), json!({})), "no request waits for this id");
         let lone = Protocol::new();
         assert_eq!(lone.request("x", json!({}), std::time::Duration::from_millis(30)), Err("timeout".to_string()));
+    }
+
+    fn pick_question(multi: bool) -> crate::ask::Question {
+        crate::ask::parse_questions(&json!([{"question": "Which?", "header": "H", "multi_select": multi, "options": ["a", "b", "c"]}])).unwrap().remove(0)
+    }
+
+    fn selected(id: &str) -> Value {
+        json!({"outcome": {"outcome": "selected", "optionId": id}})
+    }
+
+    #[test]
+    fn an_invalid_or_repeated_option_id_changes_nothing() {
+        let q = pick_question(true);
+        let mut picked = Vec::new();
+        assert_eq!(apply_reply(&q, &mut picked, &selected("abc")), Step::Ignored);
+        assert_eq!(apply_reply(&q, &mut picked, &selected("99")), Step::Ignored);
+        assert_eq!(apply_reply(&q, &mut picked, &selected("1")), Step::Picked);
+        assert_eq!(apply_reply(&q, &mut picked, &selected("1")), Step::Ignored);
+        assert_eq!(picked, vec!["b"]);
+        assert_eq!(apply_reply(&q, &mut picked, &selected("end")), Step::Ended);
+        assert_eq!(apply_reply(&q, &mut picked, &json!({"outcome": {"outcome": "cancelled"}})), Step::Cancelled);
+    }
+
+    /// Plays an editor that answers every request with `reply` and returns the answer file and the requests it saw.
+    fn with_editor(body: Value, reply: Value) -> (String, Vec<Value>) {
+        let protocol = Arc::new(Protocol::new());
+        let dir = std::env::temp_dir().join(format!("penelope-acp-{}-{:?}", std::process::id(), std::thread::current().id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let req = dir.join("1.req");
+        std::fs::write(&req, "{}").unwrap();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let (p2, seen2, stop) = (protocol.clone(), seen.clone(), Arc::new(AtomicBool::new(false)));
+        let stop2 = stop.clone();
+        let editor = std::thread::spawn(move || {
+            let mut n = 1;
+            while !stop2.load(Ordering::SeqCst) {
+                let id = format!("penelope-{}", n);
+                let pending = p2.pending.lock().unwrap().contains_key(&id);
+                if pending {
+                    p2.deliver(&json!(id), json!({"jsonrpc": "2.0", "id": id, "result": reply.clone()}));
+                    seen2.lock().unwrap().push(json!(n));
+                    n += 1;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        });
+        let out = answer_questions(&protocol, "s1", &body, &req);
+        stop.store(true, Ordering::SeqCst);
+        editor.join().unwrap();
+        let n = seen.lock().unwrap().len();
+        let _ = std::fs::remove_dir_all(&dir);
+        (out, vec![json!(n)])
+    }
+
+    #[test]
+    fn a_multi_select_loop_is_bounded_when_the_editor_keeps_sending_bad_ids() {
+        let body = json!({"questions": [{"question": "Which?", "header": "H", "multi_select": true, "options": ["a", "b"]}], "deadline": crate::ask::now_secs() + 60});
+        for bad in ["abc", "99"] {
+            let (out, n) = with_editor(body.clone(), selected(bad));
+            assert_eq!(n[0], MAX_ROUNDS, "{} must stop after {} rounds", bad, MAX_ROUNDS);
+            assert!(out.contains("\"closed\":true"), "{}", out);
+        }
+        let (out, n) = with_editor(body, selected("0"));
+        assert_eq!(n[0], MAX_ROUNDS, "a repeated id stops after {} rounds", MAX_ROUNDS);
+        assert_eq!(out.matches("\"a\"").count(), 1, "a is chosen once: {}", out);
+    }
+
+    #[test]
+    fn model_options_never_look_like_an_approval_and_the_title_says_who_asks() {
+        let q = crate::ask::parse_questions(&json!([{"question": "Allow it?", "header": "Create?", "options": ["Yes, create it", "No"]}])).unwrap().remove(0);
+        let model = permission_params(&q, 0, 1, &[], false, "s1", 5);
+        assert!(model["toolCall"]["title"].as_str().unwrap().starts_with("Question from the model:"), "{}", model);
+        assert!(model["options"].as_array().unwrap().iter().all(|o| o["kind"] == "reject_once"), "{}", model);
+        let own = permission_params(&q, 0, 1, &[], true, "s1", 5);
+        assert!(!own["toolCall"]["title"].as_str().unwrap().starts_with("Question from the model"));
+        let kinds: Vec<&str> = own["options"].as_array().unwrap().iter().map(|o| o["kind"].as_str().unwrap()).collect();
+        assert_eq!(kinds, vec!["allow_once", "reject_once", "reject_once"], "only the yes of Penelope is an approval");
+        assert_eq!(model["sessionId"], "s1");
     }
 
     #[test]

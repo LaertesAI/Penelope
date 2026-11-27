@@ -222,9 +222,15 @@ pub fn ask_user(question: &str, options: &serde_json::Value) -> String {
 /// The tool ask_user with all its arguments. A `questions` list is the dialog of `ask::`, 1 to 6 questions with
 /// headers, options, several answers and free text. Without it the old form (`question` and `options`) runs as before.
 pub fn ask_user_args(ctx: &Ctx, a: &serde_json::Value) -> String {
+    ask_user_in(ctx, a, crate::ask::main_turn_here())
+}
+
+/// `ask_user_args` with the answer to "is this the interactive main turn". A scout, a part of a cluster and a subagent
+/// inherit the question folder but never put a dialog in front of the person.
+pub fn ask_user_in(ctx: &Ctx, a: &serde_json::Value, main_turn: bool) -> String {
     if a.get("questions").map(|q| !q.is_null()).unwrap_or(false) {
-        if crate::scout::inside() {
-            return "a scout cannot ask the user. Report what is unclear.".to_string();
+        if !main_turn {
+            return "NOT asked. Only the main turn can ask the user. Report what is unclear in your result.".to_string();
         }
         return match crate::ask::parse_questions(&a["questions"]) {
             Ok(qs) => crate::ask::reply_text(&qs, &crate::ask::ask_questions(&qs, crate::ask::timeout_secs(ctx))),
@@ -1377,6 +1383,13 @@ mod tests {
         assert!(bad.starts_with("NOT asked") && bad.contains("question 1 needs 2 to 6 options"), "{}", bad);
         assert!(ask_user_args(&ctx, &serde_json::json!({"questions": []})).contains("1 to 6 questions"));
         assert!(ask_user_args(&ctx, &serde_json::json!({"questions": "Which?"})).starts_with("NOT asked"));
+        // a worker, a scout or a subagent never gets a dialog, even with a valid set
+        let valid = serde_json::json!({"questions": [{"question": "Which?", "options": ["a", "b"]}]});
+        assert!(ask_user_in(&ctx, &valid, false).contains("Only the main turn"));
+        assert!(!crate::ask::is_main_turn(true, None, ""));
+        assert!(!crate::ask::is_main_turn(false, Some("c-1"), ""));
+        assert!(!crate::ask::is_main_turn(false, None, "worker"));
+        assert!(crate::ask::is_main_turn(false, None, ""));
     }
 
     #[test]

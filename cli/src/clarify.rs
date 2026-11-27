@@ -147,6 +147,11 @@ impl Spec {
         Spec { kind, values: BTreeMap::new(), conflicts: BTreeMap::new(), confirmed: false }
     }
 
+    /// The first line of the goal, for a title.
+    pub fn title(&self) -> String {
+        self.get("goal").and_then(|g| g.lines().next()).map(|l| l.chars().take(80).collect()).unwrap_or_default()
+    }
+
     pub fn get(&self, key: &str) -> Option<&str> {
         self.values.get(key).map(String::as_str)
     }
@@ -163,7 +168,7 @@ impl Spec {
     pub fn from_request(kind: Kind, request: &str, preset: &Map<String, Value>) -> Spec {
         let mut spec = Spec::new(kind);
         let text = request.trim();
-        spec.set("goal", text.lines().next().map(clean).unwrap_or_default());
+        spec.set("goal", text.to_string());   // the whole request is the goal; its first line is only the title
         // phrases
         if let Some(v) = first(text, r"(?i)\b(?:done|finished|complete|successful|success)\s+(?:when|if|once)\s+([^.;\n]+)").or_else(|| first(text, r"(?i)\buntil\s+([^.;\n]+)")) {
             spec.set("done", v);
@@ -238,10 +243,13 @@ impl Spec {
         FIELDS.iter().filter(|f| self.needs(f) && (self.get(f.key).is_none() || self.conflicts.contains_key(f.key))).collect()
     }
 
+    /// Every field of the kind, rights and budget first, each cut at 200 characters so none hides another.
     pub fn summary(&self) -> String {
-        FIELDS.iter().filter(|f| self.needs(f)).map(|f| {
-            let v = self.get(f.key).unwrap_or("not set");
-            format!("{}: {}", f.header, if f.key == "goal" && v.chars().count() > 160 { format!("{}...", v.chars().take(160).collect::<String>()) } else { v.to_string() })
+        let mut order: Vec<&Field> = FIELDS.iter().filter(|f| self.needs(f)).collect();
+        order.sort_by_key(|f| match f.key { "rights" => 0, "budget" => 1, "goal" => 9, _ => 2 });
+        order.iter().map(|f| {
+            let v = self.get(f.key).unwrap_or("not set").replace('\n', " ");
+            format!("{}: {}", f.header, if v.chars().count() > 200 { format!("{}...", v.chars().take(200).collect::<String>()) } else { v })
         }).collect::<Vec<_>>().join("\n")
     }
 
@@ -314,7 +322,8 @@ pub struct Clarified {
 
 /// Asks until no field is missing, then once for the yes. `ask` shows a dialog and returns its reply. `interactive`
 /// false asks nobody: the spec stays as the request made it and `confirmed` stays false.
-pub fn clarify_with(kind: Kind, request: &str, preset: &Map<String, Value>, interactive: bool, ask: &dyn Fn(&[Question]) -> Reply) -> Result<Clarified, String> {
+pub fn clarify_with(kind: Kind, request: &str, preset: &Map<String, Value>, interactive: bool, ask: &dyn Fn(&[Question]) -> Reply,
+                    confirm: &dyn Fn(&[Question]) -> Reply) -> Result<Clarified, String> {
     let mut spec = Spec::from_request(kind, request, preset);
     if !interactive {
         return Ok(Clarified { spec, asked: 0 });
@@ -339,34 +348,35 @@ pub fn clarify_with(kind: Kind, request: &str, preset: &Map<String, Value>, inte
     if let Some(f) = spec.missing().first() {
         return Err(format!("NOT created. The field {} has no answer.", f.header));
     }
-    let confirm = Question {
-        question: format!("Create this {}?\n{}", kind.name(), spec.summary()),
+    let ask_yes = Question {
+        question: format!("Create this {}: {}?\n{}", kind.name(), spec.title(), spec.summary()),
         header: "Create?".to_string(),
-        options: vec![crate::ask::Opt { label: "Yes, create it".to_string(), description: "write the spec into it and start".to_string() },
-                      crate::ask::Opt { label: "No, do not create".to_string(), description: "nothing is created".to_string() }],
+        // the safe answer comes first, so the cursor opens on it
+        options: vec![crate::ask::Opt { label: "No, do not create".to_string(), description: "nothing is created".to_string() },
+                      crate::ask::Opt { label: "Yes, create it".to_string(), description: "write the spec into it and start".to_string() }],
         multi_select: false,
         allow_text: false,
     };
-    match ask(std::slice::from_ref(&confirm)) {
+    match confirm(std::slice::from_ref(&ask_yes)) {
         Reply::Answers(a) if a.first().map(|a| a.labels.first().map(|l| l.starts_with("Yes")).unwrap_or(false)).unwrap_or(false) => {
             spec.confirmed = true;
             Ok(Clarified { spec, asked })
         }
         Reply::Answers(_) => Err(format!("NOT created. You did not confirm the {}. Nothing was written.", kind.name())),
-        other => Err(format!("NOT created. {}", crate::ask::reply_text(std::slice::from_ref(&confirm), &other).split(". ").next().unwrap_or("no answer"))),
+        other => Err(format!("NOT created. {}", crate::ask::reply_text(std::slice::from_ref(&ask_yes), &other).split(". ").next().unwrap_or("no answer"))),
     }
 }
 
 /// True when this process may put a dialog in front of a person: a dialog folder exists and the caller is no scout and
 /// no worker of a cluster.
 pub fn can_ask() -> bool {
-    crate::ask::available() && !crate::scout::inside() && crate::clusters::current_cluster().is_none()
+    crate::ask::available() && crate::ask::main_turn_here()
 }
 
 /// `clarify_with` and the question dialog of the interface.
 pub fn clarify(ctx: &Ctx, kind: Kind, request: &str, preset: &Map<String, Value>) -> Result<Clarified, String> {
     let timeout = crate::ask::timeout_secs(ctx);
-    clarify_with(kind, request, preset, can_ask(), &|qs| crate::ask::ask_questions(qs, timeout))
+    clarify_with(kind, request, preset, can_ask(), &|qs| crate::ask::ask_questions(qs, timeout), &|qs| crate::ask::ask_confirm(qs, timeout))
 }
 
 /// The hook of the coming `/workflow`: the same questions as for a cluster, plus the approval of each run. The caller
@@ -419,7 +429,7 @@ mod tests {
     fn first_option(log: &RefCell<Vec<Vec<String>>>) -> impl Fn(&[Question]) -> Reply + '_ {
         move |qs| {
             log.borrow_mut().push(qs.iter().map(|q| q.header.clone()).collect());
-            Reply::Answers(qs.iter().map(|q| Answer::chosen(&q.options[0].label)).collect())
+            Reply::Answers(qs.iter().map(|q| Answer::chosen(&q.options[if q.header == "Create?" { 1 } else { 0 }].label)).collect())
         }
     }
 
@@ -431,7 +441,7 @@ mod tests {
         let spec = Spec::from_request(Kind::Cluster, COMPLETE, &no_preset());
         assert!(spec.missing().is_empty(), "{:?}", spec.missing().iter().map(|f| f.key).collect::<Vec<_>>());
         let log = RefCell::new(Vec::new());
-        let done = clarify_with(Kind::Cluster, COMPLETE, &no_preset(), true, &first_option(&log)).unwrap();
+        let done = clarify_with(Kind::Cluster, COMPLETE, &no_preset(), true, &first_option(&log), &first_option(&log)).unwrap();
         assert_eq!(*log.borrow(), vec![vec!["Create?".to_string()]]);
         assert!(done.spec.confirmed && done.asked == 0);
     }
@@ -439,7 +449,7 @@ mod tests {
     #[test]
     fn a_sparse_request_asks_for_every_missing_field_in_rounds_of_six() {
         let log = RefCell::new(Vec::new());
-        let done = clarify_with(Kind::Cluster, "Refactor the code", &no_preset(), true, &first_option(&log)).unwrap();
+        let done = clarify_with(Kind::Cluster, "Refactor the code", &no_preset(), true, &first_option(&log), &first_option(&log)).unwrap();
         let rounds = log.borrow().clone();
         assert_eq!(rounds[0], vec!["Done when", "Abort rule", "Budget", "Max rounds", "Rights", "Models"]);
         assert_eq!(rounds[1], vec!["Results"]);
@@ -453,7 +463,7 @@ mod tests {
     fn only_missing_fields_are_asked() {
         let log = RefCell::new(Vec::new());
         let text = "Refactor the code. Done when the tests pass. Budget 2 EUR.";
-        clarify_with(Kind::Cluster, text, &no_preset(), true, &first_option(&log)).unwrap();
+        clarify_with(Kind::Cluster, text, &no_preset(), true, &first_option(&log), &first_option(&log)).unwrap();
         let first = &log.borrow()[0];
         assert!(!first.contains(&"Done when".to_string()) && !first.contains(&"Budget".to_string()), "{:?}", first);
         assert!(first.contains(&"Abort rule".to_string()));
@@ -491,19 +501,19 @@ mod tests {
 
     #[test]
     fn the_final_yes_is_required() {
-        let say_no = |qs: &[Question]| Reply::Answers(qs.iter().map(|q| Answer::chosen(q.options.last().unwrap().label.as_str())).collect());
-        let e = clarify_with(Kind::Cluster, COMPLETE, &no_preset(), true, &say_no).unwrap_err();
+        let say_no = |qs: &[Question]| Reply::Answers(qs.iter().map(|q| Answer::chosen(q.options[0].label.as_str())).collect());
+        let e = clarify_with(Kind::Cluster, COMPLETE, &no_preset(), true, &say_no, &say_no).unwrap_err();
         assert!(e.starts_with("NOT created") && e.contains("did not confirm"), "{}", e);
         let closed = |_: &[Question]| Reply::Closed;
-        assert!(clarify_with(Kind::Cluster, COMPLETE, &no_preset(), true, &closed).unwrap_err().contains("closed the dialog"));
+        assert!(clarify_with(Kind::Cluster, COMPLETE, &no_preset(), true, &closed, &closed).unwrap_err().contains("closed the dialog"));
         let timed_out = |_: &[Question]| Reply::TimedOut(900);
-        assert!(clarify_with(Kind::Cluster, "Refactor", &no_preset(), true, &timed_out).unwrap_err().contains("did not answer within 900"));
+        assert!(clarify_with(Kind::Cluster, "Refactor", &no_preset(), true, &timed_out, &timed_out).unwrap_err().contains("did not answer within 900"));
     }
 
     #[test]
     fn nobody_is_asked_when_nobody_can_answer() {
         let boom = |_: &[Question]| -> Reply { panic!("must not ask") };
-        let done = clarify_with(Kind::Cluster, "Refactor the code", &no_preset(), false, &boom).unwrap();
+        let done = clarify_with(Kind::Cluster, "Refactor the code", &no_preset(), false, &boom, &boom).unwrap();
         assert!(!done.spec.confirmed);
         assert_eq!(done.spec.goal_text(), "Refactor the code", "an unconfirmed spec leaves the goal alone");
     }
@@ -516,7 +526,7 @@ mod tests {
             "Create?" => Answer::chosen("Yes, create it"),
             _ => Answer::chosen(&q.options[0].label),
         }).collect());
-        let done = clarify_with(Kind::Cluster, "Refactor the code", &no_preset(), true, &ask).unwrap();
+        let done = clarify_with(Kind::Cluster, "Refactor the code", &no_preset(), true, &ask, &ask).unwrap();
         assert_eq!(done.spec.get("budget"), Some("200k tokens"));
         assert_eq!(done.spec.budget_tokens(), Some(200_000));
         assert_eq!(done.spec.get("rights"), Some("network"), "read-only drops out when something else is chosen");
@@ -525,6 +535,41 @@ mod tests {
         assert_eq!(done.spec.to_value()["confirmed"], true);
         let o = Opt { label: "x".into(), description: String::new() };
         assert_eq!(o.label, "x");
+    }
+
+    #[test]
+    fn the_whole_request_is_the_goal_and_the_first_line_is_the_title() {
+        let text = "Port the parser\nto the new grammar\nand keep the old tests.";
+        let spec = Spec::from_request(Kind::Cluster, text, &no_preset());
+        assert_eq!(spec.get("goal"), Some(text));
+        assert_eq!(spec.title(), "Port the parser");
+        assert_eq!(spec.goal_text(), text, "without a yes the goal is still the whole text");
+        let done = clarify_with(Kind::Cluster, &format!("{} Done when tests pass. Stop if stuck. 2 EUR, 3 rounds. Read-only. Using solo profile. Results go to the chat.", text),
+                                &no_preset(), true, &first_option(&RefCell::new(Vec::new())), &first_option(&RefCell::new(Vec::new()))).unwrap();
+        assert!(done.spec.goal_text().starts_with("Port the parser\nto the new grammar\nand keep the old tests."), "{}", done.spec.goal_text());
+    }
+
+    #[test]
+    fn the_summary_shows_every_field_with_rights_and_budget_first_even_after_a_long_text() {
+        let long = format!("Done when {}", "the tests pass and the report is written ".repeat(40));
+        assert!(long.len() > 1600);
+        let request = format!("Refactor it. {}. Budget 3 EUR, at most 5 rounds. Read-only access. Stop if stuck. Using solo profile. Results go to the chat.", long.trim());
+        let spec = Spec::from_request(Kind::Workflow, &request, &no_preset());
+        let summary = spec.summary();
+        assert!(summary.starts_with("Rights: read-only\nBudget: 3 EUR"), "{}", summary);
+        for h in ["Max rounds", "Approval", "Done when", "Abort rule", "Models", "Results", "Goal"] {
+            assert!(summary.contains(&format!("{}:", h)), "{} missing in {}", h, summary);
+        }
+        assert!(summary.lines().all(|l| l.chars().count() <= 215), "a field is cut on its own");
+        // the question the dialog gets parses and starts with the safe answer
+        let seen = RefCell::new(Vec::new());
+        let confirm_q = |qs: &[Question]| { seen.borrow_mut().push(qs[0].clone()); Reply::Closed };
+        let _ = clarify_with(Kind::Workflow, &format!("{}\nApproval: no", request), &no_preset(), true, &first_option(&RefCell::new(Vec::new())), &confirm_q);
+        let q = seen.borrow().last().unwrap().clone();
+        assert_eq!(q.header, "Create?");
+        assert_eq!(q.options[0].label, "No, do not create");
+        assert!(q.question.contains("Rights: read-only") && q.question.contains("Budget: 3 EUR"), "{}", q.question);
+        assert!(crate::ask::parse_questions(&crate::ask::questions_to_value(&[q])).is_ok());
     }
 
     #[test]
@@ -541,7 +586,7 @@ mod tests {
     fn labelled_lines_and_presets_beat_phrases() {
         let text = "Build the report\nDone when: the file exists\nBudget: 4 EUR\nMax runs: 2 runs";
         let spec = Spec::from_request(Kind::Workflow, text, &no_preset());
-        assert_eq!(spec.get("goal"), Some("Build the report"));
+        assert_eq!(spec.title(), "Build the report");
         assert_eq!(spec.get("done"), Some("the file exists"));
         assert_eq!(spec.get("budget"), Some("4 EUR"));
         assert_eq!(spec.get("max_iterations"), Some("2 runs"));

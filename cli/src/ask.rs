@@ -112,7 +112,7 @@ pub fn parse_questions(v: &Value) -> Result<Vec<Question>, String> {
     let mut out = Vec::new();
     for (i, q) in list.iter().enumerate() {
         let n = i + 1;
-        let question = short(q["question"].as_str().unwrap_or(""), 1500);
+        let question = short(q["question"].as_str().unwrap_or(""), 4000);
         if question.is_empty() {
             return Err(format!("question {} has no text", n));
         }
@@ -168,21 +168,59 @@ pub fn available() -> bool {
     dir().is_some()
 }
 
-/// Puts the questions to the person and waits at most `timeout` seconds.
+/// Puts the questions of the model to the person and waits at most `timeout` seconds.
 pub fn ask_questions(qs: &[Question], timeout: u64) -> Reply {
     match dir() {
-        Some(dir) => ask_in(&dir, qs, timeout),
+        Some(dir) => ask_in(&dir, qs, timeout, false),
         None => Reply::Nobody,
     }
 }
 
+/// The final yes of Penelope itself ("Create this cluster?"). Only this call may look like an approval in an editor.
+pub fn ask_confirm(qs: &[Question], timeout: u64) -> Reply {
+    match dir() {
+        Some(dir) => ask_in(&dir, qs, timeout, true),
+        None => Reply::Nobody,
+    }
+}
+
+thread_local! {
+    static SESSION: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+}
+
+/// Runs a block as the turn of one ACP session, so a question it asks reaches the editor in that session.
+pub fn with_session<T>(id: &str, f: impl FnOnce() -> T) -> T {
+    let before = SESSION.with(|s| s.replace(id.to_string()));
+    let out = f();
+    SESSION.with(|s| *s.borrow_mut() = before);
+    out
+}
+
+/// The ACP session of this turn: set on this thread, or inherited by an MCP child as PENELOPE_ACP_SESSION.
+pub fn current_session() -> String {
+    let own = SESSION.with(|s| s.borrow().clone());
+    if own.is_empty() { std::env::var("PENELOPE_ACP_SESSION").unwrap_or_default() } else { own }
+}
+
+/// True for the interactive main turn. A scout, a part of a cluster and a subagent inherit the question folder but
+/// must not put a dialog in front of the person.
+pub fn is_main_turn(scout: bool, cluster: Option<&str>, role: &str) -> bool {
+    !scout && cluster.map(|c| c.trim().is_empty()).unwrap_or(true) && role.trim().is_empty()
+}
+
+/// `is_main_turn` for this process.
+pub fn main_turn_here() -> bool {
+    is_main_turn(crate::scout::inside(), crate::clusters::current_cluster().as_deref(), &std::env::var("PENELOPE_ROLE").unwrap_or_default())
+}
+
 /// The file protocol against one folder. The loop checks every 200 ms for the answer file.
-pub fn ask_in(dir: &Path, qs: &[Question], timeout: u64) -> Reply {
+pub fn ask_in(dir: &Path, qs: &[Question], timeout: u64, confirm: bool) -> Reply {
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     let id = format!("{}-{}", std::process::id(), nanos);
     let (req, ans, tmp) = (dir.join(format!("{}.req", id)), dir.join(format!("{}.ans", id)), dir.join(format!("{}.tmp", id)));
     let body = json!({"kind": "questions", "command": qs.first().map(|q| q.question.clone()).unwrap_or_default(), "cwd": "",
-                      "questions": questions_to_value(qs), "deadline": now_secs() + timeout, "timeout": timeout});
+                      "questions": questions_to_value(qs), "deadline": now_secs() + timeout, "timeout": timeout,
+                      "confirm": confirm, "session": current_session()});
     if fs::write(&tmp, body.to_string()).is_err() || fs::rename(&tmp, &req).is_err() {
         return Reply::Nobody;
     }
@@ -195,9 +233,39 @@ pub fn ask_in(dir: &Path, qs: &[Question], timeout: u64) -> Reply {
         }
         if started.elapsed().as_secs() >= timeout {
             let _ = fs::remove_file(&req);
+            let _ = fs::remove_file(&ans);          // an answer that came in the same moment is late
             return Reply::TimedOut(timeout);
         }
         std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+}
+
+/// True if a process with this id runs. Windows cannot tell cheaply, so it counts as alive and the deadline decides.
+pub fn pid_alive(pid: u32) -> bool {
+    if cfg!(target_os = "linux") {
+        return Path::new("/proc").join(pid.to_string()).exists();
+    }
+    if cfg!(unix) {
+        return std::process::Command::new("kill").args(["-0", &pid.to_string()]).stderr(std::process::Stdio::null()).status().map(|s| s.success()).unwrap_or(true);
+    }
+    true
+}
+
+/// Removes the files of requests nobody waits for: the asking process is gone, or the deadline of a question set passed.
+pub fn drop_stale(dir: &Path) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        let id = name.rsplit_once('.').map(|(a, _)| a).unwrap_or(&name);
+        let pid: Option<u32> = id.split_once('-').and_then(|(p, _)| p.parse().ok());        // ids are PID-NANOS
+        let mut stale = pid.map(|p| !pid_alive(p)).unwrap_or(false);
+        if name.ends_with(".req") && !stale {
+            let v: Value = fs::read_to_string(e.path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+            stale = v["deadline"].as_u64().map(|d| d > 0 && d < now_secs()).unwrap_or(false);
+        }
+        if stale {
+            let _ = fs::remove_file(e.path());
+        }
     }
 }
 
@@ -254,13 +322,15 @@ pub struct Dialog {
     /// Unix seconds at which the asker gives up.
     pub deadline: u64,
     pub warn: String,
+    /// First visible row of a long question text.
+    pub scroll: usize,
 }
 
 impl Dialog {
     pub fn new(qs: Vec<Question>, deadline: u64) -> Dialog {
         let n = qs.len();
         let picked = qs.iter().map(|q| vec![false; q.options.len()]).collect();
-        Dialog { qs, tab: 0, cursor: vec![0; n], picked, text: vec![String::new(); n], typing: false, deadline, warn: String::new() }
+        Dialog { qs, tab: 0, cursor: vec![0; n], picked, text: vec![String::new(); n], typing: false, deadline, warn: String::new(), scroll: 0 }
     }
 
     /// Builds the dialog from a request file written by `ask_in`.
@@ -307,6 +377,7 @@ impl Dialog {
 
     fn go(&mut self, tab: usize) {
         self.tab = tab.min(self.qs.len());
+        self.scroll = 0;
         self.typing = false;
         self.warn.clear();
     }
@@ -315,6 +386,11 @@ impl Dialog {
     pub fn key(&mut self, code: KeyCode) -> Outcome {
         if code == KeyCode::Esc {
             return Outcome::Close;
+        }
+        match code {
+            KeyCode::PageDown => { self.scroll += 3; return Outcome::Continue; }
+            KeyCode::PageUp => { self.scroll = self.scroll.saturating_sub(3); return Outcome::Continue; }
+            _ => {}
         }
         if self.on_summary() {
             match code {
@@ -362,7 +438,7 @@ impl Dialog {
             KeyCode::Down => self.cursor[i] = (self.cursor[i] + 1).min(self.rows(i) - 1),
             KeyCode::Right => self.go(self.tab + 1),
             KeyCode::Left => self.go(self.tab.saturating_sub(1)),
-            KeyCode::Char(c) if c.is_ascii_digit() && c != '0' && (c as usize - '0' as usize) <= n_opts => {
+            KeyCode::Char(c) if c.is_ascii_digit() && c != '0' && (c as usize - '0' as usize) <= n_opts && Some(self.cursor[i]) != text_row => {
                 let k = c as usize - '1' as usize;
                 self.pick(i, k);
                 if !self.qs[i].multi_select { self.go(self.tab + 1); }
@@ -518,6 +594,55 @@ mod tests {
     }
 
     #[test]
+    fn digits_type_once_the_text_row_is_active_and_still_choose_on_an_option_row() {
+        let mut d = Dialog::new(parse_questions(&json!([q(1, false, true)])).unwrap(), now_secs() + 100);
+        for _ in 0..3 { d.key(KeyCode::Down); }
+        assert_eq!(d.cursor[0], 3);
+        d.key(KeyCode::Char('2'));
+        assert!(d.typing && d.text[0] == "2", "a digit on the text row starts the free answer");
+        for c in "0 days".chars() { d.key(KeyCode::Char(c)); }
+        assert_eq!(d.text[0], "20 days");
+        d.key(KeyCode::Enter);
+        assert_eq!(d.answers()[0], Answer::typed("20 days"));
+        let mut e = Dialog::new(parse_questions(&json!([q(1, false, true)])).unwrap(), now_secs() + 100);
+        e.key(KeyCode::Char('2'));
+        assert_eq!(e.answers()[0], Answer::chosen("beta"), "on an option row a digit still chooses");
+    }
+
+    #[test]
+    fn stale_request_files_are_dropped() {
+        let dir = std::env::temp_dir().join(format!("penelope-stale-{}-{:?}", std::process::id(), std::thread::current().id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let me = std::process::id();
+        let live = format!("{{\"deadline\": {}}}", now_secs() + 600);
+        let past = format!("{{\"deadline\": {}}}", now_secs() - 5);
+        fs::write(dir.join(format!("{}-1.req", me)), live).unwrap();
+        fs::write(dir.join(format!("{}-2.req", me)), past).unwrap();
+        fs::write(dir.join("x.req"), "{}").unwrap();
+        #[cfg(target_os = "linux")]
+        fs::write(dir.join("4294967294-1.req"), "{}").unwrap();
+        drop_stale(&dir);
+        assert!(dir.join(format!("{}-1.req", me)).exists(), "a live asker with time left stays");
+        assert!(!dir.join(format!("{}-2.req", me)).exists(), "a deadline in the past goes");
+        assert!(dir.join("x.req").exists(), "a request without a process id is left alone");
+        #[cfg(target_os = "linux")]
+        assert!(!dir.join("4294967294-1.req").exists(), "a dead process goes");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_long_question_text_scrolls_and_the_page_keys_never_answer() {
+        let mut d = dialog(false);
+        d.key(KeyCode::PageDown);
+        assert_eq!(d.scroll, 3);
+        d.key(KeyCode::PageUp);
+        d.key(KeyCode::PageUp);
+        assert_eq!(d.scroll, 0);
+        assert!(!d.answered(0));
+    }
+
+    #[test]
     fn the_timeout_comes_from_the_configuration_and_defaults_to_900_seconds() {
         let mut ctx = Ctx { root: std::env::temp_dir(), cfg: json!({}) };
         assert_eq!(timeout_secs(&ctx), 900);
@@ -536,7 +661,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let qs = parse_questions(&json!([q(1, false, true)])).unwrap();
-        assert_eq!(ask_in(&dir, &qs, 1), Reply::TimedOut(1));
+        assert_eq!(ask_in(&dir, &qs, 1, false), Reply::TimedOut(1));
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 0, "the request file is removed");
         let d2 = dir.clone();
         let helper = std::thread::spawn(move || {
@@ -554,7 +679,7 @@ mod tests {
                 }
             }
         });
-        assert_eq!(ask_in(&dir, &qs, 30), Reply::Answers(vec![Answer::chosen("beta")]));
+        assert_eq!(ask_in(&dir, &qs, 30, false), Reply::Answers(vec![Answer::chosen("beta")]));
         helper.join().unwrap();
         let _ = fs::remove_dir_all(&dir);
     }

@@ -327,8 +327,8 @@ impl App {
     pub fn new(ctx: Ctx) -> App {
         let (tx, rx) = channel();
         let approve_dir = ctx.root.join("approvals");
-        let _ = fs::remove_dir_all(&approve_dir);
         let _ = fs::create_dir_all(&approve_dir);
+        crate::ask::drop_stale(&approve_dir);          // files of dead processes and of questions past their deadline
         let history = fs::read_to_string(ctx.root.join("history.jsonl")).unwrap_or_default().lines()
             .filter_map(|l| serde_json::from_str::<String>(l).ok()).collect::<Vec<_>>();
         let history = history[history.len().saturating_sub(200)..].to_vec();

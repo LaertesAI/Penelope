@@ -44,7 +44,12 @@ pub fn draw(f: &mut Frame, area: Rect, d: &Dialog, now: u64) {
         let q = &d.qs[d.tab];
         (wrap_plain(&q.question, inner_w), q.options.len() * 2 + usize::from(q.allow_text))
     };
-    let inner = dialog(f, area, "The main model asks", w, (rows.len() + option_rows) as u16 + 10);
+    // A long question text scrolls with PgUp and PgDn. The options never scroll away.
+    let max_inner = area.height.saturating_sub(6) as usize;
+    let avail = max_inner.saturating_sub(option_rows + 6).max(1);
+    let shown = rows.len().min(avail);
+    let start = d.scroll.min(rows.len().saturating_sub(shown));
+    let inner = dialog(f, area, "The main model asks", w, (shown + option_rows) as u16 + 10);
     let strip = tabs(d);
     put(f, inner, inner.x, inner.y, &clip(&strip, inner.width as usize), on(CLAY, RAISED));
     let left = remaining_text(d.remaining(now));
@@ -63,8 +68,12 @@ pub fn draw(f: &mut Frame, area: Rect, d: &Dialog, now: u64) {
         }
     } else {
         let q = &d.qs[d.tab];
-        for row in &rows {
+        for row in rows.iter().skip(start).take(shown) {
             put(f, inner, inner.x, y, row, on(PAPER, RAISED));
+            y += 1;
+        }
+        if rows.len() > shown {
+            put(f, inner, inner.x, y, &format!("lines {} to {} of {} · pgup and pgdn scroll", start + 1, start + shown, rows.len()), on(DIM, RAISED));
             y += 1;
         }
         y += 1;

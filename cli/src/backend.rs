@@ -287,6 +287,10 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
         if let Ok(dir) = std::env::var("PENELOPE_ASK_DIR") {
             servers["penelope"]["env"]["PENELOPE_ASK_DIR"] = json!(dir);           // the ACP server answers the question dialog
         }
+        let acp_session = crate::ask::current_session();
+        if !acp_session.is_empty() {
+            servers["penelope"]["env"]["PENELOPE_ACP_SESSION"] = json!(acp_session);   // a question goes to this editor session
+        }
         let mut allowed: Vec<String> = mcp::main_tools(ctx).iter().map(|t| format!("mcp__penelope__{}", t)).collect();
         for t in crate::forge::specs(ctx) {          // a tool Penelope wrote is offered to the claude command too
             if let Some(name) = t["name"].as_str() { allowed.push(format!("mcp__penelope__{}", name)); }

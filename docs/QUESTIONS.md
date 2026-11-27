@@ -54,6 +54,8 @@ One question is open at a time. The top row is a tab strip of the headers with a
 | Space | In a multi-select question, toggle the option under the cursor. |
 | Enter | Choose the option under the cursor and move on. In a multi-select question it moves on once one option is chosen. On the text row it starts typing. |
 | Any letter | Starts the free answer when `allow_text` is on. |
+| Digit on the text row | Starts the free answer with that digit. Move down to the text row first (or press Enter or Space there), then digits type instead of choosing option 1 to 6. |
+| PgUp, PgDn | Scroll a long question text. The options never scroll away. |
 | Tab, Right | Next question. |
 | Shift+Tab, Left | Previous question. |
 | Enter on the summary | Sends all answers. A question without an answer sends the person back to it. |
@@ -67,7 +69,9 @@ The answers stay in the transcript as one `answered` line per question.
 
 ## ACP
 
-`penelope acp` sends each question to the editor as a `session/request_permission` request. The options are the answers, and the last option is `Other (answer in the chat)`, `Skip` or `Done`. A multi-select question repeats the request until the person picks `Done`. A free typed answer is not possible there, so the person writes it in the chat.
+`penelope acp` sends each question to the editor as a `session/request_permission` request. The options are the answers, and the last option is `Other (answer in the chat)`, `Skip` or `Done`. A multi-select question repeats the request until the person picks `Done`, at most 12 rounds. An unknown or repeated option id is ignored.
+
+Every option of a model question has the kind `reject_once` and the title starts with `Question from the model:`, so an editor never offers it as Allow. Only the create confirmation of Penelope itself has an `allow_once` yes. When Penelope gives up waiting, it stops asking the editor and drops late answers. A free typed answer is not possible there, so the person writes it in the chat.
 
 If the editor does not know the method, Penelope posts the questions as a chat message, tells the model to end its turn, and the answers arrive as the next prompt.
 
@@ -102,7 +106,7 @@ A complete request asks no field question. It still gets the final yes.
 
 ### Rounds and the final yes
 
-Missing fields are asked in rounds of at most 6 questions, so a sparse request needs two rounds. Then Penelope shows the whole spec once and asks `Create this cluster?` with `Yes, create it` and `No, do not create`. Anything but yes creates nothing. A closed dialog or a timeout creates nothing.
+Missing fields are asked in rounds of at most 6 questions, so a sparse request needs two rounds. Then Penelope shows the whole spec once, rights and budget first and every field cut at 200 characters on its own, and asks `Create this cluster?`. The cursor opens on `No, do not create`; `Yes, create it` is the second option. Anything but yes creates nothing. A closed dialog or a timeout creates nothing.
 
 ### Where the spec goes
 
@@ -116,10 +120,10 @@ Missing fields are asked in rounds of at most 6 questions, so a sparse request n
 - The tool `cluster_start`, when the model creates a cluster.
 - `/factory new NAME --profile P ...` in the full screen interface, unless `--dry` is set.
 
-Penelope asks nobody when nobody can answer: in a timer, in a script, in an eval run, in a scout and inside a cluster worker. The request then runs as before, without a spec.
+Penelope asks nobody when nobody can answer: in a timer, in a script, in an eval run, in a scout, inside a cluster worker and in a subagent. The tool `ask_user` with `questions` is refused there with the same rule. The request then runs as before, without a spec.
 
 ## Not enforced yet
 
 - A budget in tokens is stored in the spec and in the goal text. The cluster runner only counts euro through the profile.
-- `approve each run` is stored. The timer of a factory does not wait for it.
-- `max rounds` and the abort rule reach the workers as text in the goal. The cluster runner does not read them as settings.
+- A factory whose spec says `approve each run: yes` is refused at `factory install --yes`, because a timer starts runs alone. `/factory list` shows the stored spec. The manual `factory run` is your yes.
+- Rights, abort rule, max rounds and results are not enforced by `clusters.rs` yet (planned as C2b). They reach the workers as text in the goal. The cluster runner does not read them as settings.
