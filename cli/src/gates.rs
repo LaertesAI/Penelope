@@ -249,7 +249,7 @@ fn anchored(ctx: &Ctx, risk: &Risk, name: &str, args: &Value) -> bool {
             s("url")
         }
         "web_search" => s("query"),
-        "research" => s("question"),
+        "research" | "deep_research" => s("question"),
         "memory_note" | "memory_forget" => {
             if !s("path").is_empty() {
                 more.push(s("path"));
@@ -827,7 +827,7 @@ pub fn risk(ctx: &Ctx, name: &str, args: &Value) -> Option<Risk> {
             get(&url, headers, &method)
         }
         "fetch" => get(&arg(args, "url"), &Value::Null, "fetch"),
-        "web_search" | "research" => holds_secret(&format!("{} {}", arg(args, "query"), arg(args, "question")))
+        "web_search" | "research" | "deep_research" => holds_secret(&format!("{} {}", arg(args, "query"), arg(args, "question")))
             .then(|| Risk { class: "network_send", what: format!("{} with a secret in the query", name) }),
         "pr_create" => Some(Risk { class: "network_send", what: format!("open a pull request \"{}\" with its body", arg(args, "title")) }),
         "memory_note" | "memory_forget" => Some(Risk { class: "memory", what: format!("{} \"{}\"", name, arg(args, "text").chars().take(80).collect::<String>()) }),
@@ -887,7 +887,7 @@ pub fn level_of(ctx: &Ctx, name: &str, args: &Value) -> u8 {
         }
         "grep" | "git_diff" => if level0_files(ctx).is_empty() { 1 } else { 0 },
         "run" => if crate::tools::is_safe(&arg(args, "command")) && level0_files(ctx).is_empty() { 1 } else { 0 },
-        "web_search" | "research" | "skill" | "session_search" | "computer" | "agent" | "cluster_ask" | "cluster_dump" | "cluster_status"
+        "web_search" | "research" | "deep_research" | "skill" | "session_search" | "computer" | "agent" | "cluster_ask" | "cluster_dump" | "cluster_status"
         | "mcp_servers" => 0,
         "clipboard" => if args["action"].as_str() == Some("read") { 0 } else { 1 },
         _ if is_forge(ctx, name) => 0,

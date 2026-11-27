@@ -250,9 +250,34 @@ fn startpage(query: &str) -> Result<Vec<Hit>, String> {
     Ok(hits)
 }
 
-fn searxng(cfg: &Value, query: &str) -> Result<Vec<Hit>, String> {
+const LOCAL_SEARXNG: &str = "http://localhost:8888";
+
+/// True when a SearXNG answers on http://localhost:8888. Checked once per process: a refused connection costs
+/// microseconds, and an answer within one second counts.
+fn local_searxng() -> bool {
+    static FOUND: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FOUND.get_or_init(|| {
+        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 8888));
+        if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).is_err() { return false; }
+        match crate::net::agent(1).get(&format!("{}/", LOCAL_SEARXNG)).call() {
+            Ok(_) | Err(ureq::Error::Status(_, _)) => true,
+            Err(_) => false,
+        }
+    })
+}
+
+/// The SearXNG instances set in the config: `url`, `urls` and `searxng_url`.
+fn searxng_bases(cfg: &Value) -> Vec<String> {
     let mut bases: Vec<String> = cfg["urls"].as_array().map(|a| a.iter().filter_map(|u| u.as_str().map(str::to_string)).collect()).unwrap_or_default();
-    if let Some(one) = cfg["url"].as_str().filter(|u| !u.is_empty()) { bases.insert(0, one.to_string()); }
+    for key in ["searxng_url", "url"] {
+        if let Some(one) = cfg[key].as_str().filter(|u| !u.is_empty()) { bases.insert(0, one.to_string()); }
+    }
+    bases
+}
+
+fn searxng(cfg: &Value, query: &str) -> Result<Vec<Hit>, String> {
+    let mut bases = searxng_bases(cfg);
+    if bases.is_empty() && local_searxng() { bases.push(LOCAL_SEARXNG.to_string()); }
     if bases.is_empty() { return Err("\"search\": {\"kind\": \"searxng\"} needs a \"url\" or a \"urls\" list".to_string()); }
     let lang = cfg["language"].as_str().unwrap_or("en");
     let safe = if cfg["safe"].as_bool().unwrap_or(true) { "1" } else { "0" };
@@ -514,8 +539,7 @@ pub fn sources(ctx: &Ctx) -> Vec<String> {
             if has_key(ctx, "exa_api_key_env", "exa", "EXA_API_KEY") { row.push("exa".to_string()); }
             if has_key(ctx, "api_key_env", "brave", "BRAVE_API_KEY") { row.push("brave".to_string()); }
             if has_key(ctx, "firecrawl_api_key_env", "firecrawl", "FIRECRAWL_API_KEY") { row.push("firecrawl".to_string()); }
-            if cfg["url"].as_str().map(|u| !u.is_empty()).unwrap_or(false)
-                || cfg["urls"].as_array().map(|a| !a.is_empty()).unwrap_or(false) { row.push("searxng".to_string()); }
+            if !searxng_bases(cfg).is_empty() || local_searxng() { row.push("searxng".to_string()); }
             row.push("startpage".to_string());
             row.push("duckduckgo".to_string());
             row.push("bing".to_string());
@@ -773,6 +797,13 @@ pub fn format_hits(hits: &[Hit], query: &str, engines: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn searxng_url_adds_the_engine_and_the_local_default_is_a_fallback() {
+        let cfg = serde_json::json!({"searxng_url": "http://localhost:9999/", "url": "", "urls": ["http://other.example"]});
+        assert_eq!(searxng_bases(&cfg), vec!["http://localhost:9999/".to_string(), "http://other.example".to_string()]);
+        assert!(searxng_bases(&serde_json::json!({"searxng_url": "", "url": ""})).is_empty());
+    }
 
     #[test]
     fn encodes_and_decodes() {
