@@ -198,3 +198,7 @@ Vor dem Lauf. Die Werkzeugliste ist 18,7 % der Eingabe (22.552 Byte, etwa 5.638 
 ## K7: ein Teil geht direkt an large
 
 Vor dem Lauf. Die 28 Entwicklungsaufgaben haben 1 unabhängigen Teil. Regel: ein Teil geht direkt an large; der Cluster erst ab 3 Teilen. Die Eval-Route `cluster` prüft die Worker-Zahl des Profils und ruft bei weniger als 3 den large-Pfad. Kein neuer bezahlter Lauf: der large-Basislauf ist die Messung.
+
+## Ergebnis K9
+
+8/28, 1,21 EUR, 1.658 s, 680.235 Eingabe, 192.755 Ausgabe. Treffer gleich, EUR -51,8 %, Zeit -67,6 %. Behalten. Eurykleia auf diesem Lauf: 309 Aufrufe, 9 Werkzeugfehler, 0 Meldungen, TPR 0,0.
