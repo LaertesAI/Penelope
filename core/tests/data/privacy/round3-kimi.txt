@@ -1,0 +1,738 @@
+**Rechnung**
+
+Nordwippe Logistik GmbH  
+⟦address|Fennstraße 18⟧ | ⟦address|24159 Moorbergen⟧  
+HRB 748213, Amtsgericht Lübeck | USt-IdNr. DE918273645
+
+Rechnungsnummer: RE-2026-04117  
+Kundennummer: KD-88304  
+Rechnungsdatum: 12.11.2026  
+Leistungszeitraum: 02.11.–06.11.2026
+
+An Herrn ⟦name|Tadeusz Brzęczkowski⟧  
+⟦address|Koppelweg 27b⟧  
+⟦address|18107 Bruchstedt⟧
+
+| Artikelnummer | Leistung | Menge | Betrag |
+|---|---|---:|---:|
+| LOG-SPER-04 | Sperrguttransport Modul „NordTrag“ | 2 | 386,00 € |
+| LOG-RAM-11 | Rammpuffer-Sicherung | 4 | 96,00 € |
+| LOG-NAC-02 | Nachtzuschlag, 03.11.2026, 22:40 Uhr | 1 | 58,50 € |
+
+Zwischensumme: 540,50 €  
+19 % Umsatzsteuer: 102,70 €  
+**Rechnungsbetrag: 643,20 €**
+
+Zahlbar ohne Abzug bis 26.11.2026.  
+IBAN: ⟦iban⟧  
+BIC: NORDDE7X
+
+Rückfragen beantwortet ⟦name|Nils Odermann⟧ unter ⟦phone|+49 431 770 18 26⟧ oder ⟦email|n.odermann@example.de⟧.
+
+Mit freundlichen Grüßen  
+Nordwippe Logistik GmbH
+
+=====
+
+**Zweite Mahnung**
+
+Klarfunk Systeme AG  
+⟦address|Signalring 6⟧, ⟦address|20354 Neufenn⟧  
+USt-IdNr. DE304719825
+
+An Frau ⟦name|Aissata N’Diaye⟧  
+⟦address|Wiesenpfad 91⟧  
+⟦address|30519 Wickenrode⟧  
+Kundennummer: K-104982
+
+Mahnung vom 24.11.2026
+
+Trotz unserer Zahlungserinnerung vom 06.11.2026 ist die Rechnung RE-77821 vom 09.10.2026 weiterhin offen. Der ursprüngliche Rechnungsbetrag beträgt 1.248,90 €. Einschließlich Mahnpauschale und Verzugszinsen ergibt sich ein Gesamtbetrag von **1.259,34 €**.
+
+Bitte überweisen Sie diesen Betrag spätestens bis **04.12.2026, 18:00 Uhr**, unter Angabe der Rechnungsnummer. Sollte die Zahlung bereits veranlasst worden sein, betrachten Sie dieses Schreiben als gegenstandslos. Eine Ratenzahlung können wir bis zum 27.11.2026 schriftlich vereinbaren; danach wäre die weitere Bearbeitung durch unser Forderungsmanagement vorgesehen.
+
+Ihre Ansprechpartnerin ist i. A. ⟦name|Leopoldine von Krockow⟧, erreichbar montags bis donnerstags von 09:00 bis 15:30 Uhr unter ⟦phone|040 / 61 28 44 09⟧ oder ⟦email|leopoldine.krockow@example.de⟧.
+
+IBAN: ⟦iban⟧  
+BIC: KLARDE8M
+
+Mit freundlichen Grüßen  
+Klarfunk Systeme AG – Forderungsmanagement
+
+=====
+
+**Lieferschein LS-26-11842**
+
+Aussteller: Werkpunkt Verpackungstechnik GmbH  
+⟦address|Industriesteg 44⟧, ⟦address|39218 Kaltbach⟧  
+USt-IdNr. DE662014389
+
+Empfänger: Viora Medizinbedarf GmbH  
+z. Hd. ⟦name|Nguyễn Minh Anh⟧  
+⟦address|Rosenkai 12⟧  
+⟦address|01067 Elbbrück⟧
+
+Lieferdatum: 19.11.2026  
+Geplante Ankunft: 07:30 Uhr  
+Kundennummer: VM-44028  
+Referenzauftrag: AU-2026-9904
+
+| Position | Artikelnummer | Bezeichnung | Menge |
+|---:|---|---|---:|
+| 1 | VP-TRAY-80 | Steriltablett „VioTray 80“ | 24 Stück |
+| 2 | VP-FOL-16 | Versiegelungsfolie, Rolle 160 mm | 18 Rollen |
+| 3 | VP-ETI-09 | Chargenetiketten, neutral | 5.000 Stück |
+| 4 | VP-BOX-03 | Rücksendekarton, faltbar | 30 Stück |
+
+Die Folienrollen sind chargenrein verpackt. Kartons der Position 4 bitte getrennt lagern. Eine beschädigte Umverpackung wurde bei der Abholung nicht festgestellt.
+
+Disposition: ⟦name|Ercan Yıldırım⟧, ⟦phone|0171 460 28 73⟧  
+Wareneingang bestätigt am 19.11.2026 um 08:05 Uhr durch ⟦name|Minh Anh⟧.
+
+Bemerkung: Palette NWP-882 wird am 23.11.2026 gegen 11:00 Uhr zurückgeholt. Rückfragen an ⟦email|wareneingang@example.de⟧.
+
+=====
+
+**Angebot: Archivsystem und Einführung**
+
+Blauquell Softwarehaus GmbH  
+⟦address|Quartiershof 8⟧ | ⟦address|44135 Brunnenau⟧  
+HRB 529184 | USt-IdNr. DE771209346
+
+Angebot AN-2026-0648 vom 20.11.2026  
+Gültig bis 18.12.2026
+
+Sehr geehrte Frau Dr. ⟦name|Carlotta von und zu Eiben⟧,
+
+gern bieten wir Ihnen die Einführung von **RegioArchiv 360** für Ihre drei Standorte an.
+
+| Artikelnummer | Leistung | Preis netto |
+|---|---|---:|
+| RA-LIZ-30 | 30 Named-User-Lizenzen, zwölf Monate | 4.860,00 € |
+| RA-MIG-02 | Migration zweier Altarchive | 2.400,00 € |
+| RA-SCH-05 | Fünf Remote-Schulungen à 90 Minuten | 975,00 € |
+| RA-SUP-12 | Priorisierter Support, zwölf Monate | 1.188,00 € |
+
+Gesamt netto: 9.423,00 €  
+19 % Umsatzsteuer: 1.790,37 €  
+Gesamt brutto: **11.213,37 €**
+
+Die Migration erfolgt voraussichtlich zwischen dem 11.01. und 29.01.2027. Für die Abnahme kommt ⟦name|Tjark Ehlers⟧ jeweils dienstags um 14:00 Uhr zu einem kurzen Statusgespräch hinzu. Eine Anbindung an Ihr bestehendes Rechnungswesen ist enthalten; individuelle Auswertungen sind nicht Bestandteil dieses Angebots.
+
+Bei Fragen erreichen Sie ⟦name|Enzo Belluomo⟧ unter ⟦phone|+49 (0)231 884 21 60⟧ oder ⟦email|enzo.belluomo@example.de⟧.
+
+Mit freundlichen Grüßen  
+⟦name|Enzo Belluomo⟧  
+Vertrieb Unternehmenslösungen
+
+=====
+
+**Arbeitsvertrag**
+
+zwischen der
+
+Fährlicht Gebäudetechnik GmbH,  
+⟦address|Werftbogen 31⟧, ⟦address|27568 Dockhausen⟧,  
+HRB 611820, USt-IdNr. DE520418763,
+
+– nachfolgend „Arbeitgeber“ –
+
+und
+
+Herrn ⟦name|Günther Siegmar Albrecht⟧,  
+geboren am ⟦birth_date|08.04.1987⟧,  
+wohnhaft ⟦address|Heidkoppel 5c⟧, ⟦address|27612 Sandhagen⟧,
+
+– nachfolgend „Arbeitnehmer“ –.
+
+**§ 1 Beginn und Tätigkeit**  
+Das Arbeitsverhältnis beginnt am 01.02.2027 unbefristet. Der Arbeitnehmer wird als Servicetechniker für das Produktprogramm „ThermoKreis“ eingesetzt. Die ersten sechs Monate gelten als Probezeit.
+
+**§ 2 Arbeitszeit**  
+Die regelmäßige Arbeitszeit beträgt 38 Stunden wöchentlich. Die übliche Arbeitszeit liegt zwischen 07:00 und 16:30 Uhr. Bereitschaftseinsätze werden gesondert angekündigt und nach der gültigen Zuschlagsregelung vergütet.
+
+**§ 3 Vergütung**  
+Das monatliche Bruttogehalt beträgt 4.180,00 €, zahlbar jeweils zum 25. Kalendertag. Die Auszahlung erfolgt auf folgendes Konto:  
+IBAN: ⟦iban⟧  
+BIC: FAEHDE6D  
+Persönliche steuerliche Identifikationsnummer: ⟦tax_id⟧
+
+**§ 4 Urlaub und Nebentätigkeiten**  
+Der jährliche Urlaubsanspruch beträgt 30 Arbeitstage. Entgeltliche Nebentätigkeiten sind vor Aufnahme anzuzeigen, soweit sie Arbeitsleistung oder berechtigte geschäftliche Interessen berühren können.
+
+**§ 5 Vertraulichkeit**  
+Technische Unterlagen, Kundenlisten und Zugangsdaten sind vertraulich zu behandeln. Diese Pflicht besteht auch nach Beendigung des Arbeitsverhältnisses.
+
+Personalfragen beantwortet Frau ⟦name|Friederike Holsten-Löbbeck⟧ unter ⟦phone|0471 330 82 17⟧.
+
+Dockhausen, 18.11.2026
+
+⟦name|Günther Siegmar Albrecht⟧  
+⟦name|Benedikt Strohmeyer⟧, Geschäftsführung
+
+=====
+
+**Mietvertrag über eine Gewerbefl che**
+
+Zwischen Herrn ⟦name|Friedhelm von Prittwitz⟧,  
+⟦address|Schlossredder 14⟧, ⟦address|22941 Ahrensfeld⟧,  
+– Vermieter –
+
+und Frau ⟦name|Aylin Demir⟧ sowie Herrn ⟦name|Oluwaseun Adeyemi⟧,  
+gemeinsam betreibend die Ateliergemeinschaft „Fadenraum“,  
+⟦address|Werkstraße 22⟧, ⟦address|22767 Altenwerder-Neu⟧,  
+– Mieter –
+
+wird folgender Mietvertrag geschlossen:
+
+1. **Mietobjekt:** Die Werkstattfläche im Erdgeschoss des Objekts ⟦address|Tuchmachergang 9⟧, ⟦address|20457 Hammerfurt⟧, umfasst 86 m², einen separaten Lagerraum sowie zwei Stellplätze. Die Übergabe erfolgt am 01.01.2027 um 10:00 Uhr.
+
+2. **Laufzeit:** Das Mietverhältnis beginnt am 01.01.2027 und läuft zunächst bis 31.12.2028. Es verlängert sich anschließend jeweils um zwölf Monate, sofern nicht sechs Monate vor Ablauf gekündigt wird.
+
+3. **Miete:** Die monatliche Nettokaltmiete beträgt 1.290,00 € zuzüglich 240,00 € Betriebskostenvorauszahlung und 19 % Umsatzsteuer. Zahlungstermin ist jeweils der dritte Werktag eines Monats.  
+IBAN: ⟦iban⟧  
+BIC: HAMMDE5Q
+
+4. **Kaution:** Die Mieter hinterlegen 3.870,00 €. Die Kaution wird getrennt vom Vermögen des Vermieters verwahrt.
+
+5. **Nutzung:** Zulässig sind Textilgestaltung, Lagerung und Abholung nach Termin. Maschinen mit erhöhtem Schallpegel dürfen werktags nur zwischen 08:00 und 18:00 Uhr betrieben werden.
+
+Terminabstimmungen: ⟦name|Aylin Demir⟧, ⟦phone|0176 / 88 42 19 30⟧, ⟦email|aylin.demir@example.de⟧.  
+Verwaltung: ⟦name|Friedhelm von Prittwitz⟧, ⟦phone|+49 4102 55 18 02⟧.
+
+Hammerfurt, 16.11.2026
+
+Unterschriften:  
+⟦name|Friedhelm von Prittwitz⟧  
+⟦name|Aylin Demir⟧  
+⟦name|Oluwaseun Adeyemi⟧
+
+=====
+
+**Kündigung des Wartungsvertrags**
+
+Rasterpunkt Automatisierung GmbH  
+⟦address|Kolonnenweg 73⟧  
+⟦address|90411 Schafhof-Nord⟧  
+Kundennummer: RP-55018
+
+An  
+Hafenlicht Sensorik AG  
+z. Hd. Herrn ⟦name|Burkhardt Ziegler⟧  
+⟦address|Peilstieg 2⟧  
+⟦address|28195 Neuhafen⟧
+
+25.11.2026
+
+**Kündigung des Wartungsvertrags WV-2019-084 zum 31.03.2027**
+
+Sehr geehrter Herr ⟦name|Ziegler⟧,
+
+hiermit kündigen wir den oben genannten Wartungsvertrag für die Sensorreihe „DockSense S4“ ordentlich und fristgerecht zum 31.03.2027. Die Kündigung umfasst sämtliche Vertragsmodule einschließlich des erweiterten Wochenendsupports. Die separat vereinbarte Kalibrierung vom 17.12.2026 um 13:30 Uhr bleibt davon unberührt und soll wie geplant stattfinden.
+
+Bitte bestätigen Sie uns den Beendigungstermin bis zum 04.12.2026 schriftlich. Teilen Sie uns außerdem mit, bis wann wir Konfigurationen und Wartungsnachweise exportieren können. Offene Positionen werden wir anhand der Abschlussrechnung prüfen; vorausbezahlte Leistungen nach dem Beendigungstermin erwarten wir entsprechend erstattet.
+
+Ihre Unterlagen erreichen uns per Post oder an ⟦email|k.wójcik@example.de⟧. Für technische Rückfragen steht ⟦name|Michail Rogow⟧ unter ⟦phone|0911 72 44 80-36⟧ zur Verfügung.
+
+Mit freundlichen Grüßen
+
+⟦name|Krystyna Wójcik⟧  
+Leitung Technischer Einkauf
+
+=====
+
+**Abmahnung**
+
+Ostfunk Kommunikationstechnik GmbH  
+⟦address|Deichkrone 40⟧, ⟦address|26725 Sielhafen⟧
+
+An Herrn ⟦name|Aram Petrosyan⟧  
+⟦address|Rugenblick 11a⟧  
+⟦address|26789 Neuleer⟧
+
+Datum: 21.11.2026
+
+Sehr geehrter Herr ⟦name|Petrosyan⟧,
+
+am 17.11.2026 sollten Sie gemäß Dienstplan die Frühschicht im Störungsdienst um 06:00 Uhr übernehmen. Sie erschienen ohne vorherige Mitteilung erst um 07:35 Uhr. Ein vergleichbarer Fall wurde bereits am 03.11.2026 dokumentiert; damals begann Ihre Tätigkeit erst um 06:50 Uhr. Durch die verspäteten Übergaben verzögerten sich jeweils die Disposition und zwei vereinbarte Kundentermine.
+
+Sie wurden am 04.11.2026 ausdrücklich darauf hingewiesen, Verspätungen unverzüglich der Leitstelle zu melden. Gleichwohl erfolgte am 17.11.2026 weder ein Anruf noch eine Nachricht. Den Hergang bestätigte die Schichtleiterin ⟦name|Nadeschda Wassiljewna Saripowa⟧ in ihrer Dienstnotiz vom gleichen Tag.
+
+Wir mahnen dieses Verhalten hiermit formell ab. Sie sind verpflichtet, Dienstzeiten einzuhalten und Verhinderungen unverzüglich anzuzeigen. Eine Wiederholung kann weitere arbeitsrechtliche Maßnahmen bis hin zur Kündigung zur Folge haben. Eine Stellungnahme können Sie bis 28.11.2026, 16:00 Uhr, an Frau ⟦name|Dorothea Knüppel-Hansen⟧ richten: ⟦email|d.knueppel@example.de⟧, ⟦phone|04931 62 18 90⟧.
+
+Mit freundlichen Grüßen
+
+⟦name|Dorothea Knüppel-Hansen⟧  
+Personalabteilung
+
+=====
+
+**Arbeitszeugnis**
+
+Frau ⟦name|Mechthild von Erlenkamp⟧, geboren am ⟦birth_date|22.09.1984⟧, war vom 01.04.2018 bis zum 30.11.2026 bei der Silberquell Laborbedarf GmbH, ⟦address|Reagenzweg 15⟧, ⟦address|37073 Grone-Neu⟧, beschäftigt. Zuletzt war sie als Leitung Qualitätssicherung für die Produktfamilien „VetroPur“ und „AmpuLine“ verantwortlich.
+
+Zu ihren Aufgaben gehörten die Weiterentwicklung des Qualitätsmanagements, die Planung interner Audits, die Bewertung von Lieferanten sowie die Leitung eines zwölfköpfigen Teams. Darüber hinaus koordinierte sie Reklamationsuntersuchungen und führte im Jahr 2025 ein digitales Abweichungswesen ein. Die Einführung verkürzte die durchschnittliche Bearbeitungszeit deutlich und verbesserte die Nachvollziehbarkeit der Prüfschritte.
+
+Frau ⟦name|von Erlenkamp⟧ verfügte über sehr umfangreiches Fachwissen und erfasste komplexe Zusammenhänge außerordentlich schnell. Sie arbeitete stets systematisch, verlässlich und mit hoher Sorgfalt. Auch bei kurzfristigen Auditterminen behielt sie den Überblick und traf fundierte Entscheidungen. Ihre Führungsweise war klar, wertschätzend und ergebnisorientiert. Sie förderte Mitarbeitende gezielt und sorgte für eine verbindliche Zusammenarbeit mit Entwicklung, Einkauf und Produktion.
+
+Ihr Verhalten gegenüber Vorgesetzten, Mitarbeitenden, Kunden und Geschäftspartnern war jederzeit vorbildlich. Die übertragenen Aufgaben erfüllte sie stets zu unserer vollsten Zufriedenheit.
+
+Das Arbeitsverhältnis endet auf eigenen Wunsch von Frau ⟦name|von Erlenkamp⟧. Wir bedauern ihr Ausscheiden außerordentlich, danken für die langjährige vertrauensvolle Zusammenarbeit und wünschen ihr beruflich wie privat weiterhin viel Erfolg.
+
+Grone-Neu, 30.11.2026
+
+Dr. ⟦name|Wibke von Quasten-Feldkirch⟧  
+Geschäftsführung
+
+⟦name|Paolo Ferretti⟧  
+Leiter Personal
+
+=====
+
+**Bewerbung als Einsatzplaner**
+
+⟦name|Ousmane Ba⟧  
+⟦address|Falkenstieg 33⟧  
+⟦address|44137 Harkorten⟧  
+⟦phone|+49 176 330 58 114⟧  
+⟦email|ousmane.ba@example.de⟧
+
+Windwerk Mobilität GmbH  
+Frau ⟦name|Friederike Holsten-Löbbeck⟧  
+⟦address|Bahnkante 71⟧  
+⟦address|44139 Westhoven⟧
+
+Harkorten, 23.11.2026
+
+**Bewerbung auf die Stelle Einsatzplanung, Kennziffer WW-2026-118**
+
+Sehr geehrte Frau ⟦name|Holsten-Löbbeck⟧,
+
+derzeit disponiere ich für einen regionalen Shuttlebetrieb 34 Fahrzeuge und stimme täglich Fahrzeugverfügbarkeit, Fahrzeiten und kurzfristige Ausfälle aufeinander ab. Besonders reizt mich an Ihrer Ausschreibung die Verbindung aus operativer Planung und der Weiterentwicklung digitaler Abläufe.
+
+In meinem jetzigen Aufgabenfeld habe ich ein Übergabeboard eingeführt, das offene Fahrten, Werkstatttermine und Fahrerhinweise zusammenführt. Dadurch konnten Rückfragen zwischen den Schichten reduziert werden. Zudem erstelle ich wöchentliche Auswertungen zu Pünktlichkeit und Leerfahrten. Mit unüblichen Lagen gehe ich ruhig um: Als am 12.10.2026 gleichzeitig drei Fahrzeuge ausfielen, organisierte ich Ersatzkapazitäten und hielt die priorisierten Schülerbeförderungen vollständig aufrecht.
+
+Ich arbeite sicher mit Dispositionssoftware, Tabellenkalkulationen und digitalen Fahrzeugakten. Schichtbereitschaft bringe ich mit; meine bevorzugten Fortbildungstermine liegen dienstags ab 16:00 Uhr.
+
+Gern stelle ich Ihnen meine Arbeitsweise in einem Gespräch vor. Meine Kündigungsfrist endet am 28.02.2027; meine Gehaltsvorstellung liegt bei 48.000,00 € brutto jährlich.
+
+Mit freundlichen Grüßen
+
+⟦name|Ousmane Ba⟧
+
+Anlagen: Lebenslauf, zwei Zeugnisse, Weiterbildungsnachweis
+
+=====
+
+**Krankmeldung**
+
+Betreff: Arbeitsunfähigkeit ab 24.11.2026
+
+Hallo ⟦name|Rania⟧,
+
+ich kann heute und voraussichtlich auch morgen nicht zur Arbeit kommen. Die ärztliche Feststellung der Arbeitsunfähigkeit liegt für den Zeitraum vom 24.11. bis einschließlich 27.11.2026 vor. Die elektronische AU-Bescheinigung steht zum Abruf bereit; eine Bescheinigung in Papierform reiche ich bei meiner Rückkehr nicht zusätzlich nach.
+
+Für die heutige Inventur habe ich die vorbereitete Zählliste im Ordner „INV-11“ abgelegt. ⟦name|Jannis⟧ kennt die offenen Rückfragen zur Rampe 2. Der Liefertermin mit der Spedition ist bereits auf den 30.11.2026 um 09:30 Uhr verschoben worden. Dringende Absprachen können deshalb ohne mich weiterlaufen.
+
+Telefonisch bin ich heute nur eingeschränkt erreichbar. Bitte verwendet für kurze Rückfragen nach Möglichkeit die Projektgruppe, damit ich mich auskurieren kann. Sobald die weitere Dauer feststeht, melde ich mich erneut.
+
+Viele Grüße  
+⟦name|Samira Al-Haddad⟧
+
+Kontakt für die Personalakte: ⟦phone|0151 / 22 80 74 61⟧
+
+=====
+
+**Reisekostenabrechnung RK-2026-0883**
+
+Reisende Person: ⟦name|Kowalczyk, Małgorzata⟧  
+Kostenstelle: 4410 – Anwendungsbetreuung  
+Kundennummer: K-77402  
+Reiseanlass: Einführung „Lagermodul Q7“  
+Reisezeitraum: 10.11.2026, 06:15 Uhr, bis 12.11.2026, 19:40 Uhr  
+Reiseziele: Leipzig, Erfurt
+
+| Datum | Position | Beleg | Betrag |
+|---|---|---|---:|
+| 10.11.2026 | Bahnfahrt Hamburg–Leipzig, Rückfahrt Erfurt–Hamburg | B-104 | 138,60 € |
+| 10.11.2026 | Hotel Leipzig, eine Nacht inklusive Frühstück | H-221 | 112,00 € |
+| 11.11.2026 | Bahnfahrt Leipzig–Erfurt | B-119 | 31,40 € |
+| 11.11.2026 | Hotel Erfurt, eine Nacht ohne Frühstück | H-236 | 94,50 € |
+| 11.11.2026 | Verpflegungspauschale nach betrieblicher Regelung | – | 14,00 € |
+| 12.11.2026 | Verpflegungspauschale nach betrieblicher Regelung | – | 28,00 € |
+
+Gesamtbetrag: **418,50 €**  
+Vorschuss am 06.11.2026: 150,00 €  
+Auszahlungsbetrag: **268,50 €**
+
+Die Kundenveranstaltung begann am 10.11.2026 um 13:00 Uhr und endete am 12.11.2026 um 15:30 Uhr. Parkgebühren sind nicht angefallen. Private Mitnahmen waren nicht Bestandteil der Reise.
+
+Erstattung auf: IBAN ⟦iban⟧  
+BIC: REISEDE8X
+
+Einreichung am 16.11.2026 durch ⟦name|Małgorzata Kowalczyk⟧.  
+Sachlich geprüft am 18.11.2026: ⟦name|Kwabena Osei-Bonsu⟧.  
+Freigegeben am 19.11.2026: ⟦name|von Sanden, Ulrike⟧.
+
+=====
+
+**Protokoll der Besprechung „Umzug Ersatzteillager“**
+
+Datum: 17.11.2026, 09:05–10:20 Uhr  
+Ort: Besprechungsraum B2  
+Protokoll: ⟦name|Lenn Achterberg⟧  
+Kundennummer des Umzugsprojekts: PRJ-8821
+
+| Teilnahme | Bereich |
+|---|---|
+| ⟦name|Al-Haddad, Samira⟧ | Lagerlogistik |
+| ⟦name|Brzęczkowski, Tadeusz⟧ | Informationstechnik |
+| ⟦name|Rania Haddad⟧ | Einkauf |
+| ⟦name|Jasper von Lütken⟧ | Betriebsleitung |
+| ⟦name|Adeyemi, Oluwaseun⟧ | Arbeitssicherheit |
+
+**1. Terminfolge**  
+Der Umzug beginnt am 08.01.2027 nach Schichtende um 21:30 Uhr. Die ersten Regalzeilen werden am 09.01.2027 ab 06:00 Uhr aufgebaut. Der Regelbetrieb am neuen Standort soll am 11.01.2027 um 07:00 Uhr starten. Ein Parallelbetrieb ist nur für die Artikelgruppe „Notfall-24“ vorgesehen.
+
+**2. Etikettierung**  
+⟦name|Brzęczkowski⟧ stellt bis 20.11.2026 einen Export der Stammplätze bereit. Die neuen Etiketten erhalten das Präfix „NL-“. Alte Barcodes bleiben bis zum Abschluss der Abnahme lesbar.
+
+**3. Sicherheit und Freigaben**  
+⟦name|Adeyemi⟧ prüft die Fluchtwege am 05.01.2027. Schwerlastregale dürfen erst nach dokumentierter Bodenkontrolle bestückt werden. Die Abnahme erfolgt gemeinsam mit ⟦name|Jasper von Lütken⟧.
+
+**4. Kommunikation**  
+Lieferanten erhalten am 01.12.2026 eine Terminmitteilung. Zwischen dem 07.01.2027, 16:00 Uhr, und dem 10.01.2027, 20:00 Uhr, sind keine Standardanlieferungen vorgesehen. ⟦name|Rania Haddad⟧ pflegt die Sperrliste.
+
+**Beschlüsse:**  
+Die Ersatzteilbestellungen werden ab 04.01.2027 um zehn Prozent erhöht. Eine zusätzliche Nachtschicht wird nicht eingerichtet. Nächster Termin: 04.12.2026, 08:30 Uhr. Dann entscheidet ⟦name|Al-Haddad⟧ über den endgültigen Transportbedarf.
+
+=====
+
+**Chatverlauf – Firmen-Messenger „Projekt KUPFER“**
+
+Datum: 19.11.2026
+
+**08:12 – ⟦name|Marek (Lager)⟧:**  
+Guten Morgen. Die Palette KU-44 steht seit 07:40 Uhr an Tor 3. Auf dem Lieferschein fehlt allerdings die Artikelnummer.
+
+**08:13 – ⟦name|L. Nguyen⟧:**  
+Ich schaue nach. Müsste KU-MAT-208 sein. Bitte noch nicht einbuchen.
+
+**08:15 – ⟦name|Yusuf⟧:**  
+Qualitätssicherung ist informiert. Die Musterprüfung kann um 09:00 Uhr starten.
+
+**08:18 – ⟦name|Marek (Lager)⟧:**  
+Danke, ⟦name|Yusuf⟧. Ich stelle zwei Kartons in den Prüfraum. Der Rest bleibt gesperrt.
+
+**08:26 – ⟦name|R. Haddad⟧:**  
+Der Lieferant hat den korrigierten Lieferschein angekündigt. Rechnungsnummer ist RE-66481, Kundennummer bleibt KD-40218.
+
+**08:29 – ⟦name|L. Nguyen⟧:**  
+Bestätigung: Auf den Kartons steht KU-MAT-208. Chargennummer C-191126-A.
+
+**09:07 – ⟦name|Yusuf⟧:**  
+Muster sind in Ordnung. Nur eine Umverpackung ist feucht, Ware darunter trocken.
+
+**09:09 – ⟦name|Marek (Lager)⟧:**  
+Dann buche ich 38 Kartons ein und einen Karton als Sperrbestand. Foto liegt in Vorgang V-8820.
+
+**09:14 – ⟦name|R. Haddad⟧:**  
+So ist es abgestimmt. Bitte den feuchten Karton bis 13:00 Uhr getrennt halten.
+
+**09:15 – ⟦name|L. Nguyen⟧:**  
+Erledigt. Nächster Liefertermin ist Freitag, 06:45 Uhr.
+
+**09:16 – ⟦name|Marek (Lager)⟧:**  
+Ich übernehme die Übergabe. Vorgang kann nach der Lieferantenmail geschlossen werden.
+
+=====
+
+**Interne E-Mail**
+
+Von: ⟦name|Annemarie Sieveking⟧ <⟦email|a.sieveking@example.de⟧>  
+An: ⟦name|Rufus Adegoke⟧ <⟦email|r.adegoke@example.de⟧>; ⟦name|Vera Tschernikowa⟧ <⟦email|v.tschernikowa@example.de⟧>  
+Cc: ⟦name|Bodo Klatte⟧ <⟦email|b.klatte@example.de⟧>  
+Datum: 26.11.2026, 11:42 Uhr  
+Betreff: Jahresabschluss – Inventurwerte und Abschreibungslauf
+
+Hallo ⟦name|Rufus⟧, hallo ⟦name|Vera⟧,
+
+der vorläufige Abstimmlauf für die Kostenstellen 3000 bis 3499 ist abgeschlossen. Dabei sind Differenzen bei den Produktgruppen „KabelTrak“ und „SensorDock“ aufgefallen. Bitte prüft bis Dienstag, 01.12.2026, 15:00 Uhr, ob die Inventurzählungen vom 14.11.2026 vollständig übernommen wurden.
+
+Die Abschreibung für November plane ich am 03.12.2026 um 08:30 Uhr. Bis dahin sollen keine manuellen Buchungen auf die Konten 0840 und 0850 erfolgen. Der Kundennummernkreis bleibt unverändert; lediglich die Anlagennummern AN-2026-1104 bis AN-2026-1118 müssen neu zugeordnet werden.
+
+⟦name|Bodo⟧ übernimmt die Gegenprüfung der Belege. Die endgültige Liste lade ich anschließend in den Abschlussordner. Rückfragen gern direkt hier im Mailverlauf, damit alle denselben Stand haben.
+
+Viele Grüße  
+⟦name|Annemarie Sieveking⟧  
+Finanzbuchhaltung  
+⟦phone|+49 511 770 31 28⟧
+
+=====
+
+**Kundenbeschwerde**
+
+⟦name|Donatella Fiore⟧  
+⟦address|Haselrain 60⟧  
+⟦address|79111 Herdern-West⟧  
+⟦phone|0761 / 55 82 91 04⟧  
+⟦email|donatella.fiore@example.de⟧
+
+Kundennummer: KD-630194  
+Bestellung: BE-2026-104482  
+Artikelnummer: BR-ESP-720  
+Produkt: Kaffeemaschine „BrewRondo 720“
+
+Herdern-West, 22.11.2026
+
+Sehr geehrte Damen und Herren,
+
+am 16.11.2026 wurde die oben genannte Kaffeemaschine geliefert. Bereits bei der dritten Benutzung am 19.11.2026 trat Wasser unterhalb des Geräts aus. Der Wassertank war ordnungsgemäß eingerastet und bis zur markierten Höchstgrenze befüllt. Anschließend schaltete sich das Gerät während des Brühvorgangs zweimal selbst aus.
+
+Ich habe die Maschine vom Stromnetz getrennt und nicht weiterverwendet. Fotos der undichten Stelle sowie ein kurzes Video des abgebrochenen Brühvorgangs liegen bei. Die Seriennummer lautet BR720-118904. Die Verpackung ist vollständig vorhanden.
+
+Da es sich nicht lediglich um einen äußerlichen Mangel handelt, bitte ich um kostenlose Abholung und Lieferung eines einwandfreien Ersatzgeräts. Eine Reparatur kommt für mich angesichts des frühen Auftretens des Fehlers nur nach vorheriger schriftlicher Erklärung der Ursache in Betracht. Bitte bestätigen Sie den Eingang dieser Beschwerde bis 25.11.2026 und nennen Sie mir einen Abholtermin. Vormittags zwischen 08:00 und 11:30 Uhr bin ich am besten erreichbar.
+
+Den Kaufpreis von 289,90 € habe ich am 10.11.2026 bezahlt. Sollte kein zeitnaher Ersatz möglich sein, erwarte ich die Erstattung des vollständigen Betrags.
+
+Mit freundlichen Grüßen  
+⟦name|Donatella Fiore⟧
+
+=====
+
+**Versicherungsschaden – Schadensbericht**
+
+Schadennummer: SD-26-883710  
+Vertragsnummer: GV-44098126  
+Versicherungsnehmerin: Frau ⟦name|Aminata Sow⟧  
+Anschrift: ⟦address|Birkenkamp 7⟧, ⟦address|33647 Brackwede-Neu⟧  
+Schadenort: ⟦address|Mühlenredder 28⟧, ⟦address|33649 Schildesche-Markt⟧  
+Schadentag: 15.11.2026, gegen 18:20 Uhr  
+Meldedatum: 16.11.2026
+
+Am späten Nachmittag des 15.11.2026 platzte im Technikraum des gemieteten Büros eine Verbindungsmuffe der Kaltwasserleitung. Das austretende Wasser beschädigte zwei Serverschränke, einen dokumentierten Netzwerktester der Baureihe „LineScope N4“ sowie sechs Kartons Archivmaterial. Der Hauptabsperrhahn wurde um 18:31 Uhr geschlossen. Anschließend begann die Nottrocknung durch den Betrieb Feuchtepunkt Sanierung GmbH.
+
+Die Schadenhöhe wird zunächst auf 8.450,00 € netto geschätzt. Eine abschließende Aufstellung folgt nach Auswertung der Elektronik. Rechnungspositionen der Notfallmaßnahme liegen bisher über 1.180,00 € vor. Der reguläre Betrieb konnte am 17.11.2026 um 10:00 Uhr in einem Ausweichraum fortgesetzt werden.
+
+Der Hausmeister ⟦name|Waldemar Pietrzyk⟧ beobachtete den Wasseraustritt und informierte die Versicherungsnehmerin telefonisch. Er ist erreichbar unter ⟦phone|0521 88 14 02 66⟧. Rückfragen der Versicherungsnehmerin bitte an ⟦email|aminata.sow@example.de⟧ oder ⟦phone|0178 44 91 60 27⟧.
+
+Als Nachweise werden beigefügt: zwölf Fotos, Trocknungsprotokoll, Leasingvertrag des Netzwerktesters und eine vorläufige Reparaturkalkulation. Die beschädigte Muffe bleibt bis zur Freigabe durch die Versicherung gesichert. Eine Haftungszuweisung an den Installationsbetrieb erfolgt mit diesem Bericht nicht.
+
+Brackwede-Neu, 16.11.2026
+
+⟦name|Aminata Sow⟧
+
+Bearbeitung vermerkt am 18.11.2026 durch ⟦name|Herrmann-Josef Radebold⟧.
+
+=====
+
+**Vollmacht zur Abholung und Vertragsabstimmung**
+
+Hiermit bevollmächtige ich,  
+⟦name|Elif Kaya⟧,  
+geboren am ⟦birth_date|11.06.1992⟧,  
+wohnhaft ⟦address|Ulmenhöhe 19⟧, ⟦address|45891 Gelsenbruch⟧,
+
+Herrn ⟦name|Kwabena Osei-Bonsu⟧,  
+wohnhaft ⟦address|Finkensteig 3⟧, ⟦address|45894 Gelsenbruch-West⟧,
+
+gegenüber der Nordwippe Logistik GmbH die Sendung mit der Sendungsnummer NW-2026-771042 entgegenzunehmen. Die Vollmacht umfasst die Prüfung der äußeren Verpackung, die Unterzeichnung des Empfangsnachweises und die Dokumentation erkennbarer Transportschäden. Eine inhaltliche Prüfung der versiegelten Geräteverpackungen ist nicht geschuldet.
+
+Außerdem darf der Bevollmächtigte den für den 30.11.2026 vorgesehenen Folgetransport auf einen Werktag zwischen dem 02.12. und 04.12.2026 verschieben. Eine Änderung des Lieferumfangs, zusätzliche kostenpflichtige Leistungen oder die Anerkennung von Schadensersatzforderungen sind von dieser Vollmacht nicht umfasst.
+
+Die Vollmacht gilt vom 26.11.2026 bis einschließlich 04.12.2026, 18:00 Uhr. Sie kann jederzeit schriftlich widerrufen werden. Rückbestätigungen bitte an ⟦email|elif.kaya@example.de⟧. Für telefonische Rückfragen bin ich unter ⟦phone|0209 / 70 41 58 22⟧ erreichbar.
+
+Gelsenbruch, 26.11.2026
+
+⟦name|Elif Kaya⟧ – Vollmachtgeberin  
+⟦name|Kwabena Osei-Bonsu⟧ – Bevollmächtigter
+
+=====
+
+Kundennummer;Name;Strasse;PLZ_Ort;Telefon;E-Mail;Geburtsdatum;Produkt;Betrag_EUR;Faellig;Bemerkung
+KD-70001;⟦name|Ba, Ousmane⟧;⟦address|Wacholderweg 4⟧;⟦address|24113 Moorbek⟧;⟦phone|0431 55 80 11 02⟧;⟦email|ousmane.ba@example.de⟧;⟦birth_date|02.04.1989⟧;RegioArchiv;128,40;05.12.2026;aktiver Bestand
+KD-70002;⟦name|Yıldırım, Ercan⟧;⟦address|Kastanienring 81⟧;⟦address|30451 Ricklingen-Neu⟧;⟦phone|0511 / 70 44 18 90⟧;⟦email|ercan.yildirim@example.de⟧;⟦birth_date|19.11.1982⟧;SensorDock;842,10;08.12.2026;neuer Vertrag
+KD-70003;⟦name|Saripowa, Nadeschda⟧;⟦address|Kranichsteig 12⟧;⟦address|18059 Brinckdorf⟧;⟦phone|+49 381 440 72 18⟧;⟦email|n.saripowa@example.de⟧;⟦birth_date|27.01.1976⟧;VetroPur;391,55;12.12.2026;Rechnung gesendet
+KD-70004;⟦name|Belluomo, Enzo⟧;⟦address|Kiebitzpfad 6⟧;⟦address|01099 Elbnitz⟧;⟦phone|0351 66 20 44 13⟧;⟦email|enzo.belluomo@example.de⟧;⟦birth_date|14.08.1995⟧;KabelTrak;76,90;15.12.2026;Zahlung offen
+KD-70005;⟦name|Nguyễn, Minh Anh⟧;⟦address|Am Sandkamp 35⟧;⟦address|23554 Lübeck-Moor⟧;⟦phone|0451 / 90 31 77 25⟧;⟦email|minhanh.nguyen@example.de⟧;⟦birth_date|06.05.1991⟧;AmpuLine;1.204,80;18.12.2026;Rahmenvertrag aktiv
+KD-70006;⟦name|Adeyemi, Oluwaseun⟧;⟦address|Torfstieg 24⟧;⟦address|44143 Dortmund-Fenn⟧;⟦phone|0231 44 71 08 92⟧;⟦email|o.adeyemi@example.de⟧;⟦birth_date|30.10.1988⟧;RegioArchiv;640,00;20.12.2026;Support gebucht
+KD-70007;⟦name|von Erlenkamp, Mechthild⟧;⟦address|Heidewinkel 10⟧;⟦address|37075 Grone-Süd⟧;⟦phone|0551 30 88 14 67⟧;⟦email|m.erlenkamp@example.de⟧;⟦birth_date|22.09.1984⟧;VetroPur;219,75;21.12.2026;Langzeitkunde bestehend
+KD-70008;⟦name|Al-Haddad, Samira⟧;⟦address|Röhricht 48⟧;⟦address|90419 Schafhof-Süd⟧;⟦phone|0911 60 27 83 40⟧;⟦email|samira.alhaddad@example.de⟧;⟦birth_date|17.03.1993⟧;SensorDock;558,30;22.12.2026;Teillieferung offen
+KD-70009;⟦name|Wójcik, Krystyna⟧;⟦address|Brunnenredder 2⟧;⟦address|26721 Sielhof⟧;⟦phone|04921 / 55 61 20 84⟧;⟦email|k.wojcik@example.de⟧;⟦birth_date|09.12.1979⟧;KabelTrak;94,20;23.12.2026;Gutschrift verrechnet
+KD-70010;⟦name|Kaya, Elif⟧;⟦address|Schlehenbusch 17⟧;⟦address|45892 Gelsenbruch⟧;⟦phone|0209 88 04 16 52⟧;⟦email|elif.kaya@example.de⟧;⟦birth_date|11.06.1992⟧;AmpuLine;733,90;28.12.2026;Erstbestellung abgeschlossen
+KD-70011;⟦name|Pietrzyk, Waldemar⟧;⟦address|Eschenhöhe 29⟧;⟦address|33645 Brackwede-Ost⟧;⟦phone|0521 40 77 31 09⟧;⟦email|w.pietrzyk@example.de⟧;⟦birth_date|25.07.1968⟧;RegioArchiv;312,60;29.12.2026;Jahreslizenz verlängert
+KD-70012;⟦name|Fiore, Donatella⟧;⟦address|Lerchenrain 53⟧;⟦address|79113 Herdern-Ost⟧;⟦phone|0761 20 94 85 31⟧;⟦email|donatella.fiore@example.de⟧;⟦birth_date|03.02.1986⟧;SensorDock;489,00;30.12.2026;Lieferung bestätigt
+
+=====
+
+**Handwerkerauftrag HA-2026-1194**
+
+Auftraggeber: Stadtbogen Wohnverwaltung GmbH  
+⟦address|Querbahn 16⟧, ⟦address|18055 Stadthagen-Moor⟧  
+Ansprechpartner: Herr ⟦name|Ludger Twiehaus⟧  
+Telefon: ⟦phone|0381 / 44 20 18 76⟧  
+E-Mail: ⟦email|l.twiehaus@example.de⟧
+
+Auftragnehmer: Dachlicht Handwerksbetrieb GmbH  
+⟦address|Ziegelsteig 39⟧, ⟦address|18146 Seebruck⟧  
+USt-IdNr. DE814026735  
+Verantwortlich: ⟦name|Mateusz Zieliński⟧
+
+**Ausführungsort:**  
+⟦address|Speichergang 21⟧, ⟦address|18057 Stadthagen-Moor⟧
+
+**Leistungsumfang:**
+
+| Position | Artikel/Leistung | Menge | Nettobetrag |
+|---|---|---:|---:|
+| 1 | Demontage zweier undichter Dachfenster | 2 Stück | 420,00 € |
+| 2 | Dachfenster „LichtKamm R8“, Artikelnummer LK-R8-114 | 2 Stück | 1.760,00 € |
+| 3 | Einbau einschließlich Dampfbremse und Anschlussblechen | 2 Stück | 980,00 € |
+| 4 | Entsorgung Altfenster und Schuttzugang | pauschal | 185,00 € |
+
+Gesamt netto: 3.345,00 €  
+19 % Umsatzsteuer: 635,55 €  
+Gesamt brutto: **3.980,55 €**
+
+Arbeitsbeginn: 07.12.2026, 07:15 Uhr  
+Voraussichtlicher Abschluss: 08.12.2026, 16:00 Uhr
+
+Der Dachboden ist vor Beginn durch den Auftraggeber freizuräumen. Strom und Beleuchtung stehen bereit. Mehraufwand bei verborgenen Schäden wird vor Ausführung schriftlich angeboten. Die Abnahme erfolgt gemeinsam durch ⟦name|Ludger Twiehaus⟧ und ⟦name|Mateusz Zieliński⟧. Zahlungsziel: 14 Tage nach Abnahme und Rechnungserhalt.
+
+Bestätigt am 25.11.2026:
+
+⟦name|Ludger Twiehaus⟧  
+⟦name|Mateusz Zieliński⟧
+
+=====
+
+**Rechnung für Beratungsleistungen**
+
+⟦name|Nkechi Eze⟧  
+Projektbüro Eze  
+⟦address|Lindenkrug 12⟧  
+⟦address|20251 Altona-Fenn⟧  
+USt-IdNr. DE690137428
+
+An  
+Frau ⟦name|Sigrid Maria von Bassewitz-Thal⟧  
+Kranichquell GmbH  
+⟦address|Fabrikhof 66⟧  
+⟦address|23556 Lübeck-Brink⟧
+
+Rechnung: NE-2026-028  
+Kundennummer: KQ-1904  
+Datum: 26.11.2026
+
+| Leistung | Zeitraum | Umfang | Betrag |
+|---|---|---:|---:|
+| Prozessaufnahme Vertriebsplanung | 03.11.–05.11.2026 | 12 Stunden | 1.440,00 € |
+| Konzept „Angebotsradar“ | 09.11.–13.11.2026 | Pauschale | 1.850,00 € |
+| Online-Review und Dokumentation | 20.11.2026, 13:00–16:00 Uhr | 3 Stunden | 360,00 € |
+
+Nettobetrag: 3.650,00 €  
+19 % Umsatzsteuer: 693,50 €  
+**Gesamtbetrag: 4.343,50 €**
+
+Bitte überweisen Sie den Betrag bis 10.12.2026 unter Angabe von NE-2026-028. Eine Skontoregelung ist nicht vereinbart.
+
+Bankverbindung:  
+IBAN: ⟦iban⟧  
+BIC: PROJDE9N
+
+Bei Fragen zur Leistungsdokumentation erreichen Sie mich unter ⟦phone|040 55 91 20 83⟧ oder ⟦email|nkechi.eze@example.de⟧. Die nächste nicht verrechnete Statusbesprechung findet am 02.12.2026 um 09:30 Uhr statt.
+
+Freundliche Grüße  
+⟦name|Nkechi Eze⟧
+
+=====
+
+**Angebot für eine Betriebsveranstaltung**
+
+Tafelrunde Eventküche GmbH  
+⟦address|Gewürzpfad 10⟧ | ⟦address|53111 Bonn-Beuel-Neu⟧  
+HRB 401872 | USt-IdNr. DE440672918
+
+Angebot TE-2026-0819 vom 24.11.2026  
+Anfrage AF-6621  
+Veranstaltung: 16.01.2027, 17:30–23:00 Uhr
+
+Sehr geehrte Frau ⟦name|Hedwig Rantzau-Wessel⟧,
+
+gern bieten wir die Bewirtung Ihrer Jahresauftaktveranstaltung für 85 Personen an. Geplant sind ein Empfang mit warmer Suppe, drei verschiedene Hauptgerichte in Schälchen, vegetarische und vegane Alternativen sowie ein spätes Dessertbuffet. Alle Speisen werden unter den Produktbezeichnungen „Wintertafel“, „Gartenrunde“ und „KakaoFinale“ kalkuliert.
+
+| Artikelnummer | Position | Menge | Preis |
+|---|---|---:|---:|
+| TA-MEN-85 | Menüpauschale | 85 | 3.102,50 € |
+| TA-PER-05 | Servicepersonal, fünf Kräfte | 5 | 1.275,00 € |
+| TA-EQP-22 | Geschirr, Warmhalte- und Buffettechnik | pauschal | 490,00 € |
+| TA-LOG-16 | Anlieferung und Aufbau ab 13:00 Uhr | pauschal | 280,00 € |
+
+Gesamt netto: 5.147,50 €  
+19 % Umsatzsteuer: 978,03 €  
+Gesamt brutto: **6.125,53 €**
+
+Enthalten sind Aufbau, Abräumen und eine Allergenübersicht. Getränke, Raummiete und Garderobenpersonal sind nicht enthalten. Die endgültige Personenzahl benötigen wir bis 08.01.2027 um 12:00 Uhr. Eine Reduzierung um bis zu fünf Personen ist bis dahin kostenfrei möglich.
+
+Das Angebot gilt bis 08.12.2026. Ihr Ansprechpartner ist ⟦name|Cem Aydın⟧ unter ⟦phone|0228 90 14 66 20⟧ oder ⟦email|cem.aydin@example.de⟧.
+
+Mit herzlichen Grüßen  
+⟦name|Cem Aydın⟧  
+Veranstaltungsplanung
+
+=====
+
+**Kurzprotokoll – Redaktionsrunde**
+
+Datum: 25.11.2026, 14:00–14:35 Uhr  
+Thema: Kundenmagazin „Quartal 4“  
+Leitung: ⟦name|Frida Bohnenkamp⟧  
+Notiz: ⟦name|Yusuf Al-Khatib⟧
+
+Anwesend: ⟦name|Bao, Linh⟧, ⟦name|Piotr Zawadzki⟧, ⟦name|Ayla-Sophie Wendenburg⟧, ⟦name|Gottlieb von Harling⟧. Entschuldigt: ⟦name|Sow, Aminata⟧.
+
+**Beitragsplanung:** Der Beitrag über Lieferketten erhält vier Seiten. ⟦name|Zawadzki⟧ liefert die Grafik bis 27.11.2026, 10:00 Uhr. ⟦name|Linh Bao⟧ übernimmt die Schlussredaktion des Interviews und kürzt die Einleitung auf höchstens 90 Wörter.
+
+**Freigaben:** Die Produktnamen „FleetKarte“ und „DepotPilot“ bleiben unverändert. Rechnungsbeispiele werden ausschließlich mit fiktiven Beträgen dargestellt. ⟦name|Gottlieb von Harling⟧ prüft am 30.11.2026 die abschließenden Zahlen.
+
+**Versand:** Druckfreigabe spätestens am 02.12.2026 um 16:00 Uhr. Die digitale Ausgabe erscheint am 07.12.2026. ⟦name|Ayla-Sophie Wendenburg⟧ aktualisiert den Verteiler und dokumentiert die Rückläufer.
+
+Nächste Besprechung: 09.12.2026, 09:15 Uhr. Bis dahin meldet ⟦name|Frida Bohnenkamp⟧ offene Bildrechte gesondert an die Gruppe.
+
+=====
+
+**Kundenbeschwerde über wiederholte Fehlberechnung**
+
+Von: ⟦name|Rupert Menzel-Haack⟧ <⟦email|rupert.menzel@example.de⟧>  
+An: kundenservice@example.de  
+Datum: 26.11.2026, 08:47 Uhr  
+Kundennummer: KD-884210  
+Vorgangsnummer: V-2026-66204
+
+Sehr geehrte Damen und Herren,
+
+für den Vertrag „StromKlar Basis“ wurde mir in der Abrechnung AB-771904 vom 18.11.2026 erneut ein Verbrauchspreis von 0,4380 € je kWh berechnet. Vereinbart sind jedoch 0,3190 € je kWh. Bereits am 04.11.2026 hatte ich denselben Fehler gemeldet; damals wurde mir eine Korrektur zugesagt.
+
+Der abgerechnete Zeitraum umfasst 412 kWh. Dadurch ergibt sich aus meiner Sicht eine Differenz von 49,03 € zuzüglich der entsprechenden Umsatzsteuer. Bitte stellen Sie die Abrechnung vollständig neu aus und bestätigen Sie, dass der korrekte Tarif auch für Folgerechnungen hinterlegt ist.
+
+Eine erneute telefonische Klärung halte ich nicht für ausreichend. Ich bitte um eine schriftliche Antwort bis 03.12.2026. Ergänzende Unterlagen können Sie mir per E-Mail senden. Für Rückfragen bin ich unter ⟦phone|0172 630 44 918⟧ erreichbar.
+
+Mit freundlichen Grüßen  
+⟦name|Rupert Menzel-Haack⟧  
+⟦address|Eschenweg 88⟧  
+⟦address|06114 Halle-Ammendorf-Neu⟧
+
+=====
+
+Mitarbeitercode;Name;Strasse;PLZ_Ort;Telefon;E-Mail;Geburtsdatum;Eintritt;Team;Funktion;IBAN;Steuer_ID
+MA-1001;⟦name|Demir, Aylin⟧;⟦address|Birkenhof 14⟧;⟦address|22769 Altenwerder-Ost⟧;⟦phone|040 66 31 20 48⟧;⟦email|aylin.demir@example.de⟧;⟦birth_date|16.07.1990⟧;01.03.2020;Team Nord;Technischer Dienst;⟦iban⟧;⟦tax_id⟧
+MA-1002;⟦name|Rogow, Michail⟧;⟦address|Tannensteig 7⟧;⟦address|90403 Schafhof-Mitte⟧;⟦phone|0911 / 55 72 19 06⟧;⟦email|m.rogow@example.de⟧;⟦birth_date|21.12.1985⟧;15.08.2021;Team Süd;Qualitäts Prüfung;⟦iban⟧;⟦tax_id⟧
+MA-1003;⟦name|Osei-Bonsu, Kwabena⟧;⟦address|Finkensteig 3⟧;⟦address|45894 Gelsenbruch-West⟧;⟦phone|0209 70 11 84 35⟧;⟦email|k.osei@example.de⟧;⟦birth_date|05.09.1988⟧;01.01.2019;Team West;Operative Planung;⟦iban⟧;⟦tax_id⟧
+MA-1004;⟦name|Nguyễn, Thu Trang⟧;⟦address|Kornblumenweg 26⟧;⟦address|18069 Brinckhausen⟧;⟦phone|0381 20 64 88 71⟧;⟦email|thutrang.nguyen@example.de⟧;⟦birth_date|12.02.1996⟧;01.07.2023;Team Ost;Digitale Dokumentation;⟦iban⟧;⟦tax_id⟧
+MA-1005;⟦name|von Quasten-Feldkirch, Wibke⟧;⟦address|Schlosswinkel 1⟧;⟦address|37071 Grone-Nord⟧;⟦phone|0551 / 40 18 73 92⟧;⟦email|w.quasten@example.de⟧;⟦birth_date|28.04.1978⟧;01.10.2017;Team Zentral;Strategische Leitung;⟦iban⟧;⟦tax_id⟧
+MA-1006;⟦name|Ferretti, Paolo⟧;⟦address|Lerchenstieg 42⟧;⟦address|01067 Elbbrück⟧;⟦phone|0351 88 23 60 17⟧;⟦email|paolo.ferretti@example.de⟧;⟦birth_date|09.11.1981⟧;15.05.2018;Team Ost;Personal Entwicklung;⟦iban⟧;⟦tax_id⟧
+MA-1007;⟦name|N’Diaye, Aissata⟧;⟦address|Wiesenpfad 91⟧;⟦address|30519 Wickenrode⟧;⟦phone|0511 66 04 29 83⟧;⟦email|a.ndiaye@example.de⟧;⟦birth_date|24.06.1994⟧;01.09.2022;Team Süd;Kunden Betreuung;⟦iban⟧;⟦tax_id⟧
+MA-1008;⟦name|Yıldırım, Ercan⟧;⟦address|Kastanienring 81⟧;⟦address|30451 Ricklingen-Neu⟧;⟦phone|0511 / 70 44 18 90⟧;⟦email|ercan.yildirim@example.de⟧;⟦birth_date|19.11.1982⟧;01.04.2016;Team Nord;Lager Disposition;⟦iban⟧;⟦tax_id⟧
+MA-1009;⟦name|Al-Khatib, Yusuf⟧;⟦address|Rosenstieg 18⟧;⟦address|53113 Bonn-Beuel-Mitte⟧;⟦phone|0228 40 77 16 52⟧;⟦email|y.alkhatib@example.de⟧;⟦birth_date|07.01.1997⟧;15.02.2024;Team West;Redaktions Koordination;⟦iban⟧;⟦tax_id⟧
+MA-1010;⟦name|Wójcik, Krystyna⟧;⟦address|Brunnenredder 2⟧;⟦address|26721 Sielhof⟧;⟦phone|04921 / 55 61 20 84⟧;⟦email|k.wojcik@example.de⟧;⟦birth_date|09.12.1979⟧;01.11.2015;Team Nord;Technischer Einkauf;⟦iban⟧;⟦tax_id⟧
+MA-1011;⟦name|Eze, Nkechi⟧;⟦address|Lindenkrug 12⟧;⟦address|20251 Altona-Fenn⟧;⟦phone|040 55 91 20 83⟧;⟦email|nkechi.eze@example.de⟧;⟦birth_date|13.03.1991⟧;01.06.2025;Team Zentral;Prozess Beratung;⟦iban⟧;⟦tax_id⟧

@@ -67,6 +67,31 @@ fn run_bin(args: &[&str]) -> (bool, String, String) {
     (out.status.success(), String::from_utf8_lossy(&out.stdout).to_string(), String::from_utf8_lossy(&out.stderr).to_string())
 }
 
+fn run_code(args: &[&str]) -> (i32, String, String) {
+    let out = Command::new(env!("CARGO_BIN_EXE_penelope")).args(args).output().unwrap();
+    (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).to_string(), String::from_utf8_lossy(&out.stderr).to_string())
+}
+
+#[test]
+fn a_missing_shadow_profile_exits_2_before_a_dry_run() {
+    let d = temp("shadow-missing");
+    let root = root_with_model(&d, "http://127.0.0.1:9");
+    let (code, out, err) = run_code(&["--root", &root.to_string_lossy(), "cluster", "run", "fix", "--shadow", "nosuch", "--dry"]);
+    assert_eq!(code, 2, "{} {}", out, err);
+    assert!(err.contains("no cluster profile nosuch"), "{} {}", out, err);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn a_missing_cluster_status_exits_2() {
+    let d = temp("status-missing");
+    let root = root_with_model(&d, "http://127.0.0.1:9");
+    let (code, out, err) = run_code(&["--root", &root.to_string_lossy(), "cluster", "status", "nosuch"]);
+    assert_eq!(code, 2, "{} {}", out, err);
+    assert!(err.contains("no cluster"), "{} {}", out, err);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
 #[test]
 fn help_names_the_dry_run_and_the_cluster_file() {
     let (ok, out, err) = run_bin(&["--help"]);

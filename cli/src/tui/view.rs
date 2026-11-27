@@ -3,6 +3,7 @@
 use super::art::{self, col, Mood, CLAY, ASH, DIM, GOLD, INK, NIGHT, PAPER, RAISED, RED, SEA};
 use super::text::{clip, input_rows, markdown, width, wrap_plain};
 use super::picture;
+use super::weave::{self, Look, Tone};
 use super::{App, Item, Overlay, ToolState};
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
@@ -87,7 +88,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
 /// A path with the home folder written as `~`, so that no screen picture shows the name of the account.
 fn tilde(path: &str) -> String {
-    let home = crate::platform::home_str();
+    let home = penelope_core::platform::home_str();
     if !home.is_empty() && path.starts_with(&home) { format!("~{}", &path[home.len()..]) } else { path.to_string() }
 }
 
@@ -129,7 +130,7 @@ fn tabs(f: &mut Frame, app: &App, area: Rect) {
 
 /// The same for a text that holds a path somewhere inside.
 fn tilde_all(text: &str) -> String {
-    let home = crate::platform::home_str();
+    let home = penelope_core::platform::home_str();
     if home.len() > 1 { text.replace(&home, "~") } else { text.to_string() }
 }
 
@@ -139,7 +140,7 @@ fn footer(f: &mut Frame, app: &App, area: Rect) {
     put(f, area, area.x + 2, area.y, &clip(&cwd, (area.width as usize).saturating_sub(width(&right) + 6)), fg(DIM));
     put(f, area, area.right().saturating_sub(width(&right) as u16 + 2), area.y, &right, fg(DIM));
     // The model and its effort sit left of the version, so an effort change shows at once.
-    let model = app.model_label();
+    let model = app.footer_label();
     let at = area.right().saturating_sub((width(&right) + width(&model) + 6) as u16);
     if at > area.x + 2 + width(&cwd).min(12) as u16 {
         put(f, area, at, area.y, &model, fg(SEA));
@@ -323,7 +324,7 @@ fn chat(f: &mut Frame, app: &mut App, area: Rect) {
 fn transcript(app: &App, w: usize) -> Vec<Line<'static>> {
     let mut out: Vec<Line<'static>> = Vec::new();
     let mut last_small = false;
-    for item in &app.items {
+    for (idx, item) in app.items.iter().enumerate() {
         let small = matches!(item, Item::Tool { .. } | Item::Note { .. });
         if !out.is_empty() && !(small && last_small) {
             out.push(Line::default());
@@ -366,6 +367,13 @@ fn transcript(app: &App, w: usize) -> Vec<Line<'static>> {
                                          Span::raw("  "), Span::styled(clip(text, room), fg(ASH))]));
             }
             Item::Error(text) => {
+                // the broken thread of a failed turn, once, under the last error
+                if idx + 1 == app.items.len() && app.busy.is_none() {
+                    let rows = weave::frame(&weave::Params { look: Look::Error, tick: 0, width: w.saturating_sub(2), steps: 0, reduced: true, ascii: weave::ascii(&app.ctx.cfg) });
+                    if let Some(row) = rows.get(1).or_else(|| rows.first()) {
+                        out.push(Line::from(weave_line(row)));
+                    }
+                }
                 for (i, row) in wrap_plain(text, w.saturating_sub(6).max(1)).into_iter().enumerate() {
                     out.push(Line::from(vec![Span::styled(if i == 0 { "  ✖ " } else { "    " }, fg(RED)), Span::styled(row, fg(RED))]));
                 }
@@ -384,28 +392,77 @@ fn transcript(app: &App, w: usize) -> Vec<Line<'static>> {
 /// What the loom says while the model works, one phase every three seconds.
 const LOOM_PHASES: [&str; 4] = ["warping the loom", "casting the shuttle", "beating the weft", "reading the pattern"];
 
-/// The waiting block under the transcript: a shuttle runs along the weft between two posts, woven thread behind it,
-/// open warp ahead. Below it the tail of the model's thinking, when the provider streams it.
-pub fn loom(app: &App, w: usize, secs: u64) -> Vec<Line<'static>> {
-    let span = w.saturating_sub(34).clamp(8, 40);
-    let step = (app.tick / 2) as usize % (2 * span);
-    let (at, right) = if step < span { (step, true) } else { (2 * span - 1 - step, false) };
-    let mut weft: Vec<Span<'static>> = vec![Span::raw("  "), Span::styled("╪", fg(ASH))];
-    for i in 0..span {
-        let span_style = if i == at {
-            Span::styled("◆", bold(SEA))
-        } else if (right && i < at) || (!right && i > at) {
-            Span::styled("═", fg(CLAY))
-        } else {
-            Span::styled("┄", fg(DIM))
-        };
-        weft.push(span_style);
+/// The look of the waiting block: what the turn is doing right now.
+fn look_of(app: &App) -> Look {
+    if matches!(app.overlay, Overlay::Approve { .. } | Overlay::Question { .. } | Overlay::Ask { .. }) {
+        Look::Waiting
+    } else if app.side.clusters > 0 {
+        Look::Cluster(app.side.clusters)
+    } else if app.mood() == Mood::Working {
+        Look::Tool
+    } else {
+        Look::Thinking
     }
-    weft.push(Span::styled("╪", fg(ASH)));
-    let working = app.mood() == Mood::Working;
-    let phase = if working { "a tool runs" } else { LOOM_PHASES[(secs / 3) as usize % LOOM_PHASES.len()] };
-    weft.push(Span::styled(format!("  {} · {}s", phase, secs), fg(ASH)));
-    let mut out = vec![Line::from(weft)];
+}
+
+fn tone_style(t: Tone) -> Style {
+    match t {
+        Tone::Post => fg(ASH),
+        Tone::Warp => fg(DIM),
+        Tone::Weft => fg(CLAY),
+        Tone::Shuttle => bold(SEA),
+        Tone::Cloth => fg(CLAY),
+        Tone::Idle => fg(DIM),
+        Tone::Error => bold(RED),
+    }
+}
+
+fn weave_line(row: &weave::Row) -> Vec<Span<'static>> {
+    let mut out: Vec<Span<'static>> = Vec::new();
+    let mut run = String::new();
+    let mut tone = None;
+    for &(c, t) in row {
+        if tone.map(|x| x != t).unwrap_or(false) {
+            out.push(Span::styled(std::mem::take(&mut run), tone_style(tone.unwrap())));
+        }
+        tone = Some(t);
+        run.push(c);
+    }
+    if let Some(t) = tone {
+        out.push(Span::styled(run, tone_style(t)));
+    }
+    out
+}
+
+/// Steps of this turn that are finished: the tool calls and the text blocks after the last request of the person.
+fn finished_steps(app: &App) -> usize {
+    let from = app.items.iter().rposition(|i| matches!(i, Item::User(_))).map(|i| i + 1).unwrap_or(0);
+    app.items[from..].iter().filter(|i| matches!(i, Item::Tool { state: ToolState::Done | ToolState::Failed, .. } | Item::Reply(_))).count()
+}
+
+/// The waiting block under the transcript, a weaving: warp threads hang down, a shuttle crosses and lays the weft, and
+/// each finished step adds a row of cloth (see `weave.rs`). A waiting person, running tools and running clusters each
+/// look different. Below it the tail of the model's thinking, when the provider streams it.
+pub fn loom(app: &App, w: usize, secs: u64) -> Vec<Line<'static>> {
+    let look = look_of(app);
+    let params = weave::Params { look, tick: app.tick, width: w.saturating_sub(2), steps: finished_steps(app), reduced: weave::reduced(&app.ctx.cfg), ascii: weave::ascii(&app.ctx.cfg) };
+    let rows = weave::frame(&params);
+    let phase = match look {
+        Look::Waiting => "waiting for you".to_string(),
+        Look::Tool => "a tool runs".to_string(),
+        Look::Cluster(n) => format!("{} cluster{} weaving", n, if n == 1 { "" } else { "s" }),
+        Look::Error => "a thread broke".to_string(),
+        Look::Thinking => LOOM_PHASES[(secs / 3) as usize % LOOM_PHASES.len()].to_string(),
+    };
+    let mut out: Vec<Line<'static>> = Vec::new();
+    let shed = if rows.len() == 1 { 0 } else { 1 };
+    for (i, row) in rows.iter().enumerate() {
+        let mut spans = weave_line(row);
+        if i == shed {
+            spans.push(Span::styled(format!("  {} · {}s", phase, secs), fg(ASH)));
+        }
+        out.push(Line::from(spans));
+    }
     let thought: String = app.thinking.split_whitespace().collect::<Vec<_>>().join(" ");
     if !thought.is_empty() {
         let rows = wrap_plain(&thought, w.saturating_sub(8).max(10));
@@ -455,7 +512,7 @@ fn sidebar(f: &mut Frame, app: &App, area: Rect) {
         ("tokens".into(), format!("{} in · {} out", num(app.tokens.0), num(app.tokens.1)), PAPER),
         ("turns".into(), format!("{} · {} tool calls", app.turns, app.tool_calls), PAPER),
         ("cost".into(), app.side.cost.clone(), SEA),
-        ("mode".into(), crate::mode::current(&app.ctx), SEA),
+        ("mode".into(), format!("{} · {}", app.mode, penelope_core::mode::current(&app.ctx)), SEA),
     ]);
     let (main, _) = model_line(app, false);
     let privacy = match app.ctx.cfg["privacy"].as_str().unwrap_or("rules") {
@@ -465,9 +522,9 @@ fn sidebar(f: &mut Frame, app: &App, area: Rect) {
     // The crew: the lead, then the subagents of the last run under the names the user or the orchestrator gave them.
     // A model of a Laertes family is gold and says "in training"; it cannot answer yet.
     let role_row = |role: &str, key: &str, state: &str| -> (String, String, art::Rgb) {
-        match crate::route::model_for(&app.ctx, role) {
+        match penelope_core::route::model_for(&app.ctx, role) {
             Some(m) => {
-                let (shown, family) = crate::crew::describe(m);
+                let (shown, family) = penelope_core::crew::describe(m);
                 let value = match family {
                     Some(f) => format!("{} · in training", f),
                     None => format!("{} · {}", shown, state),
@@ -478,7 +535,7 @@ fn sidebar(f: &mut Frame, app: &App, area: Rect) {
         }
     };
     let mut crew = Vec::new();
-    let lead = match crate::crew::family_of(&app.ctx.cfg["main"]) {
+    let lead = match penelope_core::crew::family_of(&app.ctx.cfg["main"]) {
         Some(f) => (format!("lead"), format!("{} · in training", f), GOLD),
         None => {
             let mood = app.mood();
@@ -487,7 +544,7 @@ fn sidebar(f: &mut Frame, app: &App, area: Rect) {
         }
     };
     crew.push(lead);
-    let members = crate::crew::list(&app.ctx);
+    let members = penelope_core::crew::list(&app.ctx);
     let mut any_gold = crew.iter().any(|(_, _, c)| *c == GOLD);
     if members.is_empty() {
         let scout_state = match app.ctx.cfg["delegate"].as_str().unwrap_or("auto") { "off" => "no scout", mode => mode };
@@ -570,7 +627,7 @@ pub(super) fn dialog(f: &mut Frame, area: Rect, title: &str, want_w: u16, want_h
     Rect::new(rect.x + 2, rect.y + 3, rect.width.saturating_sub(4), rect.height.saturating_sub(4))
 }
 
-fn provider_state(p: &crate::providers::Provider, claude: &str) -> (&'static str, art::Rgb) {
+fn provider_state(p: &penelope_core::providers::Provider, claude: &str) -> (&'static str, art::Rgb) {
     if p.kind == "laertes" {
         return ("in training", GOLD);
     }
@@ -584,7 +641,7 @@ fn provider_state(p: &crate::providers::Provider, claude: &str) -> (&'static str
     if !p.key_env.is_empty() && std::env::var(p.key_env).ok().filter(|v| !v.trim().is_empty()).is_some() {
         return ("env set", SEA);
     }
-    if crate::auth::has(p.name) {
+    if penelope_core::auth::has(p.name) {
         return ("stored", SEA);
     }
     ("no key", CLAY)
@@ -607,7 +664,7 @@ fn target_value<'a>(app: &'a App, target: &str) -> &'a serde_json::Value {
 }
 
 fn providers_dialog(f: &mut Frame, app: &App, area: Rect, sel: usize, target: &str, scroll: usize) {
-    let list = &crate::providers::TABLE;
+    let list = &penelope_core::providers::TABLE;
     let rows = (area.height.saturating_sub(9) as usize).clamp(4, 24).min(list.len().max(1));
     let inner = dialog(f, area, "Providers · connections", 96, rows as u16 + 8);
     let tab = |active: bool| if active { on(INK, CLAY).add_modifier(Modifier::BOLD) } else { on(ASH, RAISED) };
@@ -617,7 +674,7 @@ fn providers_dialog(f: &mut Frame, app: &App, area: Rect, sel: usize, target: &s
     } else {
         put(f, inner, inner.x, inner.y, &format!(" {} ", target_label(target)), tab(true));
     }
-    let current = crate::providers::of(target_value(app, target)).map(|p| p.name);
+    let current = penelope_core::providers::of(target_value(app, target)).map(|p| p.name);
     let first = scroll.min(list.len().saturating_sub(rows));
     for (i, p) in list.iter().skip(first).take(rows).enumerate() {
         let y = inner.y + 2 + i as u16;
@@ -706,7 +763,7 @@ fn plugins_dialog(f: &mut Frame, app: &App, area: Rect, sel: usize, scroll: usiz
     if detail_w < 12 { return; }
     put(f, inner, x, inner.y + 3, &clip(&entry.name, detail_w as usize), on(PAPER, RAISED).add_modifier(Modifier::BOLD));
     put(f, inner, x, inner.y + 4, if entry.allow { "tools allowed" } else { "tools denied · A allows" }, on(if entry.allow { SEA } else { CLAY }, RAISED));
-    put(f, inner, x, inner.y + 5, &clip(&crate::files::show(std::path::Path::new(&entry.dir)), detail_w as usize), on(DIM, RAISED));
+    put(f, inner, x, inner.y + 5, &clip(&penelope_core::files::show(std::path::Path::new(&entry.dir)), detail_w as usize), on(DIM, RAISED));
     let mut y = inner.y + 7;
     let mut line = |y: &mut u16, text: &str, colour: art::Rgb| {
         if *y < inner.bottom().saturating_sub(2) {
@@ -767,7 +824,7 @@ fn plugin_commands_dialog(f: &mut Frame, app: &App, area: Rect, plugin: &str, se
 
 fn apps_dialog(f: &mut Frame, app: &App, area: Rect, sel: usize, scroll: usize) {
     let rows = &app.app_rows;
-    let active = crate::apps::active(&app.ctx);
+    let active = penelope_core::apps::active(&app.ctx);
     let inner = dialog(f, area, "Apps", 108, if rows.is_empty() { 12 } else { rows.len().min(12) as u16 + 8 });
     let summary = if rows.is_empty() {
         "No app installed · the first app is the cluster view".to_string()
@@ -801,14 +858,14 @@ fn apps_dialog(f: &mut Frame, app: &App, area: Rect, sel: usize, scroll: usize) 
     }
     if let Some(entry) = rows.get(sel.min(rows.len().saturating_sub(1))) {
         let note = if entry.description.is_empty() { entry.source.clone() } else { entry.description.clone() };
-        let note = if note.is_empty() { crate::files::show(&entry.dir) } else { note };
+        let note = if note.is_empty() { penelope_core::files::show(&entry.dir) } else { note };
         put(f, inner, inner.x, inner.bottom().saturating_sub(2), &clip(&note, inner.width as usize), on(ASH, RAISED));
     }
     put(f, inner, inner.x, inner.bottom().saturating_sub(1),
         "↑↓ · enter shows · o browser · a on/off · xx remove · esc", on(CLAY, RAISED));
 }
 
-fn app_install_dialog(f: &mut Frame, area: Rect, prepared: &crate::apps::Prepared) {
+fn app_install_dialog(f: &mut Frame, area: Rect, prepared: &penelope_core::apps::Prepared) {
     let update = prepared.update;
     let inner = dialog(f, area, if update { "Update app" } else { "Install app" }, 96, 24);
     let intro = if update {
@@ -938,7 +995,7 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
             }
             let (selected_provider, selected) = rows.get(*sel).cloned().unwrap_or_default();
             let selected_label = app.model_cache.get(&selected_provider).and_then(|list| list.iter().find(|m| m.id == selected)).map(|m| m.label.clone())
-                .or_else(|| crate::providers::models(&selected_provider).iter().find(|m| m.id == selected).map(|m| m.label.to_string()))
+                .or_else(|| penelope_core::providers::models(&selected_provider).iter().find(|m| m.id == selected).map(|m| m.label.to_string()))
                 .unwrap_or_else(|| selected.clone());
             let note = format!("{} · current {} / effort {}", selected_label, current, current_effort);
             put(f, inner, inner.x, inner.bottom().saturating_sub(2), &clip(&note, inner.width as usize), on(CLAY, RAISED));
@@ -981,9 +1038,9 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
             }
             put(f, inner, inner.x, y + 1, "enter or the number chooses · esc closes without an answer", on(DIM, RAISED));
         }
-        Overlay::Ask { dialog, .. } => super::ask::draw(f, area, dialog, crate::ask::now_secs()),
+        Overlay::Ask { dialog, .. } => super::ask::draw(f, area, dialog, penelope_core::ask::now_secs()),
         Overlay::Sessions { sel } => {
-            let all = crate::sessions::all(&app.ctx);
+            let all = penelope_core::sessions::all(&app.ctx);
             let inner = dialog(f, area, "Sessions", 92, all.len().min(16) as u16 + 7);
             put(f, inner, inner.x, inner.y, "enter opens · entf deletes · the newest is on top", on(ASH, RAISED));
             let rows = inner.height.saturating_sub(2) as usize;
@@ -995,7 +1052,7 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
                 let (bg, main, side) = if chosen { (CLAY, INK, INK) } else { (RAISED, PAPER, ASH) };
                 let row = Rect::new(inner.x.saturating_sub(1), y, inner.width + 2, 1);
                 fill(f, row, bg);
-                let meta = format!("{}  {:>3} turns", crate::sessions::stamp(e["last"].as_u64().unwrap_or(0)), e["turns"].as_u64().unwrap_or(0));
+                let meta = format!("{}  {:>3} turns", penelope_core::sessions::stamp(e["last"].as_u64().unwrap_or(0)), e["turns"].as_u64().unwrap_or(0));
                 put(f, row, inner.x, y, &format!("{:>2}", all.len() - first - i), on(side, bg));
                 put(f, row, inner.x + 4, y, &meta, on(side, bg));
                 put(f, row, inner.x + 6 + width(&meta) as u16, y, &clip(e["title"].as_str().unwrap_or(""), (inner.width as usize).saturating_sub(width(&meta) + 14)),
@@ -1010,7 +1067,7 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
         }
         Overlay::Graph(view) => super::graph::draw(f, area, view),
         Overlay::Brain { scroll } => {
-            let body = crate::brain::ascii(&app.ctx);
+            let body = penelope_core::brain::ascii(&app.ctx);
             let lines: Vec<&str> = body.lines().collect();
             let widest = lines.iter().map(|l| width(l)).max().unwrap_or(40) as u16;
             let inner = dialog(f, area, "The brain · the memory map as a graph", (widest + 6).clamp(56, 104), lines.len() as u16 + 7);
