@@ -34,6 +34,39 @@ pub fn scan(dir: &Path) -> Vet {
     out
 }
 
+/// Reads one file the person named. A Markdown file counts as prose even outside `skills/`, because the caller asked
+/// for the prose rules. A file that is too large, binary or missing is reported in `warnings`, never skipped silently.
+pub fn scan_file(path: &Path) -> Vet {
+    let mut out = Vet::default();
+    let Ok(meta) = fs::symlink_metadata(path) else {
+        out.warnings.push(finding("the file cannot be read", path, 0, "missing or not readable"));
+        return out;
+    };
+    if !meta.is_file() || meta.len() > FILE_BYTES {
+        out.warnings.push(finding("the file was not read", path, 0, "not a regular file, or larger than 512 KiB"));
+        return out;
+    }
+    match read_text(path) {
+        Some(text) => scan_text(path, &text, true),
+        None => {
+            out.warnings.push(finding("the file was not read", path, 0, "binary or not readable"));
+            out
+        }
+    }
+}
+
+/// Runs the rules over text that is already in memory. `name` only labels the findings. With `prose` the prose rules
+/// run too; without it only the invisible-Unicode rule runs, as for a script file.
+pub fn scan_text(name: &Path, text: &str, prose: bool) -> Vet {
+    let mut out = Vet::default();
+    invisible(name, text, &mut out);
+    if prose && out.finding.is_none() {
+        out.prose += 1;
+        prose_rules(name, text, &mut out);
+    }
+    out
+}
+
 struct Budget {
     files: usize,
     bytes: u64,
