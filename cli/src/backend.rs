@@ -62,6 +62,9 @@ fn tool_detail(input: &Value) -> String {
         let now = items.iter().find(|i| i["state"] == "doing").or_else(|| items.iter().find(|i| i["state"] == "pending"));
         return format!("{} of {} done{}", done, items.len(), now.and_then(|i| i["text"].as_str()).map(|t| format!(" · {}", t)).unwrap_or_default());
     }
+    if let (Some(to), Some(task)) = (input["to_mode"].as_str(), input["task"].as_str()) {          // a hand-off names its target
+        return format!("→ {}: {}", to, task.split_whitespace().collect::<Vec<_>>().join(" ")).chars().take(160).collect();
+    }
     for key in ["command", "url", "query", "task", "question", "path", "name", "text", "ref", "pattern"] {
         if let Some(s) = input[key].as_str().filter(|s| !s.is_empty()) {
             return s.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(160).collect();
@@ -204,6 +207,31 @@ fn screen_wanted(cfg: &Value, user: &str) -> bool {
         .iter().any(|k| text.contains(k))
 }
 
+/// The plugin MCP servers and ScreenCodec for a `claude` turn. A work mode without `mcp_call` (chat, agents) gets no
+/// plugin server, and one without `screen` gets no ScreenCodec tool. A plugin server none of whose tools is allowed is
+/// not started, and ScreenCodec starts only for a request that needs the screen (see `screen_wanted`).
+fn extra_servers(ctx: &Ctx, servers: &mut Value, allowed: &mut Vec<String>, wants_screen: bool) {
+    if crate::modes::allows(ctx, "mcp_call") {
+        allowed.extend(crate::plugins::allowed(ctx));        // a call works for plugins with "allow": true only
+        if let Some(obj) = crate::plugins::servers(ctx).as_object() {
+            for (k, s) in obj {
+                if allowed.iter().any(|a| a.starts_with(&format!("mcp__{}__", crate::plugins::tool_server(k)))) {
+                    servers[k] = s.clone();
+                }
+            }
+        }
+    }
+    let sc_cmd = ctx.cfg["screencodec"]["command"].as_str().filter(|c| !c.is_empty()).map(std::path::PathBuf::from).or_else(|| which("screencodec-mcp"));
+    if let Some(sc) = sc_cmd.filter(|_| wants_screen && crate::modes::allows(ctx, "screen")) {
+        servers["screencodec"] = json!({"command": sc.to_string_lossy(), "args": [], "env": {
+            "SDL_MCP_ALLOW_HOSTS": ctx.cfg["screencodec"]["hosts"].as_str().unwrap_or(""),
+            "SDL_MCP_IMAGE_DIRS": ctx.cfg["screencodec"]["images"].as_str().unwrap_or("")}});
+        for t in ["open", "screen", "zoom", "click", "type", "select", "key", "scroll", "image"] {
+            allowed.push(format!("mcp__screencodec__{}", t));
+        }
+    }
+}
+
 pub struct Chat {
     pub session: Option<String>,
     history: Vec<Value>,
@@ -229,13 +257,29 @@ pub struct Chat {
     live_seq: u64,
     /// True once a turn of this session used the screen tools: the ScreenCodec server stays on.
     screen_used: bool,
+    /// The work mode of this chat (`modes.rs`): chat, work, agents or code. Empty runs without a mode.
+    pub mode: String,
 }
 
 impl Chat {
     pub fn new() -> Chat {
         Chat { session: None, history: Vec::new(), history_kind: String::new(), input_tokens: 0, output_tokens: 0, turns: 0,
                cancel: Arc::new(AtomicBool::new(false)), pid: Arc::new(AtomicU32::new(0)), trace: Vec::new(),
-               routed: false, context_tokens: 0, route: crate::autoroute::RouteId::new(), gate_taint: None, stream: None, live_seq: 0, screen_used: false }
+               routed: false, context_tokens: 0, route: crate::autoroute::RouteId::new(), gate_taint: None, mode: String::new(), stream: None, live_seq: 0, screen_used: false }
+    }
+
+    /// The outside text a hand-off carries into its sub-session.
+    pub fn set_taint(&mut self, source: Option<String>) {
+        self.gate_taint = source;
+    }
+
+    /// The first outside text of this chat, if any.
+    pub fn taint(&self) -> Option<&str> {
+        self.gate_taint.as_deref()
+    }
+
+    pub fn tainted(&self) -> bool {
+        self.gate_taint.is_some()
     }
 
     /// Goes on with a stored conversation. A conversation through an HTTP endpoint gets its message history back from disk.
@@ -261,6 +305,17 @@ impl Chat {
     /// turn runs on the weak or the main model (see `autoroute.rs`); a trigger during a weak turn adds one follow-up
     /// turn on the main model.
     pub fn turn_with(&mut self, ctx: &Ctx, user: &str, memory: &str, on: &mut dyn FnMut(Event)) -> Result<String, String> {
+        // A chat in a work mode runs on the settings of that mode: its model, effort, route and tool set.
+        let moded;
+        let ctx = if crate::modes::valid(&self.mode) {
+            let mut m = crate::modes::effective(ctx, &self.mode, crate::modes::depth(ctx));
+            m.cfg["_caller"] = serde_json::json!(self.route.id);
+            if let Some(id) = &self.session { m.cfg["_caller_session"] = serde_json::json!(id); }
+            moded = m;
+            &moded
+        } else {
+            ctx
+        };
         if !crate::autoroute::active(ctx) {
             return self.turn_once(ctx, user, memory, on);
         }
@@ -306,7 +361,7 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
         let _prompt = crate::timing::span("system prompt build");
         // The stable part holds the rules and the skill names: it is the same in every turn of a session. The dynamic part
         // holds what depends on this request. A long-lived claude process gets it in the user message.
-        let mut stable = rules(ctx);
+        let mut stable = crate::modes::compose(ctx, rules(ctx));
         let skills = { let mut t = crate::timing::span("plugin skill index"); let x = crate::plugins::skill_index_compact(ctx); t.note(format!("{} chars", x.len())); x };
         if !skills.is_empty() {
             stable.push_str(&format!("\n\nInstalled skills (read one with the tool skill before you use it):\n{}", skills));
@@ -359,7 +414,10 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
             on(e)
         };
         let out = match ctx.cfg["main"]["kind"].as_str().unwrap_or("claude-cli") {
-            kind if crate::llm::is_api(kind) => self.turn_api(ctx, user, &system, &mut watch),
+            kind if crate::llm::is_api(kind) => {
+                let cancel = self.cancel.clone();
+                crate::modes::with_cancel(&cancel, || self.turn_api(ctx, user, &system, &mut watch))
+            }
             _ => self.turn_claude(ctx, user, &stable, &dynamic, &mut watch),
         };
         let checked = { let _t = crate::timing::span("post-turn: checker note"); crate::checker::turn_note(ctx, &trace, crate::checker::turn_start()) };
@@ -417,28 +475,12 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
         }
         let mut allowed: Vec<String> = mcp::main_tools(ctx).iter().map(|t| format!("mcp__penelope__{}", t)).collect();
         for t in crate::forge::specs(ctx) {          // a tool Penelope wrote is offered to the claude command too
-            if let Some(name) = t["name"].as_str() { allowed.push(format!("mcp__penelope__{}", name)); }
+            if let Some(name) = t["name"].as_str().filter(|n| crate::modes::allows(ctx, n)) { allowed.push(format!("mcp__penelope__{}", name)); }
         }
-        allowed.extend(crate::plugins::allowed(ctx));        // a call works for plugins with "allow": true only
-        if let Some(obj) = crate::plugins::servers(ctx).as_object() {
-            for (k, s) in obj {
-                // A server none of whose tools is allowed would only be started and connected for nothing.
-                if allowed.iter().any(|a| a.starts_with(&format!("mcp__{}__", crate::plugins::tool_server(k)))) {
-                    servers[k] = s.clone();
-                }
-            }
+        for (k, v) in crate::modes::env_for(ctx) {
+            servers["penelope"]["env"][k] = json!(v);        // the MCP server applies the same work mode
         }
-        let sc_cmd = ctx.cfg["screencodec"]["command"].as_str().filter(|c| !c.is_empty()).map(std::path::PathBuf::from).or_else(|| which("screencodec-mcp"));
-        if let Some(sc) = sc_cmd {
-            if self.screen_used || screen_wanted(&ctx.cfg, user) {
-                servers["screencodec"] = json!({"command": sc.to_string_lossy(), "args": [], "env": {
-                    "SDL_MCP_ALLOW_HOSTS": ctx.cfg["screencodec"]["hosts"].as_str().unwrap_or(""),
-                    "SDL_MCP_IMAGE_DIRS": ctx.cfg["screencodec"]["images"].as_str().unwrap_or("")}});
-                for t in ["open", "screen", "zoom", "click", "type", "select", "key", "scroll", "image"] {
-                    allowed.push(format!("mcp__screencodec__{}", t));
-                }
-            }
-        }
+        extra_servers(ctx, &mut servers, &mut allowed, self.screen_used || screen_wanted(&ctx.cfg, user));
         crate::timing::mark("claude servers", &format!("{} MCP servers started: {}", servers.as_object().map(|o| o.len()).unwrap_or(0),
             servers.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>().join(",")).unwrap_or_default()));
         let system = if stream || dynamic.is_empty() { stable.to_string() } else { format!("{}\n\n{}", stable, dynamic) };
@@ -715,6 +757,32 @@ while IFS= read -r line; do echo "$line" >> "$D/in.log"; reply; done
         assert!(screen_wanted(&cfg, "Open https://example.com and click the login button"));
         assert!(screen_wanted(&cfg, "Zeig mir den Bildschirm"));
         assert!(screen_wanted(&json!({"screencodec": {"always": true}}), "Fix the failing unit test"));
+    }
+
+    #[test]
+    fn a_work_mode_without_mcp_call_or_screen_gets_no_plugin_server_and_no_screencodec_tool() {
+        let root = std::env::temp_dir().join(format!("penelope-extra-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let mut ctx = crate::config::load(&root);
+        ctx.cfg["screencodec"]["command"] = json!("/bin/true");
+        let said = crate::plugins::mcp_add(&ctx, "db", "true", &[], true);
+        assert!(!said.starts_with("NOT"), "{}", said);
+        let build = |mode: &str| {
+            let moded = if mode.is_empty() { ctx.clone() } else { crate::modes::effective(&ctx, mode, 0) };
+            let (mut servers, mut allowed) = (json!({}), Vec::new());
+            extra_servers(&moded, &mut servers, &mut allowed, true);
+            (servers, allowed)
+        };
+        let (servers, allowed) = build("");
+        assert!(servers["db"].is_object() && servers["screencodec"].is_object() && allowed.iter().any(|a| a.starts_with("mcp__db__")));
+        for mode in ["chat", "agents"] {
+            let (servers, allowed) = build(mode);
+            assert!(servers.as_object().unwrap().is_empty() && allowed.is_empty(), "{} {:?}", mode, allowed);
+        }
+        let (servers, allowed) = build("work");
+        assert!(servers["db"].is_object() && servers["screencodec"].is_null() && !allowed.iter().any(|a| a.contains("screencodec")));
+        assert!(build("code").0["screencodec"].is_object());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
