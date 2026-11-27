@@ -69,7 +69,10 @@ pub fn allowed_for(role: &str) -> Vec<&'static str> {
         "tool" => &["screen", "cursor", "mcp_servers", "mcp_call", "brief_check", "brief_put", "read", "outline", "tree"],
         _ => &[],
     };
-    only.to_vec()
+    // Every role that reads results may read an attachment of a result.
+    let mut tools = only.to_vec();
+    if !tools.is_empty() { tools.push("attachment_read"); }
+    tools
 }
 
 pub fn may_call(role: &str, tool: &str) -> bool {
