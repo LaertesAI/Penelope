@@ -1853,3 +1853,23 @@ Measured: the index saves 58.7 % of the bytes at 8 tools, 64.3 % at 40 and 67.8 
 A flag per index entry cost 37 bytes and moved to the list's `_meta`; before that the index saved 54.4 % at 40.
 `cargo test` 371 passed, 1 ignored. Open: the bytes are not tokens of one tokenizer, and no other client speaks
 Mitos yet.
+
+## Eurykleia, the watcher of tool calls (branch `feat/eurykleia`)
+
+`eurykleia.rs` checks every tool call before it runs, without a model and without network. `tools::dispatch_retry`
+calls it first. Checks in order, each with a code: `E_NAME` unknown tool, `E_REQ` missing required argument, `E_TYPE`
+wrong JSON type, `E_EXTRA` argument not in the schema, `E_FMT` value outside a stated format (date YYYY-MM-DD, ISO
+date-time, "City, State", e-mail, URL, enum, minimum and maximum). Schemas come from `spec.rs`, from forged tools and,
+for `mcp_call`, from the tool list the MCP client already holds. A server that is not running is not checked.
+
+A failed call does not run. The model reads one line, for example `NOT run. E_REQ path: required by read.` The third
+failed call of one tool in one user turn gives `E_STRIKES`, and that tool stays closed until the next turn.
+
+Config `eurykleia`: `on` (default) or `off`. Counts per code go to `stats.json` and `penelope stats`. Tests: 11 new,
+`cargo test` 393 passed, 1 ignored.
+
+Open:
+- The format check reads the property description, so a description that names a format loosely can reject a call.
+- Strikes are counted per thread. A scout thread starts at zero and has no turn reset.
+- `route::validate` still runs after the watcher and says `NOT called.` for the cases the watcher misses, such as an
+  empty required string inside a nested object.

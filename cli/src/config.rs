@@ -19,6 +19,7 @@ pub fn default_config() -> Value {
         "edit_policy": "ask",
         "test_command": "",
         "test_attempts": 3,
+        "eurykleia": "on",
         "delegate": "auto",
         "search": {"kind": "auto", "url": "", "api_key_env": "BRAVE_API_KEY", "tavily_api_key_env": "TAVILY_API_KEY",
                    "exa_api_key_env": "EXA_API_KEY", "firecrawl_api_key_env": "FIRECRAWL_API_KEY", "fanout": true,

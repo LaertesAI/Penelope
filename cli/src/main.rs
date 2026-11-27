@@ -18,6 +18,7 @@ mod cost;
 mod crew;
 mod cursor;
 mod forge;
+mod eurykleia;
 mod eval;
 mod factories;
 mod files;
