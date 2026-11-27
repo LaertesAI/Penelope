@@ -51,6 +51,8 @@ Alt+E and `/effort` change the effort of the mode you are in. A mode that sets i
 | `modes.NAME.route` | `""` keeps `route`; `fixed` or `auto` | the cost mode of the mode (see `ROUTING.md`) |
 | `modes.NAME.tools` | a list of tool names, `*` for every tool, `-name` to take one away | replaces the default tool list. `["*", "-computer", "-screen"]` is code without the desktop tools. Tools Penelope wrote for the project are offered only with `*`. |
 
+A removal (`-name`) wins over `*` in any order. An entry that names no tool is reported in `/mode` and when you switch. `modes.confirm_rights` (default `true`) turns the rights question of hand-offs on or off. An unknown `PENELOPE_MODE` in the environment of the MCP server falls back to `chat`, the smallest tool set.
+
 A settings screen for these keys is planned. Until then edit `config.json`.
 
 ## Hand-offs between modes
@@ -68,7 +70,9 @@ Links are kept in `.penelope/handoffs.json`. One entry holds the mode and the se
 
 Guards:
 
-- A hand-off is a risky action of the class `delegate` when the turn holds outside text (level 0, such as a web page). The person must say yes. The sub-session starts with the same outside text, so its own calls are gated, and its result is stored at level 0.
+- A hand-off from a model to a mode that has rights the caller lacks (`git_commit`, `pr_create`, `computer`, `screen`, `cursor`, the `cluster_*` writers, `tool_new`, `skill_new`) asks the person first. Without a way to ask it is refused. `/send` is the person's own act and asks nothing.
+- In `chat` and `agents` the `claude` turn gets no plugin MCP server, and `chat`, `agents` and `work` get no ScreenCodec tools (`work` keeps plugin servers because it has `mcp_call`).
+- A hand-off is a risky action of the class `delegate` when the turn holds outside text (level 0, such as a web page). The person must say yes. The sub-session starts with the same outside text, so its own calls are gated, and its result is stored at level 0. The output of `agents` clusters always counts as level 0.
 - The depth limit is 2. A sub-session at depth 2 gets the refusal `NOT handed off. Hand-offs are 2 deep already`. A mode cannot hand off to itself.
 - The transcript shows each hand-off as a tool line with the target mode and the task. Esc stops the turn and the sub-session with it.
 - `chat` has no `hand_off` tool by default, because its tool set is two tools. Add `"hand_off"` to `modes.chat.tools` to allow it.
@@ -81,7 +85,7 @@ Guards:
 /send code "fix the failing test in parser.rs"
 ```
 
-Penelope builds the context from the last two exchanges of the transcript, runs the sub-session in the background and shows the result and the card. The interface then switches to the target mode. `/back` returns to the mode before `/send`. The next request there carries the result and the card, and the transcript keeps only your words.
+Penelope builds the context from the last two exchanges of the transcript, runs the sub-session in the background and shows the result and the card. The interface then switches to the target mode. `/back` returns to the mode before `/send`. The next request there carries the card as data in the notes of the request, with its origin level. It is not text you typed, so the gates do not trust it, and an `@path` in it is not read. A result that may hold outside text taints the chat. The transcript keeps only your words. `/send` starts the sub-session with the taint of the chat. A hand-off that fails shows the real error; only a stop by the person reads as a stop. Esc or a "no" in a dialog drops the commands that wait behind it.
 
 ## Lines with several commands
 

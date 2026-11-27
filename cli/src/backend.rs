@@ -119,6 +119,28 @@ above it holds a repository. Paths are relative to it, and ~ stands for the home
             today = &crate::sessions::stamp(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0))[..10])
 }
 
+/// The plugin MCP servers and ScreenCodec for a `claude` turn. A work mode without `mcp_call` (chat, agents) gets no
+/// plugin server, and one without `screen` gets no ScreenCodec tool.
+fn extra_servers(ctx: &Ctx, servers: &mut Value, allowed: &mut Vec<String>) {
+        if crate::modes::allows(ctx, "mcp_call") {
+            if let Some(obj) = crate::plugins::servers(ctx).as_object() {
+                for (k, s) in obj {
+                    servers[k] = s.clone();        // the model sees the tools of every plugin server
+                }
+            }
+            allowed.extend(crate::plugins::allowed(ctx));        // a call works for plugins with "allow": true only
+        }
+        let sc_cmd = ctx.cfg["screencodec"]["command"].as_str().filter(|c| !c.is_empty()).map(std::path::PathBuf::from).or_else(|| which("screencodec-mcp"));
+        if let Some(sc) = sc_cmd.filter(|_| crate::modes::allows(ctx, "screen")) {
+            servers["screencodec"] = json!({"command": sc.to_string_lossy(), "args": [], "env": {
+                "SDL_MCP_ALLOW_HOSTS": ctx.cfg["screencodec"]["hosts"].as_str().unwrap_or(""),
+                "SDL_MCP_IMAGE_DIRS": ctx.cfg["screencodec"]["images"].as_str().unwrap_or("")}});
+            for t in ["open", "screen", "zoom", "click", "type", "select", "key", "scroll", "image"] {
+                allowed.push(format!("mcp__screencodec__{}", t));
+            }
+        }
+}
+
 pub struct Chat {
     pub session: Option<String>,
     history: Vec<Value>,
@@ -153,6 +175,11 @@ impl Chat {
     /// The outside text a hand-off carries into its sub-session.
     pub fn set_taint(&mut self, source: Option<String>) {
         self.gate_taint = source;
+    }
+
+    /// The first outside text of this chat, if any.
+    pub fn taint(&self) -> Option<&str> {
+        self.gate_taint.as_deref()
     }
 
     pub fn tainted(&self) -> bool {
@@ -346,21 +373,7 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
         for (k, v) in crate::modes::env_for(ctx) {
             servers["penelope"]["env"][k] = json!(v);        // the MCP server applies the same work mode
         }
-        if let Some(obj) = crate::plugins::servers(ctx).as_object() {
-            for (k, s) in obj {
-                servers[k] = s.clone();        // the model sees the tools of every plugin server
-            }
-        }
-        allowed.extend(crate::plugins::allowed(ctx));        // a call works for plugins with "allow": true only
-        let sc_cmd = ctx.cfg["screencodec"]["command"].as_str().filter(|c| !c.is_empty()).map(std::path::PathBuf::from).or_else(|| which("screencodec-mcp"));
-        if let Some(sc) = sc_cmd {
-            servers["screencodec"] = json!({"command": sc.to_string_lossy(), "args": [], "env": {
-                "SDL_MCP_ALLOW_HOSTS": ctx.cfg["screencodec"]["hosts"].as_str().unwrap_or(""),
-                "SDL_MCP_IMAGE_DIRS": ctx.cfg["screencodec"]["images"].as_str().unwrap_or("")}});
-            for t in ["open", "screen", "zoom", "click", "type", "select", "key", "scroll", "image"] {
-                allowed.push(format!("mcp__screencodec__{}", t));
-            }
-        }
+        extra_servers(ctx, &mut servers, &mut allowed);
         let cfg = json!({"mcpServers": servers}).to_string();
         let mut cmd = Command::new("claude");
         cmd.args(["-p", user, "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--model", ctx.cfg["main"]["model"].as_str().unwrap_or("sonnet"),
@@ -509,6 +522,32 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_work_mode_without_mcp_call_or_screen_gets_no_plugin_server_and_no_screencodec_tool() {
+        let root = std::env::temp_dir().join(format!("penelope-extra-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let mut ctx = crate::config::load(&root);
+        ctx.cfg["screencodec"]["command"] = json!("/bin/true");
+        let said = crate::plugins::mcp_add(&ctx, "db", "true", &[], true);
+        assert!(!said.starts_with("NOT"), "{}", said);
+        let build = |mode: &str| {
+            let moded = if mode.is_empty() { ctx.clone() } else { crate::modes::effective(&ctx, mode, 0) };
+            let (mut servers, mut allowed) = (json!({}), Vec::new());
+            extra_servers(&moded, &mut servers, &mut allowed);
+            (servers, allowed)
+        };
+        let (servers, allowed) = build("");
+        assert!(servers["db"].is_object() && servers["screencodec"].is_object() && allowed.iter().any(|a| a.starts_with("mcp__db__")));
+        for mode in ["chat", "agents"] {
+            let (servers, allowed) = build(mode);
+            assert!(servers.as_object().unwrap().is_empty() && allowed.is_empty(), "{} {:?}", mode, allowed);
+        }
+        let (servers, allowed) = build("work");
+        assert!(servers["db"].is_object() && servers["screencodec"].is_null() && !allowed.iter().any(|a| a.contains("screencodec")));
+        assert!(build("code").0["screencodec"].is_object());
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn a_text_block_is_masked_once_and_counted_once() {

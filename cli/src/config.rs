@@ -37,7 +37,7 @@ pub fn default_config() -> Value {
         "auto_learn": true,
         "auto_skills": true,
         "mode": "auto",
-        "modes": {"default": "code",
+        "modes": {"default": "code", "confirm_rights": true,
                   "chat": {"model": "weak", "effort": "low", "route": "fixed"},
                   "work": {"model": "", "effort": "", "route": ""},
                   "agents": {"model": "", "effort": "", "route": ""},

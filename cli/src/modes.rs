@@ -19,6 +19,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+/// A hand-off that the person stopped starts its error with this text; any other `NOT handed off` is a failure.
+pub const STOPPED: &str = "NOT handed off. Stopped:";
+
 pub const NAMES: &[&str] = &["chat", "work", "agents", "code"];
 
 /// A hand-off may start at most this many nested sub-sessions. The sub-session at the limit has no hand_off.
@@ -97,16 +100,23 @@ fn open_ended(ctx: &Ctx, name: &str) -> bool {
 /// The built-in tools of a mode, in the order of the tool table.
 pub fn tool_list(ctx: &Ctx, name: &str) -> Vec<&'static str> {
     let mut set: Vec<&'static str> = Vec::new();
+    let mut gone: Vec<String> = Vec::new();
     for e in entries(ctx, name) {
         if e == "*" {
             set = crate::spec::names();
-        } else if let Some(gone) = e.strip_prefix('-') {
-            set.retain(|t| *t != gone.trim());
+        } else if let Some(g) = e.strip_prefix('-') {
+            gone.push(g.trim().to_string());          // a removal wins over `*`, whatever the order
         } else if let Some(t) = crate::spec::names().into_iter().find(|t| *t == e.trim_start_matches('+').trim()) {
             if !set.contains(&t) { set.push(t); }
         }
     }
-    crate::spec::names().into_iter().filter(|t| set.contains(t)).collect()
+    crate::spec::names().into_iter().filter(|t| set.contains(t) && !gone.iter().any(|g| g == t)).collect()
+}
+
+/// The entries of `modes.NAME.tools` that name no built-in tool. They do nothing; the mode report and the switch say so.
+pub fn unknown_tools(ctx: &Ctx, name: &str) -> Vec<String> {
+    let names = crate::spec::names();
+    entries(ctx, name).into_iter().filter(|e| e != "*" && !names.contains(&e.trim_start_matches(['+', '-']).trim())).collect()
 }
 
 /// True when the lead of this copy of the settings may see and call the tool. A copy without a mode allows every tool.
@@ -170,7 +180,7 @@ pub fn effective(ctx: &Ctx, name: &str, depth: u32) -> Ctx {
 pub fn from_env(ctx: &Ctx) -> Ctx {
     let Ok(name) = std::env::var("PENELOPE_MODE") else { return ctx.clone() };
     let depth = std::env::var("PENELOPE_HANDOFF_DEPTH").ok().and_then(|d| d.parse().ok()).unwrap_or(0);
-    let mut out = effective(ctx, name.trim(), depth);
+    let mut out = from_name(ctx, &name, depth);
     if let Ok(key) = std::env::var("PENELOPE_CALLER") {
         out.cfg["_caller"] = json!(key);
     }
@@ -178,6 +188,11 @@ pub fn from_env(ctx: &Ctx) -> Ctx {
         out.cfg["_caller_session"] = json!(session);
     }
     out
+}
+
+/// The settings of a mode by name. A name that is no mode fails closed: the smallest tool set, not all tools.
+pub fn from_name(ctx: &Ctx, name: &str, depth: u32) -> Ctx {
+    effective(ctx, if valid(name.trim()) { name.trim() } else { "chat" }, depth)
 }
 
 /// The variables a `claude` turn passes to its MCP server so the server applies the same mode.
@@ -250,6 +265,10 @@ pub fn report(ctx: &Ctx, active: &str, session: &str) -> String {
         out.push_str(&format!("{} {:<7} {}\n", if *name == active { "●" } else { "○" }, name, what(name)));
         out.push_str(&format!("          model {} · effort {} · route {} · {} tools\n", model, effort,
                               eff.cfg["route"].as_str().unwrap_or("fixed"), tool_list(ctx, name).len()));
+        let unknown = unknown_tools(ctx, name);
+        if !unknown.is_empty() {
+            out.push_str(&format!("          warning: modes.{}.tools names no tool: {}\n", name, unknown.join(", ")));
+        }
     }
     out.push_str("\n/mode NAME switches in the interface, Shift+Tab cycles, penelope ask --mode NAME starts in one.\n\
 /send MODE TASK hands a task to another mode, /back returns. Settings: modes.NAME.model, effort, tools and route in config.json.\n");
@@ -298,6 +317,8 @@ pub struct Request {
     pub to: String,
     pub task: String,
     pub context: String,
+    /// True when the person typed the hand-off (`/send`): the person already agreed to the rights of the target.
+    pub by_person: bool,
 }
 
 /// What a hand-off returns: the full text, the line for the caller and the card of the stored attachment.
@@ -307,6 +328,8 @@ pub struct Outcome {
     pub summary: String,
     pub card: String,
     pub session: String,
+    /// True when outside text (level 0) may be in the result: the caller's turn was tainted, or the clusters read the web.
+    pub tainted: bool,
 }
 
 impl Outcome {
@@ -335,9 +358,41 @@ pub fn links(ctx: &Ctx) -> Vec<Value> {
     std::fs::read_to_string(links_path(ctx)).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
 }
 
-fn save_links(ctx: &Ctx, all: &[Value]) {
-    let from = all.len().saturating_sub(500);
-    let _ = std::fs::write(links_path(ctx), serde_json::to_string_pretty(&all[from..]).unwrap_or_default());
+/// Runs `f` on the list of links with the lock held. A file that does not parse is moved aside as
+/// `handoffs.corrupt-TIME.json`, never overwritten. The list is written to a temporary file and renamed, so a reader
+/// never sees half a file.
+fn update_links(ctx: &Ctx, f: impl FnOnce(&mut Vec<Value>) -> bool) {
+    let dir = &ctx.root;
+    let _ = std::fs::create_dir_all(dir);
+    let lock = dir.join("handoffs.lock");
+    let mut tries = 0;
+    while std::fs::OpenOptions::new().write(true).create_new(true).open(&lock).is_err() {
+        tries += 1;
+        let stale = std::fs::metadata(&lock).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).map(|e| e.as_secs() > 10).unwrap_or(false);
+        if stale || tries > 200 {
+            let _ = std::fs::remove_file(&lock);
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let path = links_path(ctx);
+    let mut all: Vec<Value> = match std::fs::read_to_string(&path) {
+        Ok(text) => match serde_json::from_str(&text) {
+            Ok(list) => list,
+            Err(_) => {
+                let _ = std::fs::rename(&path, dir.join(format!("handoffs.corrupt-{}.json", now())));
+                Vec::new()
+            }
+        },
+        Err(_) => Vec::new(),
+    };
+    if f(&mut all) {
+        let from = all.len().saturating_sub(500);
+        let tmp = dir.join(format!("handoffs.{}.tmp", std::process::id()));
+        if std::fs::write(&tmp, serde_json::to_string_pretty(&all[from..]).unwrap_or_default()).is_ok() {
+            let _ = std::fs::rename(&tmp, &path);
+        }
+    }
+    let _ = std::fs::remove_file(&lock);
 }
 
 /// The hand-offs that start or end in a session. The link is found from both sides.
@@ -351,21 +406,56 @@ pub fn bind_caller(ctx: &Ctx, key: &str, session: &str) {
     if key.is_empty() || session.is_empty() {
         return;
     }
-    let mut all = links(ctx);
-    let mut changed = false;
-    for l in all.iter_mut().filter(|l| l["caller"].as_str() == Some(key) && l["from_session"].is_null()) {
-        l["from_session"] = json!(session);
-        changed = true;
-    }
-    if changed {
-        save_links(ctx, &all);
-    }
+    update_links(ctx, |all| {
+        let mut changed = false;
+        for l in all.iter_mut().filter(|l| l["caller"].as_str() == Some(key) && l["from_session"].is_null()) {
+            l["from_session"] = json!(session);
+            changed = true;
+        }
+        changed
+    });
 }
 
 fn add_link(ctx: &Ctx, entry: Value) {
-    let mut all = links(ctx);
-    all.push(entry);
-    save_links(ctx, &all);
+    update_links(ctx, |all| {
+        all.push(entry);
+        true
+    });
+}
+
+/// Tools that change things outside a read: a hand-off to a mode that has more of them than the caller needs a yes.
+const RIGHTS: &[&str] = &["git_commit", "pr_create", "computer", "screen", "cursor", "cluster_start", "cluster_spawn", "cluster_respawn",
+                          "cluster_kill", "cluster_profile", "tool_new", "skill_new", "write", "edit"];
+
+/// The rights the target mode has and the calling mode lacks.
+pub fn extra_rights(ctx: &Ctx, from: &str, to: &str) -> Vec<&'static str> {
+    let have = if valid(from) { tool_list(ctx, from) } else { crate::spec::names() };
+    let gets = tool_list(ctx, to);
+    RIGHTS.iter().copied().filter(|r| gets.contains(r) && !have.contains(r)).collect()
+}
+
+/// A model hands a task to a mode with more rights: the person decides. The person's own `/send` needs no question.
+fn confirm_rights(ctx: &Ctx, req: &Request) -> Result<(), String> {
+    let extra = extra_rights(ctx, &req.from, &req.to);
+    if req.by_person || extra.is_empty() || ctx.cfg["modes"]["confirm_rights"].as_bool() == Some(false) {
+        return Ok(());
+    }
+    let question = crate::ask::Question {
+        question: format!("Mode {} wants to hand a task to mode {}, which can also use: {}.\nTask: {}", req.from, req.to, extra.join(", "),
+                          req.task.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(200).collect::<String>()),
+        header: "Hand-off".to_string(),
+        options: vec![crate::ask::Opt { label: "No, do not hand off".to_string(), description: "nothing runs".to_string() },
+                      crate::ask::Opt { label: "Yes, hand it off".to_string(), description: format!("mode {} runs the task", req.to) }],
+        multi_select: false,
+        allow_text: false,
+    };
+    if !crate::clarify::can_ask() {
+        return Err(format!("NOT handed off. Mode {} has tools mode {} lacks ({}), and nobody can confirm here. Ask the person to type /send {} TASK.", req.to, req.from, extra.join(", "), req.to));
+    }
+    match crate::ask::ask_confirm(std::slice::from_ref(&question), crate::ask::timeout_secs(ctx)) {
+        crate::ask::Reply::Answers(a) if a.first().and_then(|a| a.labels.first()).map(|l| l.starts_with("Yes")).unwrap_or(false) => Ok(()),
+        _ => Err("NOT handed off. The person did not agree to the hand-off.".to_string()),
+    }
 }
 
 fn prompt_for(req: &Request, depth: u32) -> String {
@@ -394,8 +484,9 @@ pub fn run(ctx: &Ctx, req: &Request, cancel: Option<Arc<AtomicBool>>) -> Result<
     }
     let cancel = cancel.or_else(|| CALLER_CANCEL.with(|c| c.borrow().clone()));
     if cancel.as_ref().map(|c| c.load(Ordering::SeqCst)).unwrap_or(false) {
-        return Err("NOT handed off. The turn was stopped.".to_string());
+        return Err(format!("{} the turn was stopped.", STOPPED));
     }
+    confirm_rights(ctx, req)?;
     let deeper = depth(ctx) + 1;
     let sub_ctx = effective(ctx, &req.to, deeper);
     let prompt = prompt_for(req, deeper);
@@ -405,7 +496,8 @@ pub fn run(ctx: &Ctx, req: &Request, cancel: Option<Arc<AtomicBool>>) -> Result<
         let goal = format!("{}{}", req.task.trim(), if req.context.trim().is_empty() { String::new() } else { format!("\n\nContext: {}", req.context.trim().chars().take(CONTEXT_MAX).collect::<String>()) });
         let text = crate::clarify::start_cluster(&sub_ctx, &goal, None, true, &serde_json::Map::new())
             .map_err(|e| if e.starts_with("NOT") { e } else { format!("NOT handed off. {}", e) })?;
-        (text, crate::sessions::new_id().replacen("api-", "hand-", 1), 0u64, taint.is_some())
+        // The clusters read the web and run commands: their output is outside text.
+        (text, crate::sessions::new_id().replacen("api-", "hand-", 1), 0u64, true)
     } else {
         let mut chat = crate::backend::Chat::new();
         chat.mode = req.to.clone();
@@ -436,7 +528,8 @@ pub fn run(ctx: &Ctx, req: &Request, cancel: Option<Arc<AtomicBool>>) -> Result<
             }
         };
         let (out, session, calls, tainted) = result;
-        let text = out.map_err(|e| format!("NOT handed off. The sub-session in mode {} stopped: {}", req.to, e))?;
+        let text = out.map_err(|e| if e == "stopped" { format!("{} the sub-session in mode {} was stopped.", STOPPED, req.to) }
+                                   else { format!("NOT handed off. The sub-session in mode {} failed: {}", req.to, e) })?;
         (text, session.unwrap_or_else(crate::sessions::new_id), calls, tainted)
     };
     // The full result is an attachment: the caller reads a line and the card, and reads ranges when it needs them.
@@ -454,7 +547,7 @@ pub fn run(ctx: &Ctx, req: &Request, cancel: Option<Arc<AtomicBool>>) -> Result<
                      json!({"k": "user", "t": req.task.trim()}), json!({"k": "reply", "t": text})];
     crate::sessions::save_transcript(ctx, &session, &items);
     crate::sessions::record(ctx, &session, &format!("[hand-off from {}] {}", req.from, req.task), 1, (0, 0));
-    Ok(Outcome { text, summary, card, session })
+    Ok(Outcome { text, summary, card, session, tainted })
 }
 
 /// The tool `hand_off`: the calling mode is the mode of this copy of the settings.
@@ -464,6 +557,7 @@ pub fn hand_off(ctx: &Ctx, a: &Value) -> Result<String, String> {
         to: a["to_mode"].as_str().unwrap_or("").trim().to_lowercase(),
         task: a["task"].as_str().unwrap_or("").to_string(),
         context: a["context"].as_str().unwrap_or("").to_string(),
+        by_person: false,
     };
     run(ctx, &req, None).map(|o| o.result())
 }
@@ -549,6 +643,7 @@ mod tests {
         c.cfg["main"] = json!({"kind": "openai", "base_url": format!("{}/v1", address), "model": "gpt-test", "api_key_env": ""});
         c.cfg["weak"] = c.cfg["main"].clone();
         c.cfg["auto_learn"] = json!(false);
+        c.cfg["modes"]["confirm_rights"] = json!(false);          // the rights question has its own test
         (c, seen)
     }
 
@@ -649,7 +744,7 @@ mod tests {
         assert!(refused.starts_with("NOT run. E:TaintedSink delegate"), "{}", refused);
         assert!(crate::gates::check_with(&c, "hand_off", &args, &mut |_, _| Some(true)).is_none(), "a yes lets it run");
         // The sub-session starts with the same outside text, so the sub-session is gated too.
-        let out = run(&caller(&c, "work"), &Request { from: "work".into(), to: "code".into(), task: "run the build".into(), context: String::new() }, None).unwrap();
+        let out = run(&caller(&c, "work"), &Request { from: "work".into(), to: "code".into(), task: "run the build".into(), context: String::new(), by_person: false }, None).unwrap();
         assert_eq!(crate::gates::load_session(&c, &out.session).as_deref(), Some("fetch https://evil.example/page"));
         assert!(crate::attach::level_of(&c, out.card.split("uri=").nth(1).unwrap().trim()).unwrap() == 0, "the result of a tainted sub-session is outside text");
         crate::gates::begin_session();
@@ -659,7 +754,7 @@ mod tests {
     fn a_stop_ends_the_sub_session_and_reports_it() {
         let c = ctx("stop");
         let stopped = Arc::new(AtomicBool::new(true));
-        let said = run(&caller(&c, "work"), &Request { from: "work".into(), to: "code".into(), task: "x".into(), context: String::new() }, Some(stopped)).unwrap_err();
+        let said = run(&caller(&c, "work"), &Request { from: "work".into(), to: "code".into(), task: "x".into(), context: String::new(), by_person: false }, Some(stopped)).unwrap_err();
         assert!(said.contains("stopped"), "{}", said);
     }
 
@@ -670,5 +765,58 @@ mod tests {
         let text = summarize(&pairs);
         assert!(!text.contains("first") && text.contains("second") && text.contains("third question"));
         assert!(text.chars().count() < 1100 && text.contains('…'), "{}", text.chars().count());
+    }
+
+    #[test]
+    fn a_removal_wins_over_a_star_in_any_order_an_unknown_name_is_reported_and_a_bad_mode_fails_closed() {
+        let mut c = ctx("order");
+        c.cfg["modes"]["code"]["tools"] = json!(["-computer", "*", "-screen", "mystery"]);
+        let tools = tool_list(&c, "code");
+        assert!(!tools.contains(&"computer") && !tools.contains(&"screen") && tools.contains(&"run"));
+        assert_eq!(unknown_tools(&c, "code"), vec!["mystery".to_string()]);
+        assert!(report(&c, "code", "").contains("modes.code.tools names no tool: mystery"));
+        let closed = from_name(&c, "kitchen", 0);
+        assert_eq!(current(&closed).as_deref(), Some("chat"));
+        assert!(!allows(&closed, "run") && allows(&closed, "memory_find"));
+    }
+
+    #[test]
+    fn a_hand_off_to_a_mode_with_more_rights_needs_the_person_unless_the_person_typed_it() {
+        let c = ctx("rights");
+        assert_eq!(extra_rights(&c, "work", "code"), vec!["git_commit", "pr_create", "computer", "screen", "cursor", "cluster_start", "cluster_spawn",
+                                                           "cluster_respawn", "cluster_kill", "cluster_profile", "tool_new", "skill_new"]);
+        assert!(extra_rights(&c, "code", "work").is_empty());
+        assert!(extra_rights(&c, "work", "agents").contains(&"cluster_start"));
+        let from = caller(&c, "work");
+        let said = hand_off(&from, &json!({"to_mode": "code", "task": "commit it"})).unwrap_err();
+        assert!(said.starts_with("NOT handed off. Mode code has tools mode work lacks (git_commit") && said.contains("nobody can confirm"), "{}", said);
+        assert!(links(&c).is_empty());
+    }
+
+    #[test]
+    fn a_failure_of_the_sub_session_shows_its_error_and_is_not_called_a_stop() {
+        let mut c = ctx("failure");
+        c.cfg["main"] = json!({"kind": "openai", "base_url": "http://127.0.0.1:9/v1", "model": "gpt-test", "api_key_env": "PENELOPE_NO_SUCH_KEY_FOR_TEST"});
+        c.cfg["modes"]["confirm_rights"] = json!(false);
+        let said = hand_off(&caller(&c, "work"), &json!({"to_mode": "code", "task": "x"})).unwrap_err();
+        assert!(said.starts_with("NOT handed off. The sub-session in mode code failed: ") && !said.starts_with(STOPPED) && said.len() > 70, "{}", said);
+    }
+
+    #[test]
+    fn two_writers_keep_every_link_and_a_broken_file_is_kept_aside() {
+        let c = ctx("links");
+        let handles: Vec<_> = (0..6).map(|w| {
+            let c = c.clone();
+            std::thread::spawn(move || for n in 0..5 { add_link(&c, json!({"id": format!("h-{}-{}", w, n), "caller": "k", "from_session": null})); })
+        }).collect();
+        for h in handles { h.join().unwrap(); }
+        assert_eq!(links(&c).len(), 30);
+        assert!(!c.root.join("handoffs.lock").exists());
+        std::fs::write(links_path(&c), "{ not json").unwrap();
+        add_link(&c, json!({"id": "after"}));
+        assert_eq!(links(&c).len(), 1);
+        let kept: Vec<_> = std::fs::read_dir(&c.root).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().starts_with("handoffs.corrupt-")).collect();
+        assert_eq!(kept.len(), 1);
+        assert_eq!(std::fs::read_to_string(kept[0].path()).unwrap(), "{ not json");
     }
 }

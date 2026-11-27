@@ -1001,6 +1001,7 @@ fn answer_json(ctx: &config::Ctx, chat: &mut backend::Chat, text: &str) -> bool 
         backend::Event::Masked(n) => emit(serde_json::json!({"event": "masked_request", "items": n})),
         backend::Event::MaskedAnswer(n) => { masked += n; emit(serde_json::json!({"event": "masked_answer", "items": n})); }
     });
+    modes::bind_caller(ctx, chat.route_id(), chat.session.as_deref().unwrap_or(""));
     match result {
         Ok(answer) => {
             emit(serde_json::json!({"event": "result", "text": answer, "tokens_in": chat.input_tokens, "tokens_out": chat.output_tokens,
@@ -1032,6 +1033,7 @@ fn answer(ctx: &config::Ctx, chat: &mut backend::Chat, text: &str) {
             masked += n;
         }
     });
+    modes::bind_caller(ctx, chat.route_id(), chat.session.as_deref().unwrap_or(""));
     match result {
         Ok(a) => {
             if !trail.is_empty() {
