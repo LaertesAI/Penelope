@@ -74,7 +74,7 @@ fn run_code(args: &[&str]) -> (i32, String, String) {
 
 #[test]
 fn a_missing_shadow_profile_exits_2_before_a_dry_run() {
-    let d = temp("shadow");
+    let d = temp("shadow-missing");
     let root = root_with_model(&d, "http://127.0.0.1:9");
     let (code, out, err) = run_code(&["--root", &root.to_string_lossy(), "cluster", "run", "fix", "--shadow", "nosuch", "--dry"]);
     assert_eq!(code, 2, "{} {}", out, err);
@@ -84,7 +84,7 @@ fn a_missing_shadow_profile_exits_2_before_a_dry_run() {
 
 #[test]
 fn a_missing_cluster_status_exits_2() {
-    let d = temp("status");
+    let d = temp("status-missing");
     let root = root_with_model(&d, "http://127.0.0.1:9");
     let (code, out, err) = run_code(&["--root", &root.to_string_lossy(), "cluster", "status", "nosuch"]);
     assert_eq!(code, 2, "{} {}", out, err);
