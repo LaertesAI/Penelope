@@ -30,7 +30,7 @@ pub fn default_config() -> Value {
                    "jina": false, "jina_base": "https://r.jina.ai/", "wikipedia": false,
                    "searxng_url": "", "api_url": "", "server_api_key_env": "PENELOPE_SEARCH_API_KEY", "urls": [],
                    "rerank": {"url": "", "api_key_env": "RERANK_API_KEY", "enabled": false}},
-        "research": {"max_rounds": 3, "max_parallel": 3, "pages_per_sub": 4, "page_chars": 12000, "max_queries": 3},
+        "research": {"max_rounds": 3, "max_parallel": 3, "pages_per_sub": 4, "page_chars": 12000, "max_queries": 3, "max_checks": 80, "default_price": [3.0, 15.0]},
         "reader": {"enabled": true, "url": "", "api_key_env": "PENELOPE_READER_API_KEY"},
         "privacy": "rules",
         "privacy_answers": true,
