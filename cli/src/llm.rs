@@ -248,7 +248,7 @@ pub fn chat_cancel(model: &Value, system: &str, history: &[Value], tools: &[Valu
         let mut calls: Vec<ToolCall> = blocks.iter().filter(|b| b["type"] == "tool_use").map(|b| ToolCall {
             id: b["id"].as_str().unwrap_or("").to_string(), name: b["name"].as_str().unwrap_or("").to_string(), args: b["input"].clone() }).collect();
         let mut text = text;
-        if calls.is_empty() && model["tool_format"].as_str() == Some("text") && text.contains("<tool_call>") {
+        if calls.is_empty() && model["tool_format"].as_str() == Some("text") && (text.contains("<tool_call>") || text.contains(DSML)) {
             let (found, rest) = text_tool_calls(&text);
             calls = found;
             text = rest;
@@ -303,7 +303,7 @@ pub fn chat_cancel(model: &Value, system: &str, history: &[Value], tools: &[Valu
         } }).collect();
     let mut text = message["content"].as_str().unwrap_or("").trim().to_string();
     // A server without a tool-call parser hands Qwen's <tool_call> blocks back as text. They become calls here.
-    if calls.is_empty() && text.contains("<tool_call>") {
+    if calls.is_empty() && (text.contains("<tool_call>") || text.contains(DSML)) {
         let (found, rest) = text_tool_calls(&text);
         calls = found;
         text = rest;
@@ -350,9 +350,44 @@ pub fn text_tool_calls(content: &str) -> (Vec<ToolCall>, String) {
         cursor = &after[close + "</tool_call>".len()..];
     }
     left.push_str(cursor);
+    if calls.is_empty() && left.contains(DSML) {
+        let (found, rest) = dsml_tool_calls(&left);
+        calls = found;
+        left = rest;
+    }
     let text = left.trim();
     let text = text.strip_prefix("none:").map(str::trim).unwrap_or(text);
     (calls, text.to_string())
+}
+
+/// The marker of DeepSeek's own text template for tool calls (fullwidth bars).
+pub const DSML: &str = "\u{ff5c}DSML\u{ff5c}";
+
+/// Tool calls in DeepSeek's DSML template, which DeepSeek V4 writes when no API tool field is set:
+/// `<｜DSML｜ invoke name="run">` with one `<｜DSML｜ parameter name="command" string="true">VALUE</｜DSML｜ parameter>`
+/// per argument, inside a `calls` or `function_calls` block. `string="true"` keeps the value as text; any other value is
+/// read as JSON and stays text when it does not parse. The blocks leave the text; everything else stays.
+pub fn dsml_tool_calls(content: &str) -> (Vec<ToolCall>, String) {
+    let bar = "\u{ff5c}";
+    let block = regex::Regex::new(&format!(r"(?s)<{b}DSML{b}\s*(?:function_)?calls>.*?</{b}DSML{b}\s*(?:function_)?calls>", b = bar)).unwrap();
+    let invoke = regex::Regex::new(&format!(r#"(?s)<{b}DSML{b}\s*invoke\s+name="([^"]+)"\s*>(.*?)</{b}DSML{b}\s*invoke>"#, b = bar)).unwrap();
+    let param = regex::Regex::new(&format!(r#"(?s)<{b}DSML{b}\s*parameter\s+name="([^"]+)"(?:\s+string="(true|false)")?\s*>(.*?)</{b}DSML{b}\s*parameter>"#, b = bar)).unwrap();
+    let mut calls = Vec::new();
+    for m in invoke.captures_iter(content) {
+        let mut args = serde_json::Map::new();
+        for p in param.captures_iter(&m[2]) {
+            let raw = &p[3];
+            let value = if p.get(2).map(|s| s.as_str()) == Some("true") {
+                json!(raw)
+            } else {
+                serde_json::from_str(raw.trim()).unwrap_or_else(|_| json!(raw))
+            };
+            args.insert(p[1].to_string(), value);
+        }
+        calls.push(ToolCall { id: format!("text-call-{}", calls.len() + 1), name: m[1].to_string(), args: Value::Object(args) });
+    }
+    let rest = if calls.is_empty() { content.to_string() } else { block.replace_all(content, "").to_string() };
+    (calls, rest)
 }
 
 /// The tool loop. `history` grows by every message of the turn. `exec` runs one tool call and returns its text and
@@ -456,6 +491,25 @@ pub fn run_loop_with(model: &Value, system: &str, history: &mut Vec<Value>, tool
 #[cfg(test)]
 mod text_call_tests {
     use super::*;
+
+    #[test]
+    fn deepseek_dsml_blocks_become_calls() {
+        // The answer DeepSeek V4.1 Flash wrote in a calibration run with the text tool format (hard-fix-median).
+        let answer = "I'll start by looking at the project.\n\n<\u{ff5c}DSML\u{ff5c} calls>\n<\u{ff5c}DSML\u{ff5c} invoke name=\"run\">\n\
+<\u{ff5c}DSML\u{ff5c} parameter name=\"command\" string=\"true\">cat app/mathutil.py && echo \"---\"</\u{ff5c}DSML\u{ff5c} parameter>\n\
+<\u{ff5c}DSML\u{ff5c} parameter name=\"timeout\" string=\"false\">30</\u{ff5c}DSML\u{ff5c} parameter>\n</\u{ff5c}DSML\u{ff5c} invoke>\n\
+<\u{ff5c}DSML\u{ff5c}invoke name=\"read\">\n<\u{ff5c}DSML\u{ff5c}parameter name=\"path\" string=\"true\">tests/test_median.py</\u{ff5c}DSML\u{ff5c}parameter>\n\
+</\u{ff5c}DSML\u{ff5c}invoke>\n</\u{ff5c}DSML\u{ff5c} calls>";
+        let (calls, rest) = text_tool_calls(answer);
+        assert_eq!(calls.len(), 2);
+        assert_eq!((calls[0].name.as_str(), calls[0].args["command"].as_str()), ("run", Some("cat app/mathutil.py && echo \"---\"")));
+        assert_eq!(calls[0].args["timeout"], json!(30));
+        assert_eq!((calls[1].name.as_str(), calls[1].args["path"].as_str()), ("read", Some("tests/test_median.py")));
+        assert_eq!(rest, "I'll start by looking at the project.");
+        // Text with the marker and no invoke block stays as it is.
+        let (none, same) = text_tool_calls("a \u{ff5c}DSML\u{ff5c} marker");
+        assert!(none.is_empty() && same == "a \u{ff5c}DSML\u{ff5c} marker");
+    }
 
     #[test]
     fn two_blocks_after_a_thought_become_two_calls() {
