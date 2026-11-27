@@ -557,7 +557,7 @@ mod tests {
 
 /// A small HTTP server for tests. It plays an endpoint: every request gets the next prepared body, and the server
 /// keeps what it received. No test talks to a real provider.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fake"))]
 pub mod fake {
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;

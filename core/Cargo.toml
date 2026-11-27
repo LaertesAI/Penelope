@@ -15,3 +15,7 @@ serde_json = "1"
 regex = "1"
 ureq = { version = "2", features = ["json"] }
 zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+
+[features]
+# The local HTTP fake for tests of a frontend crate. No production build enables it.
+test-fake = []

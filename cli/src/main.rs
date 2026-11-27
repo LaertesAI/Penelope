@@ -13,6 +13,9 @@ penelope chat --plain         chat line by line, without the full screen interfa
 penelope chat --resume N      go on with session N of the list
 penelope ask \"TEXT\"           one question, one answer
 penelope ask --json \"TEXT\"    the same turn as newline-delimited JSON events
+penelope ask --mode NAME \"TEXT\"
+                              one question in a work mode: chat, work, agents or code
+penelope chat --mode NAME     start the chat in a work mode (shift+tab and /mode switch it)
 penelope init                 create a .penelope folder in this directory
 penelope setup [--here]       answer seven questions: models, who searches, privacy, policies, web search
 penelope providers            list the provider table and say per entry whether its key is set
@@ -657,6 +660,8 @@ fn main() {
         }
         "mcp" => {
             mcp::set_root_given(root_arg.is_some());
+            // A turn in a work mode starts this server with PENELOPE_MODE: the tool list and the checks follow it.
+            let ctx = modes::from_env(&ctx);
             mcp::serve(&ctx)
         }
         "acp" => {
@@ -678,15 +683,20 @@ fn main() {
         "ask" => {
             let mut json = false;
             let mut words = Vec::new();
-            for arg in &args[1..] {
-                if arg == "--json" { json = true; } else { words.push(arg.clone()); }
+            let mut work_mode = String::new();
+            let mut rest = args[1..].iter();
+            while let Some(arg) = rest.next() {
+                if arg == "--json" { json = true; }
+                else if arg == "--mode" { work_mode = rest.next().cloned().unwrap_or_default(); }
+                else { words.push(arg.clone()); }
             }
             let text = words.join(" ");
-            if text.trim().is_empty() {
-                loom::warn("usage: penelope ask [--json] \"TEXT\"");
+            if text.trim().is_empty() || (args.iter().any(|a| a == "--mode") && !modes::valid(&work_mode)) {
+                loom::warn(&format!("usage: penelope ask [--json] [--mode {}] \"TEXT\"", modes::NAMES.join("|")));
                 std::process::exit(2);
             }
             let mut chat = backend::Chat::new();
+            chat.mode = work_mode;
             if json {
                 if !answer_json(&ctx, &mut chat, &text) { std::process::exit(1); }
             } else {
@@ -816,6 +826,14 @@ fn main() {
                     }
                 }
             }
+            if let Some(i) = args.iter().position(|a| a == "--mode") {
+                let name = args.get(i + 1).cloned().unwrap_or_default();
+                if !modes::valid(&name) {
+                    loom::warn(&format!("usage: penelope chat --mode {}", modes::NAMES.join("|")));
+                    std::process::exit(2);
+                }
+                ctx.cfg["_start_mode"] = serde_json::json!(name);
+            }
             let plain = args.iter().any(|a| a == "--plain") || !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal();
             if plain {
                 repl(&ctx, resume.map(|entry| backend::Chat::resume(&ctx, &entry)));
@@ -916,6 +934,7 @@ fn answer_json(ctx: &config::Ctx, chat: &mut backend::Chat, text: &str) -> bool 
         backend::Event::Masked(n) => emit(serde_json::json!({"event": "masked_request", "items": n})),
         backend::Event::MaskedAnswer(n) => { masked += n; emit(serde_json::json!({"event": "masked_answer", "items": n})); }
     });
+    modes::bind_caller(ctx, chat.route_id(), chat.session.as_deref().unwrap_or(""));
     match result {
         Ok(answer) => {
             emit(serde_json::json!({"event": "result", "text": answer, "tokens_in": chat.input_tokens, "tokens_out": chat.output_tokens,
@@ -947,6 +966,7 @@ fn answer(ctx: &config::Ctx, chat: &mut backend::Chat, text: &str) {
             masked += n;
         }
     });
+    modes::bind_caller(ctx, chat.route_id(), chat.session.as_deref().unwrap_or(""));
     match result {
         Ok(a) => {
             if !trail.is_empty() {
@@ -993,6 +1013,7 @@ fn repl(ctx: &config::Ctx, resume: Option<backend::Chat>) {
         ctx.cfg["weak"]["model"].as_str().unwrap_or("?"), ctx.cfg["weak"]["kind"].as_str().unwrap_or("?")));
     println!("Type a request. /map shows the memory map, /quit ends.");
     let mut chat = resume.unwrap_or_else(backend::Chat::new);
+    chat.mode = ctx.cfg["_start_mode"].as_str().filter(|m| modes::valid(m)).map(String::from).unwrap_or_else(|| modes::default_mode(ctx));
     let stdin = std::io::stdin();
     loop {
         print!("you> ");

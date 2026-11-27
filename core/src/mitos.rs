@@ -105,7 +105,7 @@ pub fn describe(specs: &[Value], params: &Value) -> Value {
 pub fn origin_level(tool: &str) -> u8 {
     match tool {
         "fetch" | "http_request" | "search" | "web_search" | "research" | "deep_research" | "tool_search" | "scrape" | "run" | "run_detail" | "job_read" | "mcp_call" | "screen"
-        | "cursor" | "scout" | "scouts" | "brief_check" => 0,
+        | "cursor" | "scout" | "scouts" | "brief_check" | "hand_off" => 0,
         "memory_go" | "memory_find" | "memory_map" | "memory_note" => 3,
         _ => 1,
     }

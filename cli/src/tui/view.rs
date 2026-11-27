@@ -139,7 +139,7 @@ fn footer(f: &mut Frame, app: &App, area: Rect) {
     put(f, area, area.x + 2, area.y, &clip(&cwd, (area.width as usize).saturating_sub(width(&right) + 6)), fg(DIM));
     put(f, area, area.right().saturating_sub(width(&right) as u16 + 2), area.y, &right, fg(DIM));
     // The model and its effort sit left of the version, so an effort change shows at once.
-    let model = app.model_label();
+    let model = app.footer_label();
     let at = area.right().saturating_sub((width(&right) + width(&model) + 6) as u16);
     if at > area.x + 2 + width(&cwd).min(12) as u16 {
         put(f, area, at, area.y, &model, fg(SEA));
@@ -455,7 +455,7 @@ fn sidebar(f: &mut Frame, app: &App, area: Rect) {
         ("tokens".into(), format!("{} in · {} out", num(app.tokens.0), num(app.tokens.1)), PAPER),
         ("turns".into(), format!("{} · {} tool calls", app.turns, app.tool_calls), PAPER),
         ("cost".into(), app.side.cost.clone(), SEA),
-        ("mode".into(), penelope_core::mode::current(&app.ctx), SEA),
+        ("mode".into(), format!("{} · {}", app.mode, penelope_core::mode::current(&app.ctx)), SEA),
     ]);
     let (main, _) = model_line(app, false);
     let privacy = match app.ctx.cfg["privacy"].as_str().unwrap_or("rules") {

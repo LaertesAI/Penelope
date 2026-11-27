@@ -49,6 +49,7 @@ pub mod mcpvet;
 pub mod memory;
 pub mod mitos;
 pub mod mode;
+pub mod modes;
 pub mod mods;
 pub mod net;
 pub mod notes;
