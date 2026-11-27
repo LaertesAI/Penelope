@@ -65,7 +65,9 @@ pub fn parse_number(raw: &str) -> Option<f64> {
 
 /// Every number of a text with its position (in characters) and its comparable forms.
 pub fn num_tokens(text: &str) -> Vec<NumTok> {
-    let re = rx!(r"(\d[\d.,]*\d|\d)(?:\s?(%|billion|million|thousand|bn)\b|([kKmMbB])\b)?");
+    // A comma is a thousands separator (1,024) or, before a percent sign, a decimal comma (21,1 %). Anywhere else it
+    // separates cells or list items (CSV rows), so 12.3,77.47 is two numbers.
+    let re = rx!(r"(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+,\d{1,2}(?:\s?%)|\d+(?:\.\d+)?)(?:\s?(%|billion|million|thousand|bn)\b|([kKmMbB])\b)?");
     let mut out = Vec::new();
     let (mut at_byte, mut at_char) = (0usize, 0usize);
     for c in re.captures_iter(text) {
@@ -99,6 +101,10 @@ pub fn missing_numbers(claim: &str, page: &str) -> Vec<String> {
 
 /// The value of a cell as a quantity: a number with a unit counts in base units, a bare number is scaled by `header_scale`.
 fn quantity(cell: &str, header_scale: f64) -> Option<f64> {
+    // A cell that is only a number may use a decimal comma: "21,10" is 21.1.
+    if rx!(r"^\s*\d[\d.,]*\s*%?\s*$").is_match(cell) {
+        return parse_number(cell).map(|v| v * header_scale);
+    }
     let t = num_tokens(cell).into_iter().next()?;
     Some(match t.scale {
         Some(s) => t.value * s,
@@ -542,11 +548,11 @@ pub fn best(tables: &[Table], spec: &Spec) -> Option<Selection> {
 impl Selection {
     /// The caption and the table, as it stands at the top of the answer.
     pub fn markdown(&self) -> String {
-        let mut out = format!("Computed by Penelope from the rows of {} ({}): {} of {} rows{}, ranked by {}. The rank counts the kept rows, not the rank the source prints.{}\n\n",
+        let left_out = if self.unknown > 0 { format!(" {} rows were left out: no size in the table or in the model name, or no score.", self.unknown) } else { String::new() };
+        let unchecked = if self.unchecked.is_empty() { String::new() } else { format!(" Not checked, the table has no such column: {}.", self.unchecked.join(", ")) };
+        let mut out = format!("Computed by Penelope from the rows of {} ({}): {} of {} rows{}, ranked by {}. The rank counts the kept rows, not the rank the source prints.{}{}\n\n",
             self.source, if self.primary { "primary source" } else { "secondary source, third party" }, self.kept, self.considered,
-            if self.criteria.is_empty() { String::new() } else { format!(" with {}", self.criteria) }, self.rank_col,
-            format!("{}{}", if self.unknown > 0 { format!(" {} rows were left out because a value could not be read.", self.unknown) } else { String::new() },
-                    if self.unchecked.is_empty() { String::new() } else { format!(" Not checked, the table has no such column: {}.", self.unchecked.join(", ")) }));
+            if self.criteria.is_empty() { String::new() } else { format!(" with {}", self.criteria) }, self.rank_col, left_out, unchecked);
         out.push_str(&format!("| {} |\n|{}|\n", self.header.join(" | "), vec!["---"; self.header.len()].join("|")));
         for r in &self.rows {
             out.push_str(&format!("| {} |\n", r.iter().map(|c| c.replace('|', "/")).collect::<Vec<_>>().join(" | ")));
@@ -577,7 +583,10 @@ mod tests {
             assert!(missing_numbers("overall score 21.1%", page).is_empty(), "{}", page);
         }
         assert!(missing_numbers("it has 1,024 units", "1024 units").is_empty() && missing_numbers("it has 1024 units", "1,024 units").is_empty());
-        assert!(missing_numbers("1.234,5 euro", "1,234.5 euro").is_empty());
+        assert!(missing_numbers("1,234.5 euro", "1234.5 euro").is_empty());
+        // A CSV row: the numbers are separated by commas, not glued into one.
+        assert!(missing_numbers("scored 77.47 overall", "Rank,Model,Cost\n1,Claude,0.12,77.47%,3.5\n").is_empty());
+        assert!(missing_numbers("cost 12.5", "x,0.12,77.47%,3.5").len() == 1);
         assert!(missing_numbers("a 450M model", "a 0.45B model").is_empty() && missing_numbers("a 0.6B model", "600M parameters").is_empty());
         assert_eq!(missing_numbers("scored 21.2", "scored 21.1 and 21.10"), vec!["21.2".to_string()]);
         assert_eq!(missing_numbers("scored 77", "scored 7 and 770"), vec!["77".to_string()]);
@@ -587,7 +596,7 @@ mod tests {
         assert_eq!(params_from_name("LFM2.5-VL-450M"), Some(4.5e8));
         assert_eq!(params_from_name("Llama-3.1-70B-Instruct"), Some(7e10));
         assert_eq!(params_from_name("GPT-4o-mini"), None);
-        let toks = num_tokens("a 12 ms b 3,5");
+        let toks = num_tokens("a 12 ms b 3,5 %");
         assert_eq!(toks[0].pos, 2);
         assert_eq!(toks[1].forms, vec!["3.5".to_string()]);
     }
