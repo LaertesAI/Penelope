@@ -74,4 +74,4 @@ Der Loop stoppt bei Erfolg (cluster +3 Aufgaben, ≤60 % EUR, ≤large Zeit), na
 
 ### Preflight vor dem Basislauf
 
-Drei Entwicklungsaufgaben, je ein anderes Repo, mit dem Gold-Patch und ohne Modell. Die Prüfung muss PASS geben. Sonst ist die Umgebung falsch, nicht das Modell. Der Preflight kostet keine API. Er braucht die Repos und die Umgebungen.
+Drei Entwicklungsaufgaben, je ein anderes Repo, mit dem Gold-Patch und ohne Modell. Die Prüfung muss PASS geben. Sonst ist die Umgebung falsch, nicht das Modell. Der Preflight kostet keine API. Er braucht die Repos und die Umgebungen. Ergebnis 26.11.2026: 3 von 3 bestanden, django, sympy, pytest.
