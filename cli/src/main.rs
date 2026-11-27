@@ -44,14 +44,18 @@ mod memory;
 mod notes;
 mod net;
 mod mode;
+mod modes;
 mod mods;
 mod platform;
 mod plugins;
 #[allow(dead_code)]
 mod proof;
+mod pii;
 mod privacy;
+mod privacy_bench;
 mod providers;
 mod research;
+mod deepresearch;
 mod route;
 mod scout;
 mod scrape;
@@ -80,6 +84,9 @@ penelope chat --plain         chat line by line, without the full screen interfa
 penelope chat --resume N      go on with session N of the list
 penelope ask \"TEXT\"           one question, one answer
 penelope ask --json \"TEXT\"    the same turn as newline-delimited JSON events
+penelope ask --mode NAME \"TEXT\"
+                              one question in a work mode: chat, work, agents or code
+penelope chat --mode NAME     start the chat in a work mode (shift+tab and /mode switch it)
 penelope init                 create a .penelope folder in this directory
 penelope setup [--here]       answer seven questions: models, who searches, privacy, policies, web search
 penelope providers            list the provider table and say per entry whether its key is set
@@ -148,6 +155,8 @@ penelope search fanout on|off  ask every configured engine at once and merge the
 penelope search health [--probe]
                               the last call of each engine
 penelope research QUESTION    search, read the best pages and print a cited report
+penelope research --deep [--max-rounds N] [--budget EUR] QUESTION
+                              deep research: plan, parallel researchers, gap loop, cited report, re-check, assumptions
 penelope scout TASK           let the weaker model look something up with its own tool calls
 penelope run [--ask QUESTION] COMMAND
                               run a command, long output condensed by the weaker model
@@ -180,6 +189,11 @@ penelope tool list            the tools Penelope wrote for this project
 penelope tool call NAME JSON  call one tool through the same gate a model uses
 penelope route                the roles, their tools and their models
 penelope mode [NAME]          auto, manual, safe, review, privacy or power
+penelope privacy factory --out DIR [--seed N] [--count N]
+                              write synthetic German business documents with known personal data
+penelope privacy bench [--seed N] [--count N] [--file MARKED.txt] [--view raw|read|grep|crlf] [--model [--cloud]] [--misses N] [--json]
+                              recall and precision of the privacy filter per kind of personal data
+penelope privacy scan FILE... masks the privacy filter would set in any file, per 1,000 lines
 penelope agents               the agents written with $name(...)
 penelope skills               the skills Penelope wrote for this project
 penelope run-agent NAME --goal TEXT
@@ -492,6 +506,10 @@ fn main() {
                 }
             }
         }
+        "privacy" => match privacy_bench::cli(&ctx, &args[1..]) {
+            Ok(text) => print!("{}", text),
+            Err(e) => { loom::warn(&e); std::process::exit(2); }
+        },
         "factory" => match factories::cli(&ctx, &args[1..]) {
             Ok(text) => print!("{}", text),
             Err(e) => { loom::warn(&e); std::process::exit(2); }
@@ -764,6 +782,8 @@ fn main() {
         }
         "mcp" => {
             mcp::set_root_given(root_arg.is_some());
+            // A turn in a work mode starts this server with PENELOPE_MODE: the tool list and the checks follow it.
+            let ctx = modes::from_env(&ctx);
             mcp::serve(&ctx)
         }
         "acp" => {
@@ -785,15 +805,20 @@ fn main() {
         "ask" => {
             let mut json = false;
             let mut words = Vec::new();
-            for arg in &args[1..] {
-                if arg == "--json" { json = true; } else { words.push(arg.clone()); }
+            let mut work_mode = String::new();
+            let mut rest = args[1..].iter();
+            while let Some(arg) = rest.next() {
+                if arg == "--json" { json = true; }
+                else if arg == "--mode" { work_mode = rest.next().cloned().unwrap_or_default(); }
+                else { words.push(arg.clone()); }
             }
             let text = words.join(" ");
-            if text.trim().is_empty() {
-                loom::warn("usage: penelope ask [--json] \"TEXT\"");
+            if text.trim().is_empty() || (args.iter().any(|a| a == "--mode") && !modes::valid(&work_mode)) {
+                loom::warn(&format!("usage: penelope ask [--json] [--mode {}] \"TEXT\"", modes::NAMES.join("|")));
                 std::process::exit(2);
             }
             let mut chat = backend::Chat::new();
+            chat.mode = work_mode;
             if json {
                 if !answer_json(&ctx, &mut chat, &text) { std::process::exit(1); }
             } else {
@@ -832,6 +857,12 @@ fn main() {
             let q = words.join(" ");
             match search::search_hits(&ctx, &q, &opts) {
                 Ok((hits, engines)) => println!("{}", search::format_hits(&hits, &q, &engines)),
+                Err(e) => { loom::warn(&e); std::process::exit(2); }
+            }
+        }
+        "research" if args.iter().any(|a| a == "--deep") => {
+            match deepresearch::parse_args(&args[1..]) {
+                Ok(p) => println!("{}", deepresearch::run(&ctx, &deepresearch::Params { verbose: true, ..p })),
                 Err(e) => { loom::warn(&e); std::process::exit(2); }
             }
         }
@@ -916,6 +947,14 @@ fn main() {
                         std::process::exit(2);
                     }
                 }
+            }
+            if let Some(i) = args.iter().position(|a| a == "--mode") {
+                let name = args.get(i + 1).cloned().unwrap_or_default();
+                if !modes::valid(&name) {
+                    loom::warn(&format!("usage: penelope chat --mode {}", modes::NAMES.join("|")));
+                    std::process::exit(2);
+                }
+                ctx.cfg["_start_mode"] = serde_json::json!(name);
             }
             let plain = args.iter().any(|a| a == "--plain") || !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal();
             if plain {
@@ -1017,6 +1056,7 @@ fn answer_json(ctx: &config::Ctx, chat: &mut backend::Chat, text: &str) -> bool 
         backend::Event::Masked(n) => emit(serde_json::json!({"event": "masked_request", "items": n})),
         backend::Event::MaskedAnswer(n) => { masked += n; emit(serde_json::json!({"event": "masked_answer", "items": n})); }
     });
+    modes::bind_caller(ctx, chat.route_id(), chat.session.as_deref().unwrap_or(""));
     match result {
         Ok(answer) => {
             emit(serde_json::json!({"event": "result", "text": answer, "tokens_in": chat.input_tokens, "tokens_out": chat.output_tokens,
@@ -1048,6 +1088,7 @@ fn answer(ctx: &config::Ctx, chat: &mut backend::Chat, text: &str) {
             masked += n;
         }
     });
+    modes::bind_caller(ctx, chat.route_id(), chat.session.as_deref().unwrap_or(""));
     match result {
         Ok(a) => {
             if !trail.is_empty() {
@@ -1094,6 +1135,7 @@ fn repl(ctx: &config::Ctx, resume: Option<backend::Chat>) {
         ctx.cfg["weak"]["model"].as_str().unwrap_or("?"), ctx.cfg["weak"]["kind"].as_str().unwrap_or("?")));
     println!("Type a request. /map shows the memory map, /quit ends.");
     let mut chat = resume.unwrap_or_else(backend::Chat::new);
+    chat.mode = ctx.cfg["_start_mode"].as_str().filter(|m| modes::valid(m)).map(String::from).unwrap_or_else(|| modes::default_mode(ctx));
     let stdin = std::io::stdin();
     loop {
         print!("you> ");

@@ -258,7 +258,15 @@ it. A `$name(...)` call runs an agent; the same form in `/orchestrate` or on the
 
 `/search WORDS` runs the ranked search, `/research QUESTION` runs the cited research report, and `penelope research
 QUESTION` does the same on the command line. The design, engine table and limits are in
-[`docs/SEARCH.md`](docs/SEARCH.md).
+[`docs/SEARCH.md`](docs/SEARCH.md). `/research deep QUESTION` and `penelope research --deep QUESTION` run the multi-round
+method with a plan, parallel researchers, a gap loop, checked citations and an assumptions list; see
+[`docs/DEEP-RESEARCH.md`](docs/DEEP-RESEARCH.md).
+
+Four work modes set what the model can reach: `chat` (two tools, the weaker model), `work` (files, web, deep research,
+attachments), `agents` (clusters and workflows) and `code` (a repository, the checker, the cost mode). `/mode NAME` or
+Shift+Tab switches, the footer shows `code · sonnet · high`, and `penelope ask --mode code "TEXT"` starts in one. The tool
+`hand_off` and the command `/send code "TASK"` give a task to another mode; `/back` returns with the result. The keys,
+the defaults and the guards are in [`docs/MODES.md`](docs/MODES.md).
 
 The side panel shows the woven square. Its loose thread at the lower right takes the colour of the mood:
 
@@ -411,6 +419,7 @@ penelope doctor
 | `plugin_home` | path | Where `plugin install` clones a plugin, default `~/.penelope/plugins`. |
 | `clipboard` | `read`, `write` | Shell commands for the clipboard when no wl-clipboard, xclip or pbcopy is installed. Text goes in through stdin. |
 | `mode` | `auto`, `manual`, `safe`, `review`, `privacy`, `power` | The preset shown in the side panel. `penelope mode NAME` writes the fields. |
+| `modes` | `default`, and per mode `chat`, `work`, `agents`, `code`: `model`, `effort`, `tools`, `route` | The work modes. Each mode sets the tools, the model, the effort and the cost route of a chat. `/mode NAME` and Shift+Tab switch, `hand_off` and `/send` give a task to another mode. See [`docs/MODES.md`](docs/MODES.md). |
 | `agent_verify` | true, false | Adds the judge step to an agent unless the `$` call says otherwise. |
 | `auto_skills` | true, false | A successful turn with 5 or more tool calls writes a playbook skill. |
 | `update` | `url`, `channel`, `public_key` | The updater. No server yet; see [`docs/AUTOUPDATE.md`](docs/AUTOUPDATE.md). |
@@ -532,7 +541,7 @@ families.
 | [`cli/`](cli) | the Rust crate with the command `penelope` |
 | [`cli/src/tui/`](cli/src/tui) | the full screen interface |
 | [`brand/`](brand) | mark, lockup and the four pictures of the interface, see [`BRAND.md`](brand/BRAND.md) |
-| [`docs/`](docs) | [`ROADMAP.md`](docs/ROADMAP.md), [`PLAN.md`](docs/PLAN.md), [`PROVIDERS.md`](docs/PROVIDERS.md), [`RUNS.md`](docs/RUNS.md), [`DEVLOG.md`](docs/DEVLOG.md), [`AUTOUPDATE.md`](docs/AUTOUPDATE.md), [`SEARCH.md`](docs/SEARCH.md), [`SERVER.md`](docs/SERVER.md), [`SERVER-APIS.md`](docs/SERVER-APIS.md), [`NEXT.md`](docs/NEXT.md), [`PLAN-0.12.md`](docs/PLAN-0.12.md), [`FEATURES-BUGS.md`](docs/FEATURES-BUGS.md), [`Penelope 0.11.0 Devlog.pdf`](docs/Penelope%200.11.0%20Devlog.pdf), screen pictures |
+| [`docs/`](docs) | [`ROADMAP.md`](docs/ROADMAP.md), [`PLAN.md`](docs/PLAN.md), [`PROVIDERS.md`](docs/PROVIDERS.md), [`RUNS.md`](docs/RUNS.md), [`DEVLOG.md`](docs/DEVLOG.md), [`AUTOUPDATE.md`](docs/AUTOUPDATE.md), [`SEARCH.md`](docs/SEARCH.md), [`MODES.md`](docs/MODES.md), [`SERVER.md`](docs/SERVER.md), [`SERVER-APIS.md`](docs/SERVER-APIS.md), [`NEXT.md`](docs/NEXT.md), [`PLAN-0.12.md`](docs/PLAN-0.12.md), [`FEATURES-BUGS.md`](docs/FEATURES-BUGS.md), [`Penelope 0.11.0 Devlog.pdf`](docs/Penelope%200.11.0%20Devlog.pdf), screen pictures |
 
 ## Name
 
