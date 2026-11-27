@@ -8,7 +8,7 @@ use std::fs;
 use std::process::{Command, Stdio};
 
 /// The tools a scout may call: everything that looks, nothing that changes a file.
-pub const TOOLS: &[&str] = &["web_search", "research", "fetch", "read", "find", "grep", "tree", "outline", "run", "run_detail", "memory_go"];
+pub const TOOLS: &[&str] = &["web_search", "research", "fetch", "read", "find", "grep", "tree", "outline", "run", "run_detail", "memory_go", "memory_find"];
 
 const SYSTEM: &str = "You are the scout of a coding agent. You get one lookup task. Find the answer with the tools: web_search and fetch \
 for the web, tree, find, grep, outline and read for files, run for read-only commands. Use as few steps as you can. Then write a report of at most 15 \

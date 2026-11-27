@@ -342,7 +342,7 @@ pub fn transient(text: &str) -> bool {
 pub fn retryable(name: &str, args: &serde_json::Value) -> bool {
     match name {
         "read" | "find" | "grep" | "tree" | "outline" | "run_detail" | "fetch" | "web_search" | "session_search" |
-        "json_query" | "memory_go" | "memory_map" | "cost" | "mcp_servers" | "tool_search" => true,
+        "json_query" | "memory_go" | "memory_find" | "memory_map" | "cost" | "mcp_servers" | "tool_search" => true,
         "http_request" => matches!(args["method"].as_str().unwrap_or("GET"), "GET" | "HEAD"),
         "screen" => matches!(args["action"].as_str().unwrap_or(""), "snapshot" | "tools" | "open"),
         "cursor" => args["click"].as_bool() != Some(true),
@@ -510,6 +510,13 @@ fn after_edit(ctx: &Ctx, role: &str, name: &str, args: &serde_json::Value, text:
 /// second effect. This is the function every model loop uses. A successful `write` or `edit` is followed by the test
 /// command of this project.
 pub fn dispatch_retry(ctx: &Ctx, role: &str, name: &str, args: &serde_json::Value) -> (String, bool) {
+    let (text, ok) = dispatch_retry_plain(ctx, role, name, args);
+    (crate::attach::for_model(ctx, name, text), ok)
+}
+
+/// The same call without the attachment step: the text as the tool made it. The MCP server uses it, because it
+/// answers in the shape its client announced.
+pub fn dispatch_retry_plain(ctx: &Ctx, role: &str, name: &str, args: &serde_json::Value) -> (String, bool) {
     if TEST_STOPPED.with(|s| s.get()) {
         return (format!("{}: STOP. The test command already failed in this turn. No tool runs for the rest of this turn. Answer with the failure, what you changed and what remains open.", TEST_STOP), false);
     }

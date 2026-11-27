@@ -137,6 +137,7 @@ fn call_raw_inner(ctx: &Ctx, name: &str, a: &Value) -> Result<String, String> {
         "memory_note" => Ok(tools::memory_note_scope(ctx, &s("path"), &s("text"), &s("scope"))),
         "memory_forget" => Ok(tools::guard(ctx, &tools::memory_forget(ctx, &s("text"), &s("scope")))),
         "memory_map" => Ok(tools::guard(ctx, &tools::memory_map(ctx))),
+        "memory_find" => Ok(tools::guard(ctx, &crate::graph::find_text(ctx, &s("query"), a["limit"].as_u64().unwrap_or(8) as usize))),
         "skill" => Ok(tools::guard(ctx, &crate::plugins::skill_body(ctx, &s("name")))),
         "skill_new" => crate::skills::write(ctx, &s("name"), &s("description"), &s("body")),
         "git_commit" => Ok(tools::git_commit(ctx, &a["files"], &s("message"), &s("cwd"))),
@@ -151,6 +152,7 @@ fn call_raw_inner(ctx: &Ctx, name: &str, a: &Value) -> Result<String, String> {
             _ => Ok(tools::mcp_servers(ctx, a["probe"].as_bool().unwrap_or(false))),
         },
         "mcp_call" => Ok(tools::mcp_call(ctx, &s("server"), &s("tool"), &a["arguments"])),
+        "attachment_read" => crate::attach::read_tool(ctx, a),
         "tool_search" => Ok(tools::guard(ctx, &crate::toolsearch::tool(ctx, a))),
         "session_search" => Ok(tools::session_search(ctx, &s("query"), n("limit"))),
         "http_request" => Ok(tools::http_request(ctx, a)),
@@ -191,6 +193,8 @@ pub fn serve(ctx: &Ctx) {
     let mut out = std::io::stdout();
     // True after a client announced Mitos in `initialize`; then `tools/list` answers with the index.
     let mut mitos = false;
+    // True after the client announced version 1 with the `attachments` feature; then a long result is a resource_link.
+    let mut attach = false;
     for line in stdin.lock().lines() {
         let line = match line { Ok(l) => l, Err(_) => break };
         let msg: Value = match serde_json::from_str(line.trim()) { Ok(v) => v, Err(_) => continue };
@@ -202,6 +206,7 @@ pub fn serve(ctx: &Ctx) {
         let result = match method {
             "initialize" => {
                 mitos = crate::mitos::announced(&msg["params"]);
+                attach = crate::mitos::attachments_announced(&msg["params"]);
                 json!({
                 "protocolVersion": msg["params"]["protocolVersion"].as_str().unwrap_or("2025-06-18"),
                 "capabilities": server_capabilities(),
@@ -218,11 +223,22 @@ pub fn serve(ctx: &Ctx) {
                 let specs = tool_specs_for(ctx, &crate::route::current_role());
                 crate::mitos::describe(specs.as_array().map(Vec::as_slice).unwrap_or(&[]), &msg["params"])
             }
+            "mitos/fetch" if attach => match crate::attach::fetch(ctx, &msg["params"]) {
+                Ok(answer) => answer,
+                Err(e) => {
+                    let _ = writeln!(out, "{}", json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32602, "message": e}}));
+                    let _ = out.flush();
+                    continue;
+                }
+            },
             "tools/call" => {
                 let name = msg["params"]["name"].as_str().unwrap_or("");
+                let args = &msg["params"]["arguments"];
                 let role = crate::route::current_role();
-                let (text, ok) = crate::tools::dispatch_retry(ctx, &role, name, &msg["params"]["arguments"]);
-                json!({"content": [{"type": "text", "text": text}], "isError": !ok, "_meta": crate::mitos::call_meta(name)})
+                // The plain loop: this process answers in the shape the client announced, not in the model's.
+                let (text, ok) = crate::tools::dispatch_retry_plain(ctx, &role, name, args);
+                let level = crate::attach::result_level(ctx, name, args);
+                json!({"content": crate::attach::for_client(ctx, name, &text, attach), "isError": !ok, "_meta": crate::mitos::call_meta_level(level)})
             }
             _ => {
                 let _ = writeln!(out, "{}", json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": "method not found"}}));
