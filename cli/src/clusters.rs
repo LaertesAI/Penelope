@@ -1655,6 +1655,10 @@ fn run_model(ctx: &Ctx, c: &Cluster, part: &Part, system: &str, task: &str, max_
     let log = cluster_dir(ctx, &c.id).join(format!("tools-{}.jsonl", safe(&part.name)));
     let _ = fs::remove_file(&log);
     let mut env = json!({"PENELOPE_ROLE": part.role, "PENELOPE_CLUSTER": c.id});
+    // The MCP child reads config.json from disk. Pin the policies of this run so a workflow's safe ctx also holds
+    // in the claude-cli path.
+    env["PENELOPE_RUN_POLICY"] = json!(ctx.cfg["run_policy"].as_str().unwrap_or("safe"));
+    env["PENELOPE_EDIT_POLICY"] = json!(ctx.cfg["edit_policy"].as_str().unwrap_or("ask"));
     let task_cwd = crate::eval::task_cwd();
     if !task_cwd.is_empty() {
         env["PENELOPE_TASK_CWD"] = json!(task_cwd);
@@ -2267,12 +2271,30 @@ pub fn run_cluster(ctx: &Ctx, id: &str) -> Result<String, String> {
 }
 
 /// One model call with the tool loop, for a workflow part. The part has no cluster state on disk.
-pub(crate) fn run_once(ctx: &Ctx, prompt: &str, model: Value, effort: &str) -> Result<String, String> {
-    let name = model.as_str().unwrap_or("");
-    let (role, model) = match name {
-        "main" | "weak" => ("worker".to_string(), Value::String(name.to_string())),
-        "worker" | "judge" | "scout" | "router" => (name.to_string(), Value::Null),
-        _ if model.is_string() => ("worker".to_string(), model),
+/// `run_once` with a cancel flag. The workflow passes its own flag so `/workflow stop` can end a running agent.
+pub(crate) fn run_once_cancel(
+    ctx: &Ctx,
+    prompt: &str,
+    model: Value,
+    effort: &str,
+    cancel: &AtomicBool,
+) -> Result<String, String> {
+    let name = model.as_str().unwrap_or("").to_string();
+    let (role, model) = match name.as_str() {
+        "main" | "weak" => ("worker".to_string(), Value::String(name)),
+        "worker" | "judge" | "scout" | "router" => (name, Value::Null),
+        _ if model.is_string() => {
+            // A bare model name keeps the main provider and replaces its model and effort. This makes
+            // `agent(..., #{model: "sonnet", effort: "low"})` a real setting instead of an unknown role.
+            let mut setting = ctx.cfg["main"].clone();
+            if setting.is_object() {
+                setting["model"] = json!(name);
+                setting["effort"] = json!(effort);
+                ("worker".to_string(), setting)
+            } else {
+                ("worker".to_string(), json!({"model": name, "effort": effort}))
+            }
+        }
         _ => ("worker".to_string(), json!({"model": model, "effort": effort})),
     };
     let part = Part { name: "workflow".to_string(), role, slot: "workflow".to_string(),
@@ -2287,7 +2309,7 @@ pub(crate) fn run_once(ctx: &Ctx, prompt: &str, model: Value, effort: &str) -> R
     let system = "You are a worker part of a Penelope workflow. Do the task and report the evidence.";
     let limits = Limits { cluster: 0.0, cluster_before: 0.0, session: 0.0, session_before: 0.0 };
     let watch = Arc::new(Mutex::new(Watch::new(usize::MAX)));
-    let done = run_model(ctx, &c, &part, system, prompt, 20, &AtomicBool::new(false), limits, &watch)?;
+    let done = run_model(ctx, &c, &part, system, prompt, 20, cancel, limits, &watch)?;
     Ok(done.text)
 }
 
@@ -2298,12 +2320,15 @@ pub(crate) fn run_once(ctx: &Ctx, prompt: &str, model: Value, effort: &str) -> R
 /// `"abort": "Stuck for 3 reports"`. The profile is the default; the agreed spec wins. A spec without `confirmed`
 /// is a draft and changes nothing.
 fn apply_spec_limits(ctx: &Ctx, id: &str, profile: &mut Profile) {
-    let path = cluster_dir(ctx, id).join("spec.json");
-    let Ok(text) = fs::read_to_string(&path) else { return };
-    let Ok(spec) = serde_json::from_str::<Value>(&text) else { return };
+    let Some(spec) = spec_for(ctx, id, &profile.name) else { return };
     if !spec["confirmed"].as_bool().unwrap_or(false) { return; }
-    if let Some(eur) = spec["budget"].as_str().and_then(parse_eur) {
-        profile.budget_eur = eur;
+    if let Some(text) = spec["budget"].as_str() {
+        let lower = text.to_ascii_lowercase();
+        if lower.contains("unlimited") || lower.contains("no limit") || lower.contains("ohne limit") {
+            profile.budget_eur = 0.0;
+        } else if let Some(eur) = parse_eur(text) {
+            profile.budget_eur = eur;
+        }
     }
     if let Some(steps) = spec["max_iterations"].as_str().and_then(first_number) {
         profile.max_steps = steps.clamp(1, 30);
@@ -2320,6 +2345,18 @@ fn apply_spec_limits(ctx: &Ctx, id: &str, profile: &mut Profile) {
     }
 }
 
+/// The confirmed spec of one run. The run folder wins; a factory profile carries its spec under `"spec"`.
+fn spec_for(ctx: &Ctx, id: &str, profile_name: &str) -> Option<Value> {
+    if let Ok(text) = fs::read_to_string(cluster_dir(ctx, id).join("spec.json")) {
+        if let Ok(spec) = serde_json::from_str::<Value>(&text) {
+            return Some(spec);
+        }
+    }
+    let path = profile_dir(ctx).join(format!("{}.json", safe(profile_name)));
+    let value: Value = serde_json::from_str(&fs::read_to_string(path).ok()?).ok()?;
+    value.get("spec").filter(|s| s.is_object()).cloned()
+}
+
 /// The first number in a text, as a whole number: `"Stuck for 3 reports"` gives 3, `"10 iterations"` gives 10.
 fn first_number(text: &str) -> Option<usize> {
     let digits: String = text.chars().skip_while(|c| !c.is_ascii_digit())
@@ -2327,20 +2364,37 @@ fn first_number(text: &str) -> Option<usize> {
     digits.parse().ok()
 }
 
-/// A euro amount in a text: `"5 EUR"`, `"1,5 EUR"`, `"20 €"` or `"2.50 eur"`. A token budget gives no euro limit.
+/// A euro amount in a text: `"5 EUR"`, `"1,5 EUR"`, `"1.500 EUR"`, `"20 €"` or `"2.50 eur"`.
+/// A dot with exactly three digits after it is a thousands separator, as in German. A comma is decimal.
 fn parse_eur(text: &str) -> Option<f64> {
     let lower = text.to_ascii_lowercase();
     if lower.contains("token") { return None; }
     if !(lower.contains("eur") || lower.contains('€')) { return None; }
-    let mut number = String::new();
+    let mut raw = String::new();
     for c in lower.chars() {
-        if c.is_ascii_digit() || (c == '.' && !number.is_empty()) {
-            number.push(c);
-        } else if c == ',' && !number.is_empty() {
-            number.push('.');
-        } else if !number.is_empty() {
+        if c.is_ascii_digit() || c == '.' || c == ',' {
+            raw.push(c);
+        } else if !raw.is_empty() {
             break;
         }
+    }
+    let mut number = raw;
+    match (number.contains(','), number.contains('.')) {
+        (true, true) => {
+            if number.rfind(',') > number.rfind('.') {
+                number = number.replace('.', "").replace(',', ".");
+            } else {
+                number = number.replace(',', "");
+            }
+        }
+        (true, false) => number = number.replace(',', "."),
+        (false, true) => {
+            let decimals = number.rsplit('.').next().map(str::len).unwrap_or(0);
+            if decimals == 3 {
+                number = number.replace('.', "");
+            }
+        }
+        _ => {}
     }
     number.parse::<f64>().ok().filter(|n| *n > 0.0)
 }
@@ -2816,6 +2870,20 @@ pub fn orchestrate(ctx: &Ctx, goal: &str, hint: Option<&str>, parallel: bool) ->
 /// `orchestrate` with an optional shadow profile. The shadow runs after the main clusters, on the same task, in its own
 /// worktree. Its result is compared with the main run and its files are never merged.
 pub fn orchestrate_with(ctx: &Ctx, goal: &str, hint: Option<&str>, parallel: bool, shadow: Option<&str>) -> Result<String, String> {
+    orchestrate_with_spec(ctx, goal, hint, parallel, shadow, None)
+}
+
+/// `orchestrate_with` plus the confirmed clarification spec. The spec is written for every top-level cluster before
+/// the first model call, so `apply_spec_limits` sees it. Writing it after the run, as the first version did, was too
+/// late.
+fn orchestrate_with_spec(
+    ctx: &Ctx,
+    goal: &str,
+    hint: Option<&str>,
+    parallel: bool,
+    shadow: Option<&str>,
+    spec: Option<&Value>,
+) -> Result<String, String> {
     if goal.trim().is_empty() { return Err("NOT started. The cluster goal is empty.".to_string()); }
     let plan = plan(ctx, goal.trim(), hint);
     // A bad explicit shadow is refused before a cluster file is written or a model is called.
@@ -2826,6 +2894,16 @@ pub fn orchestrate_with(ctx: &Ctx, goal: &str, hint: Option<&str>, parallel: boo
         }
     }
     let created = create_plan(ctx, &plan)?;
+    // The agreed limits must exist before the first model call. A top-level cluster gets clusters/ID/spec.json; a
+    // child inherits the parent profile and does not need its own copy.
+    if let Some(spec) = spec {
+        for (id, p) in &created {
+            if p.parent.is_some() { continue; }
+            let dir = cluster_dir(ctx, id);
+            let _ = fs::create_dir_all(&dir);
+            let _ = fs::write(dir.join("spec.json"), serde_json::to_string_pretty(spec).unwrap_or_default());
+        }
+    }
     // Resolve the shadow pairs before the first model call, so a bad --shadow name costs nothing. A profile that names
     // `shadow_of: P` runs beside every top-level plan cluster with profile P.
     let explicit_target = created.iter().find(|(_, p)| p.parent.is_none()).map(|(id, _)| id.clone());
@@ -3410,6 +3488,14 @@ pub fn start(ctx: &Ctx, goal: &str, profile: Option<&str>, parallel: bool) -> St
     }
 }
 
+/// Starts a cluster with the limits the person confirmed. The spec is on disk before the first model call.
+pub fn start_with_spec(ctx: &Ctx, goal: &str, profile: Option<&str>, parallel: bool, spec: &Value) -> String {
+    match orchestrate_with_spec(ctx, goal, profile, parallel, None, Some(spec)) {
+        Ok(text) => text,
+        Err(e) => format!("NOT started. {}", e),
+    }
+}
+
 /// The tail of a text, at most `n` characters. Answers and memory sections are capped so a tool answer stays readable.
 fn tail(text: &str, n: usize) -> String {
     text.chars().rev().take(n).collect::<String>().chars().rev().collect()
@@ -3597,6 +3683,24 @@ mod tests {
     }
 
     #[test]
+    fn a_start_with_spec_writes_the_spec_before_the_first_model_call() {
+        let (address, _seen) = crate::llm::fake::serve(vec![(200, text_reply("done"))]);
+        let (mut ctx, dir) = ctx();
+        fake_models(&mut ctx, &address);
+        let spec = json!({"confirmed": true, "budget": "0.000001 EUR", "max_iterations": "1 iterations",
+                           "abort": "Stuck for 2 reports"});
+        let said = start_with_spec(&ctx, "one task", Some("solo"), false, &spec);
+        assert!(!said.starts_with("NOT started"), "{}", said);
+        let c = list(&ctx).into_iter().next().expect("a cluster was created");
+        let path = cluster_dir(&ctx, &c.id).join("spec.json");
+        assert!(path.is_file(), "the spec must exist before the run: {}", said);
+        let mut p = profile(&ctx, "solo").unwrap();
+        apply_spec_limits(&ctx, &c.id, &mut p);
+        assert_eq!((p.budget_eur, p.max_steps, p.stuck_after), (0.000001, 1, 2));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_confirmed_spec_overrides_budget_rounds_and_the_abort_rule() {
         let (ctx, dir) = ctx();
         let p = profile(&ctx, "solo").unwrap();
@@ -3616,8 +3720,23 @@ mod tests {
         apply_spec_limits(&ctx, &c.id, &mut draft);
         assert_eq!(draft.budget_eur, p.budget_eur);
         assert_eq!(parse_eur("20 €"), Some(20.0));
+        assert_eq!(parse_eur("1.500 EUR"), Some(1500.0));
+        assert_eq!(parse_eur("1.234,56 EUR"), Some(1234.56));
+        assert_eq!(parse_eur("1,5 EUR"), Some(1.5));
         assert_eq!(parse_eur("100k tokens"), None);
         assert_eq!(first_number("stop after 4 rounds"), Some(4));
+        // A factory profile carries its spec under "spec"; the run folder has no spec.json in this case.
+        fs::remove_file(d.join("spec.json")).unwrap();
+        fs::create_dir_all(profile_dir(&ctx)).unwrap();
+        fs::write(profile_dir(&ctx).join("specprof.json"), json!({
+            "name": "specprof",
+            "workers": [{"name": "one", "role": "worker", "model": "main"}],
+            "max_models": 2, "max_depth": 1, "max_steps": 12, "retries": 1, "worktree": false,
+            "spec": {"confirmed": true, "budget": "2 EUR", "max_iterations": "7 iterations"}
+        }).to_string()).unwrap();
+        let mut from_profile = profile(&ctx, "specprof").unwrap();
+        apply_spec_limits(&ctx, &c.id, &mut from_profile);
+        assert_eq!((from_profile.budget_eur, from_profile.max_steps), (2.0, 7));
         let _ = fs::remove_dir_all(&dir);
     }
 

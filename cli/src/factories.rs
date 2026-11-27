@@ -216,10 +216,6 @@ fn needs_approval_each_run(ctx: &Ctx, profile: &str) -> bool {
 
 /// Puts the factory's run in front of the person. The answer folder is the normal `.penelope/approvals`; a running
 /// full screen interface watches it. No answer means no run. A timer therefore waits instead of acting alone.
-fn approve_run(ctx: &Ctx, f: &Factory) -> bool {
-    approve_run_with(ctx, f, crate::ask::timeout_secs(ctx))
-}
-
 fn approve_run_with(ctx: &Ctx, f: &Factory, timeout: u64) -> bool {
     use crate::ask::{Opt, Question, Reply};
     let question = Question {
@@ -255,7 +251,7 @@ fn runner_args(ctx: &Ctx, f: &Factory) -> Vec<String> {
     let exe = std::env::current_exe().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|_| "penelope".to_string());
     if needs_approval_each_run(ctx, &f.profile) {
         return vec![exe, "--root".to_string(), ctx.root.to_string_lossy().to_string(),
-                    "factory".to_string(), "run".to_string(), f.name.clone()];
+                    "factory".to_string(), "run".to_string(), f.name.clone(), "--require-approval".to_string()];
     }
     cluster_args(ctx, f)
 }
@@ -690,12 +686,22 @@ pub fn stop(ctx: &Ctx, name: &str) -> Result<String, String> {
 /// Runs one factory now, without its timer. The run is the same command the timer starts: the cluster command, with
 /// no interface. The result and the exit code go to `.penelope/factories/NAME/runs.log`.
 pub fn run(ctx: &Ctx, name: &str) -> Result<String, String> {
+    run_with_approval(ctx, name, false)
+}
+
+/// `run` with the timer's `--require-approval`. With the flag the yes is required even when the spec was deleted or
+/// edited, so removing `clusters/profiles/NAME.json` does not unlock a timer.
+pub fn run_with_approval(ctx: &Ctx, name: &str, require: bool) -> Result<String, String> {
+    run_with_approval_timeout(ctx, name, require, crate::ask::timeout_secs(ctx))
+}
+
+fn run_with_approval_timeout(ctx: &Ctx, name: &str, require: bool, timeout: u64) -> Result<String, String> {
     let mut f = find(ctx, name)?;
     crate::clusters::profile(ctx, &f.profile)?;
-    if needs_approval_each_run(ctx, &f.profile) {
-        let approved = approve_run(ctx, &f);
+    if require || needs_approval_each_run(ctx, &f.profile) {
+        let approved = approve_run_with(ctx, &f, timeout);
         if !approved {
-            return Ok(format!("factory {} did not run: the spec asks for a yes before each run, and no yes came before the deadline.", f.name));
+            return Ok(format!("factory {} did not run: a yes is required before each run, and no yes came before the deadline.", f.name));
         }
     }
     let args = cluster_args(ctx, &f);
@@ -824,8 +830,9 @@ pub fn cli(ctx: &Ctx, args: &[String]) -> Result<String, String> {
         }
         "run" => {
             let name = args.get(1).cloned().unwrap_or_default();
-            if name.is_empty() { return Err("usage: penelope factory run NAME".to_string()); }
-            run(ctx, &name)
+            if name.is_empty() { return Err("usage: penelope factory run NAME [--require-approval]".to_string()); }
+            let require = args.iter().any(|a| a == "--require-approval");
+            run_with_approval(ctx, &name, require)
         }
         "stop" => {
             let name = args.get(1).cloned().unwrap_or_default();
@@ -988,9 +995,18 @@ mod tests {
         assert!(dry.contains("waits in .penelope/approvals for a yes"), "{}", dry);
         let f = find(&ctx, "mail").unwrap();
         assert_eq!(runner_args(&ctx, &f).iter().any(|a| a == "factory"), true, "an approval factory runs through `factory run`");
+        assert!(runner_args(&ctx, &f).iter().any(|a| a == "--require-approval"), "the unit must carry the yes requirement");
         assert!(cluster_args(&ctx, &f).iter().any(|a| a == "cluster"));
         // No answer: the run is skipped and no cluster is created.
         assert!(!approve_run_with(&ctx, &f, 0));
+        assert!(crate::clusters::list(&ctx).is_empty());
+        // Deleting the spec does not unlock the timer: the flag is in the unit.
+        let profile_path = ctx.root.join("clusters").join("profiles").join("mail.json");
+        let mut value: Value = serde_json::from_str(&fs::read_to_string(&profile_path).unwrap()).unwrap();
+        value.as_object_mut().unwrap().remove("spec");
+        fs::write(&profile_path, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+        let said = run_with_approval_timeout(&ctx, "mail", true, 0).unwrap();
+        assert!(said.contains("did not run"), "{}", said);
         assert!(crate::clusters::list(&ctx).is_empty());
         let _ = fs::remove_dir_all(&dir);
     }

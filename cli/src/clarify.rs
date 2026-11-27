@@ -397,20 +397,17 @@ pub fn start_cluster(ctx: &Ctx, goal: &str, profile: Option<&str>, parallel: boo
         preset.entry("models".to_string()).or_insert(json!(format!("{} profile", p)));
     }
     let done = clarify(ctx, Kind::Cluster, goal, &preset)?;
-    let known: std::collections::HashSet<String> = crate::clusters::list(ctx).into_iter().map(|c| c.id).collect();
-    let mut out = crate::clusters::start(ctx, &done.spec.goal_text(), profile, parallel);
+    let spec = done.spec.to_value();
+    let mut out = if done.spec.confirmed {
+        crate::clusters::start_with_spec(ctx, &done.spec.goal_text(), profile, parallel, &spec)
+    } else {
+        crate::clusters::start(ctx, &done.spec.goal_text(), profile, parallel)
+    };
     if out.starts_with("NOT started") {
         return Err(out);
     }
     if done.spec.confirmed {
-        let mut kept = 0;
-        for c in crate::clusters::list(ctx).into_iter().filter(|c| c.parent.is_none() && !known.contains(&c.id)) {
-            let dir = ctx.root.join("clusters").join(&c.id);
-            if std::fs::create_dir_all(&dir).is_ok() && std::fs::write(dir.join("spec.json"), serde_json::to_string_pretty(&done.spec.to_value()).unwrap_or_default()).is_ok() {
-                kept += 1;
-            }
-        }
-        out.push_str(&format!("\nspec confirmed ({} answers) and stored with {} cluster{}.", done.asked, kept, if kept == 1 { "" } else { "s" }));
+        out.push_str(&format!("\nspec confirmed ({} answers) and applied before the first model call.", done.asked));
     }
     Ok(out)
 }

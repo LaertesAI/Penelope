@@ -79,6 +79,9 @@ struct State {
     budget_tokens: u64,
     max_parallel: usize,
     depth: usize,
+    /// The loop round of `loop_until`. It is part of the journal key, so round 2 is a new call, not the memoized
+    /// answer of round 1.
+    loop_round: u32,
     cancel: Arc<AtomicBool>,
     resume: HashMap<String, Value>,
     ask: Option<Box<dyn FnMut(&[Value]) -> Result<Vec<Value>, String>>>,
@@ -110,12 +113,36 @@ fn key(prompt: &str, opts: &Map) -> String {
     key_text(prompt, &format!("{:?}", opts))
 }
 
+static JOURNAL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn journal_line(dir: &Path, entry: &Value) -> Result<(), String> {
+    let _guard = JOURNAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let path = dir.join("journal.jsonl");
     let line = serde_json::to_string(entry).map_err(|e| e.to_string())?;
     let mut file = fs::OpenOptions::new().create(true).append(true).open(&path)
         .map_err(|e| format!("cannot write {}: {}", path.display(), e))?;
     writeln!(file, "{}", line).map_err(|e| format!("cannot write {}: {}", path.display(), e))
+}
+
+/// Validates one answer, writes its journal line immediately (so a crash after the call keeps it) and returns the value.
+fn finish_call(
+    dir: &Path,
+    key: &str,
+    phase: &str,
+    label: &str,
+    text: String,
+    schema: Option<&Value>,
+) -> Result<Value, String> {
+    let value = match schema {
+        Some(schema) => {
+            let v: Value = serde_json::from_str(&text).map_err(|e| format!("answer is not JSON: {}", e))?;
+            validate(schema, &v)?;
+            v
+        }
+        None => Value::String(text),
+    };
+    journal_line(dir, &json!({"key": key, "phase": phase, "label": label, "value": value}))?;
+    Ok(value)
 }
 
 /// True when the user asked this run to stop. `/workflow stop ID` writes the marker beside the journal, in this or
@@ -134,6 +161,40 @@ fn workflow_ctx(ctx: &Ctx) -> Ctx {
     let mut c = ctx.clone();
     c.cfg["run_policy"] = json!("safe");
     c
+}
+
+/// Runs one agent and watches the stop marker beside the journal. A marker from another process sets the cancel flag,
+/// so a running tool loop ends instead of waiting for the next top-level call.
+fn run_with_stop(
+    ctx: &Ctx,
+    prompt: &str,
+    model: Value,
+    effort: &str,
+    cancel: &Arc<AtomicBool>,
+    stop: &Path,
+) -> Result<String, String> {
+    if cancel.load(Ordering::SeqCst) || stop.is_file() {
+        return Err("workflow stopped".to_string());
+    }
+    let done = Arc::new(AtomicBool::new(false));
+    let watcher = {
+        let cancel = cancel.clone();
+        let stop = stop.to_path_buf();
+        let done = done.clone();
+        std::thread::spawn(move || {
+            while !done.load(Ordering::SeqCst) {
+                if stop.is_file() {
+                    cancel.store(true, Ordering::SeqCst);
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(150));
+            }
+        })
+    };
+    let out = crate::clusters::run_once_cancel(ctx, prompt, model, effort, cancel);
+    done.store(true, Ordering::SeqCst);
+    let _ = watcher.join();
+    out
 }
 
 
@@ -195,7 +256,11 @@ fn run_agent(st: &mut State, prompt: &str, opts: &Map) -> Result<Dynamic, Box<Ev
     let phase = opts.get("phase").map(|v| v.to_string()).unwrap_or_default();
     let worktree = opts.get("worktree").map(|v| v.as_bool().unwrap_or(false)).unwrap_or(false);
     let schema = schema_of(opts)?;
-    let k = key(prompt, opts);
+    let k = if st.loop_round > 0 {
+        key_text(prompt, &format!("{:?}#loop{}", opts, st.loop_round))
+    } else {
+        key(prompt, opts)
+    };
     if let Some(v) = st.resume.get(&k) {
         return dynamic(v.clone());
     }
@@ -203,6 +268,8 @@ fn run_agent(st: &mut State, prompt: &str, opts: &Map) -> Result<Dynamic, Box<Ev
     let before = crate::cost::total_eur(&st.ctx);
     let before_tokens = crate::cost::total_tokens(&st.ctx);
     let ctx = workflow_ctx(&st.ctx);
+    let cancel = st.cancel.clone();
+    let stop_path = st.dir.join("stop");
     let (model, effort) = opts_model(opts);
     let mut kept = Value::Null;
     let text = if worktree {
@@ -210,12 +277,19 @@ fn run_agent(st: &mut State, prompt: &str, opts: &Map) -> Result<Dynamic, Box<Ev
         let (path, branch) = crate::work::create(&project(&ctx), &name)
             .map_err(|e| fail(format!("worktree: {}", e)))?;
         let goal = format!("{}\n\nWork in this worktree. The check is hidden.", prompt);
-        let out = crate::eval::with_task_cwd(&path, || crate::clusters::run_once(&ctx, &goal, model.clone(), &effort));
-        // The worktree stays: a build workflow must be able to inspect and use its result. The journal names it.
+        let out = crate::eval::with_task_cwd(&path, || {
+            run_with_stop(&ctx, &goal, model.clone(), &effort, &cancel, &stop_path)
+        });
+        // The worktree stays: a build workflow must be able to inspect and use its result. The journal names it,
+        // and a later step without a schema also finds the path in its prompt.
         kept = json!({"worktree": path.to_string_lossy(), "branch": branch});
-        out.map_err(|e| fail(e))?
+        let mut text = out.map_err(|e| fail(e))?;
+        if schema.is_none() {
+            text.push_str(&format!("\n\nworktree {} on branch {}", path.display(), kept["branch"].as_str().unwrap_or("")));
+        }
+        text
     } else {
-        crate::clusters::run_once(&ctx, prompt, model, &effort).map_err(|e| fail(e))?
+        run_with_stop(&ctx, prompt, model, &effort, &cancel, &stop_path).map_err(|e| fail(e))?
     };
     let after = crate::cost::total_eur(&st.ctx);
     let after_tokens = crate::cost::total_tokens(&st.ctx);
@@ -278,11 +352,13 @@ fn engine(state: Rc<RefCell<State>>) -> Engine {
         }
         budget_left(&st)?;
         let ctx = workflow_ctx(&st.ctx);
+        let cancel = st.cancel.clone();
+        let stop = st.dir.join("stop");
         let before = crate::cost::total_eur(&st.ctx);
         let before_tokens = crate::cost::total_tokens(&st.ctx);
         let mut values: Vec<Option<Value>> = vec![None; jobs.len()];
         let mut handles = Vec::new();
-        for (index, (prompt, opts, _schema, k, label, phase)) in jobs.iter().enumerate() {
+        for (index, (prompt, opts, schema, k, label, phase)) in jobs.iter().enumerate() {
             if let Some(v) = st.resume.get(k) {
                 values[index] = Some(v.clone());
                 continue;
@@ -293,27 +369,27 @@ fn engine(state: Rc<RefCell<State>>) -> Engine {
             let label = label.clone();
             let phase = phase.clone();
             let key = k.clone();
-            handles.push(std::thread::spawn(move || {
-                let text = crate::clusters::run_once(&c, &prompt, model, &effort)?;
-                Ok::<_, String>((index, key, label, phase, text))
+            let schema = schema.clone();
+            let dir = st.dir.clone();
+            let cancel = cancel.clone();
+            let stop = stop.clone();
+            handles.push(std::thread::spawn(move || -> Result<(usize, String, Value), String> {
+                let text = run_with_stop(&c, &prompt, model, &effort, &cancel, &stop)?;
+                let value = finish_call(&dir, &key, &phase, &label, text, schema.as_ref())?;
+                Ok((index, key, value))
             }));
         }
         let mut out = vec![Value::Null; jobs.len()];
+        let mut first_error: Option<String> = None;
         for h in handles {
-            let (index, key, label, phase, text) = h.join().map_err(|_| fail("a parallel agent panicked"))?.map_err(|e| fail(e))?;
-            let schema = jobs[index].2.as_ref();
-            let value = match schema {
-                Some(schema) => {
-                    let v: Value = serde_json::from_str(&text).map_err(|e| fail(format!("answer is not JSON: {}", e)))?;
-                    validate(schema, &v).map_err(|e| fail(e))?;
-                    v
+            match h.join() {
+                Ok(Ok((index, key, value))) => {
+                    st.resume.insert(key, value.clone());
+                    out[index] = value;
                 }
-                None => Value::String(text),
-            };
-            journal_line(&st.dir, &json!({"key": key, "phase": phase, "label": label, "value": value}))
-                .map_err(|e| fail(e))?;
-            st.resume.insert(key, value.clone());
-            out[index] = value;
+                Ok(Err(e)) => { first_error.get_or_insert(e); }
+                Err(_) => { first_error.get_or_insert_with(|| "a parallel agent panicked".to_string()); }
+            }
         }
         for (index, slot) in values.into_iter().enumerate() {
             if let Some(v) = slot { out[index] = v; }
@@ -322,6 +398,9 @@ fn engine(state: Rc<RefCell<State>>) -> Engine {
         let after_tokens = crate::cost::total_tokens(&st.ctx);
         st.spent_eur += (after - before).max(0.0);
         st.spent_tokens += after_tokens.saturating_sub(before_tokens);
+        if let Some(e) = first_error {
+            return Err(fail(e));
+        }
         journal_line(&st.dir, &json!({"phase": "parallel", "results": out})).map_err(|e| fail(e))?;
         out.into_iter().map(dynamic).collect()
     });
@@ -348,6 +427,9 @@ fn engine(state: Rc<RefCell<State>>) -> Engine {
         }
         budget_left(&st)?;
         let ctx = workflow_ctx(&st.ctx);
+        let cancel = st.cancel.clone();
+        let stop = st.dir.join("stop");
+        let dir = st.dir.clone();
         let before = crate::cost::total_eur(&st.ctx);
         let before_tokens = crate::cost::total_tokens(&st.ctx);
         let resume = st.resume.clone();
@@ -357,45 +439,55 @@ fn engine(state: Rc<RefCell<State>>) -> Engine {
             let specs = specs.clone();
             let c = ctx.clone();
             let resume = resume.clone();
-            handles.push(std::thread::spawn(move || -> Result<Vec<(String, String, String, String)>, String> {
+            let dir = dir.clone();
+            let cancel = cancel.clone();
+            let stop = stop.clone();
+            handles.push(std::thread::spawn(move || -> Result<Vec<(String, String, String, Value)>, String> {
                 let mut out = Vec::new();
                 let mut current = item;
-                for (template, model, effort, _schema, opts) in specs {
+                for (template, model, effort, schema, opts) in specs {
+                    if stop.is_file() || cancel.load(Ordering::SeqCst) {
+                        return Err("workflow stopped".to_string());
+                    }
                     let prompt = template.replace("{item}", &current);
                     let k = key_text(&prompt, &opts.to_string());
                     let label = opts["label"].as_str().unwrap_or("").to_string();
                     let phase = opts["phase"].as_str().unwrap_or("").to_string();
-                    if let Some(v) = resume.get(&k) {
-                        current = v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string());
+                    let value = if let Some(v) = resume.get(&k) {
+                        v.clone()
                     } else {
-                        current = crate::clusters::run_once(&c, &prompt, model, &effort)?;
-                    }
-                    out.push((k, label, phase, current.clone()));
+                        let text = run_with_stop(&c, &prompt, model, &effort, &cancel, &stop)?;
+                        finish_call(&dir, &k, &phase, &label, text, schema.as_ref())?
+                    };
+                    current = value.as_str().map(str::to_string).unwrap_or_else(|| value.to_string());
+                    out.push((k, label, phase, value));
                 }
                 Ok(out)
             }));
         }
         let mut out = Array::new();
+        let mut first_error: Option<String> = None;
         for h in handles {
-            let row = h.join().map_err(|_| fail("a pipeline agent panicked"))?.map_err(|e| fail(e))?;
-            let mut values = Vec::new();
-            for (stage_index, (k, label, phase, text)) in row.into_iter().enumerate() {
-                if let Some(schema) = specs.get(stage_index).and_then(|s| s.3.as_ref()) {
-                    let v: Value = serde_json::from_str(&text).map_err(|e| fail(format!("answer is not JSON: {}", e)))?;
-                    validate(schema, &v).map_err(|e| fail(e))?;
+            match h.join() {
+                Ok(Ok(row)) => {
+                    let mut values = Vec::new();
+                    for (k, _label, _phase, value) in row {
+                        st.resume.insert(k, value.clone());
+                        values.push(value);
+                    }
+                    out.push(dynamic(json!(values))?);
                 }
-                let value = Value::String(text);
-                journal_line(&st.dir, &json!({"key": k, "phase": phase, "label": label, "value": value}))
-                    .map_err(|e| fail(e))?;
-                st.resume.insert(k, value.clone());
-                values.push(value);
+                Ok(Err(e)) => { first_error.get_or_insert(e); }
+                Err(_) => { first_error.get_or_insert_with(|| "a pipeline agent panicked".to_string()); }
             }
-            out.push(dynamic(json!(values))?);
         }
         let after = crate::cost::total_eur(&st.ctx);
         let after_tokens = crate::cost::total_tokens(&st.ctx);
         st.spent_eur += (after - before).max(0.0);
         st.spent_tokens += after_tokens.saturating_sub(before_tokens);
+        if let Some(e) = first_error {
+            return Err(fail(e));
+        }
         journal_line(&st.dir, &json!({"phase": "pipeline"})).map_err(|e| fail(e))?;
         Ok(out)
     });
@@ -408,10 +500,15 @@ fn engine(state: Rc<RefCell<State>>) -> Engine {
         let mut result = Dynamic::UNIT;
         for round in 0..max {
             {
-                let st = s.borrow();
+                let mut st = s.borrow_mut();
                 ensure_running(&st)?;
+                st.loop_round = round as u32 + 1;
             }
             result = step.call_within_context(&ctx, ())?;
+            {
+                let mut st = s.borrow_mut();
+                st.loop_round = 0;
+            }
             let verdict: Dynamic = condition.call_within_context(&ctx, (result.clone(),))?;
             let stop = verdict.as_bool().unwrap_or(false);
             let entry = json!({"phase": "loop", "round": round + 1, "result": value(&result)?, "stop": stop});
@@ -494,6 +591,7 @@ fn run_script(ctx: &Ctx, path: &Path, options: RunOptions, depth: usize) -> Resu
         budget_tokens: options.budget_tokens,
         max_parallel: options.max_parallel.max(1).min(8),
         depth,
+        loop_round: 0,
         cancel: options.cancel,
         resume,
         ask: options.ask,
@@ -573,6 +671,26 @@ pub fn list(ctx: &Ctx) -> Vec<String> {
     out
 }
 
+/// The runs on disk, newest first, with `done`, `stopped` or `open`.
+pub fn runs(ctx: &Ctx) -> Vec<(String, String)> {
+    let dir = ctx.root.join("workflows");
+    let Ok(entries) = fs::read_dir(&dir) else { return Vec::new() };
+    let mut out: Vec<(String, String, std::time::SystemTime)> = entries.flatten()
+        .filter_map(|e| {
+            let p = e.path();
+            if !p.is_dir() || !p.join("journal.jsonl").is_file() { return None; }
+            let id = p.file_name()?.to_string_lossy().to_string();
+            let state = if p.join("result.json").is_file() { "done" }
+                else if p.join("stop").is_file() { "stopped" }
+                else { "open" };
+            let at = fs::metadata(p.join("journal.jsonl")).and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
+            Some((id, state.to_string(), at))
+        })
+        .collect();
+    out.sort_by(|a, b| b.2.cmp(&a.2));
+    out.into_iter().map(|(id, state, _)| (id, state)).collect()
+}
+
 /// The journal of one run.
 pub fn status(ctx: &Ctx, id: &str) -> Result<String, String> {
     let dir = ctx.root.join("workflows").join(sanitize(id));
@@ -585,8 +703,11 @@ pub fn status(ctx: &Ctx, id: &str) -> Result<String, String> {
 pub fn stop(ctx: &Ctx, id: &str) -> Result<String, String> {
     let dir = ctx.root.join("workflows").join(sanitize(id));
     if !dir.is_dir() { return Err(format!("no workflow run {}", id)); }
+    if dir.join("result.json").is_file() {
+        return Err(format!("workflow {} has already finished", id));
+    }
     fs::write(dir.join("stop"), b"1").map_err(|e| e.to_string())?;
-    Ok(format!("workflow {} will stop before the next agent", id))
+    Ok(format!("workflow {} will stop before the next agent and checks the marker inside a running one", id))
 }
 
 fn sanitize(name: &str) -> String {
@@ -687,6 +808,41 @@ mod tests {
     }
 
     #[test]
+    fn loop_until_makes_a_new_model_call_each_round() {
+        let replies: Vec<(u16, String)> = ["one", "two", "done"].iter()
+            .map(|text| (200, json!({"choices": [{"finish_reason": "stop",
+                "message": {"role": "assistant", "content": text}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 2}}).to_string()))
+            .collect();
+        let (address, seen) = crate::llm::fake::serve(replies);
+        let dir = std::env::temp_dir().join(format!("penelope-workflow-loop-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let mut ctx = crate::config::load(&dir.join(".penelope"));
+        let model = json!({"kind": "openai", "base_url": format!("{}/v1", address), "model": "test-model", "api_key_env": ""});
+        ctx.cfg["main"] = model.clone();
+        ctx.cfg["roles"]["worker"] = model;
+        let path = dir.join("loop.rhai");
+        fs::write(&path, "loop_until(|r| r == \"done\", || agent(\"go\", #{}), #{max_iterations: 3})").unwrap();
+        let out = run(&ctx, &path, RunOptions { confirm: false, ..RunOptions::default() }).unwrap();
+        assert_eq!(out.output, json!("done"));
+        assert_eq!(seen.lock().unwrap().len(), 3, "each round must reach the model");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_stop_marker_stops_before_the_first_request() {
+        let (ctx, dir) = ctx_with_fake(Vec::new());
+        let stop = ctx.root.join("workflows").join("stopped").join("stop");
+        fs::create_dir_all(stop.parent().unwrap()).unwrap();
+        fs::write(&stop, b"1").unwrap();
+        let out = run_with_stop(&ctx, "go", json!("worker"), "low",
+                                &Arc::new(AtomicBool::new(false)), &stop);
+        assert!(out.unwrap_err().contains("stopped"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn the_budget_stops_before_the_next_agent() {
         let reply = json!({"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "done"}}],
                            "usage": {"prompt_tokens": 10, "completion_tokens": 2}}).to_string();
@@ -735,7 +891,7 @@ mod tests {
         let state = State {
             ctx: ctx.clone(), id: "stop-check".to_string(), dir: run_dir.clone(),
             spent_eur: 0.0, spent_tokens: 0, budget_eur: 0.0, budget_tokens: 0,
-            max_parallel: 4, depth: 0, cancel: Arc::new(AtomicBool::new(false)),
+            max_parallel: 4, depth: 0, loop_round: 0, cancel: Arc::new(AtomicBool::new(false)),
             resume: HashMap::new(), ask: None,
         };
         assert!(!stopped(&state));
@@ -755,6 +911,28 @@ mod tests {
                           properties: #{ok: #{type: \"boolean\"}}}})").unwrap();
         let out = run(&ctx, &path, RunOptions { confirm: false, ..RunOptions::default() }).unwrap();
         assert_eq!(out.output, json!({"ok": true}));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_bare_model_name_keeps_the_main_provider_and_replaces_the_model() {
+        let reply = json!({"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "done"}}],
+                           "usage": {"prompt_tokens": 10, "completion_tokens": 2}}).to_string();
+        let (address, seen) = crate::llm::fake::serve(vec![(200, reply)]);
+        let dir = std::env::temp_dir().join(format!("penelope-workflow-model-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let mut ctx = crate::config::load(&dir.join(".penelope"));
+        let model = json!({"kind": "openai", "base_url": format!("{}/v1", address), "model": "main-model", "api_key_env": ""});
+        ctx.cfg["main"] = model.clone();
+        ctx.cfg["roles"]["worker"] = model;
+        let path = dir.join("model.rhai");
+        fs::write(&path, "agent(\"do it\", #{model: \"test-model\", effort: \"low\"})").unwrap();
+        let out = run(&ctx, &path, RunOptions { confirm: false, ..RunOptions::default() }).unwrap();
+        assert_eq!(out.output, json!("done"));
+        let body = seen.lock().unwrap()[0].body.to_string();
+        assert!(body.contains("test-model"), "the bare model name must reach the request: {}", body);
+        assert!(!body.contains("main-model"), "the main model name must be replaced: {}", body);
         let _ = fs::remove_dir_all(&dir);
     }
 

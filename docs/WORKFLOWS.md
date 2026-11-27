@@ -47,7 +47,7 @@ Die Entscheidung bleibt. Die Binärdatei liegt unter der Marke von 20 MiB, der S
 |---|---|
 | `agent(prompt, opts)` | Startet einen Teil. `opts`: `model` (Rolle oder Name), `effort`, `schema` (JSON-Schema als Map oder JSON-Text, Antwort geprüft und als Map zurück), `label`, `phase`, `worktree` (eigener Git-Worktree, bleibt nach dem Lauf stehen und steht mit Pfad und Zweig im Journal). |
 | `parallel([...])` | Startet alle Einträge und wartet auf alle. Jeder Eintrag ist eine Map mit `prompt` und `opts`, `schema` wird je Eintrag geprüft. Höchstens `max_parallel` Einträge. Kein `worktree` innerhalb von `parallel`. |
-| `pipeline(items, stage1, stage2, ...)` | Schickt jedes Element durch die Stufen. Stufe 2 eines Elements startet, sobald Stufe 1 fertig ist, ohne Sperre für andere Elemente. Jede Stufe hat einen Journal-Schlüssel und wird nach einem Absturz aus dem Journal bedient. |
+| `pipeline(items, [stage1, stage2, ...])` | Schickt jedes Element durch die Stufen. Stufe 2 eines Elements startet, sobald Stufe 1 fertig ist, ohne Sperre für andere Elemente. Jede Stufe hat einen Journal-Schlüssel, wird sofort journalisiert und nach einem Absturz aus dem Journal bedient. Das Schema einer Stufe wird geprüft, bevor ihr Ergebnis an die nächste Stufe geht. |
 | `phase(title)` | Setzt die Phase im Journal und in der Baumansicht. |
 | `log(text)` | Schreibt eine Zeile ins Journal. |
 | `args` | Die Argumente des Laufs als Map. |
@@ -60,7 +60,7 @@ Der Journal-Schlüssel ist FNV-1a über Prompt und Optionen. `agent` und `parall
 
 ## C2b: Grenzen aus der Klärung
 
-Ein Cluster liest `clusters/ID/spec.json` vor dem ersten Agenten. Nur ein bestätigter Spec (`confirmed: true`) ändert das Profil. Abgebildet werden:
+Ein Cluster liest `clusters/ID/spec.json` vor dem ersten Agenten. Nur ein bestätigter Spec (`confirmed: true`) ändert das Profil. Die Datei wird jetzt vor dem ersten Modellaufruf geschrieben, nicht nach dem Lauf. Eine Factory liest ihren Spec aus dem Profil (`spec`), wenn der Run-Ordner keinen hat. Abgebildet werden:
 
 | Spec-Feld | Profilfeld | Beispiel |
 |---|---|---|
@@ -78,18 +78,19 @@ Eine Factory mit `approve_each_run: yes` läuft über `penelope factory run NAME
 - Vor dem Start zeigt Penelope den Plan: Zahl der Agenten, Loop-Schritte, Budget, Skript. Ohne Ja des Nutzers startet nichts. In der CLI fragt `penelope workflow run NAME`; in der TUI zeigt `/workflow run NAME` den Plan und startet erst mit `/workflow run NAME yes`.
 - Jeder Agent läuft mit Eurykleia, den Kerkis-Gates und `route: auto`, soweit gemergt.
 - Der Workflow setzt `run_policy` auf `safe`, auch wenn die Sitzung `all` erlaubt. `git push`, `git merge` und Paketinstallationen lösen damit eine Frage aus, die ein Workflow nicht beantworten kann.
-- Journal je Lauf in `.penelope/workflows/<id>/journal.jsonl`. Fortsetzen nach Absturz: abgeschlossene Aufrufe mit gleichem Prompt kommen aus dem Journal. `parallel` und jede `pipeline`-Stufe haben eigene Schlüssel.
-- Kein Agent mergt, pusht nach `main` oder installiert etwas.
-- Builds laufen über `flock ~/.cache/penelope-cargo.lock`.
+- Journal je Lauf in `.penelope/workflows/<id>/journal.jsonl`. Fortsetzen nach Absturz: abgeschlossene Aufrufe mit gleichem Prompt kommen aus dem Journal. `parallel` und jede `pipeline`-Stufe schreiben ihren Eintrag sofort im Worker, nicht erst nach dem Block. `penelope workflow run NAME --resume ID` setzt fort; `penelope workflow runs` zeigt die IDs.
+- Der Stop-Marker wird vor jedem Agenten, vor jedem Parallelblock, vor jeder Pipeline-Stufe und vor jeder Loop-Runde geprüft. Ein laufender Agent liest ihn über einen Wächter alle 150 ms und setzt sein Cancel-Flag.
+- Kein Agent mergt, pusht nach `main` oder installiert etwas. Der Workflow setzt `run_policy` auf `safe` und gibt die Politik als `PENELOPE_RUN_POLICY` an den MCP-Tochterprozess weiter, damit auch der claude-cli-Pfad nicht die Disk-Config mit `all` liest.
 
 Grenzen: `worktree` gilt nur für `agent`, nicht für Einträge in `parallel`. Ein verschachtelter Workflow kann nicht `ask` aufrufen; das äußere Skript fragt. Worktrees bleiben nach dem Lauf stehen, damit ein Bau-Workflow sein Ergebnis behält; `penelope work list` zeigt sie.
 
 ## C4: Bedienung
 
-- `/workflow run NAME|DATEI`, `/workflow list`, `/workflow status ID`, `/workflow stop ID`.
+- `/workflow run NAME|DATEI [--yes] [--resume ID] [--args JSON]`, `/workflow list`, `/workflow runs`, `/workflow status ID`, `/workflow stop ID`.
+- Ein Fehler endet mit Exit 2, auch bei `status`, `stop` und einem kaputten `--args`.
 - Die laufenden Agenten als Baum, mit Phase, Modell, Kosten und Status.
 - Gespeicherte Workflows in `.penelope/workflows/*.rhai`.
-- Beispiele: `review.rhai` (Review mit Prüfung jedes Befunds), `build.rhai` (Bauen mit Rechenprüfung und Review), `research.rhai` (Recherche mit Annahmen-Register).
+- Beispiele: `review.rhai` (Review mit Prüfung jedes Befunds), `review3.rhai` (genau 3 Agenten, auch bei 4 Dateien), `build.rhai` (Bauen mit Rechenprüfung und Review), `research.rhai` (Recherche mit Annahmen-Register).
 
 ## C5: Tests
 
