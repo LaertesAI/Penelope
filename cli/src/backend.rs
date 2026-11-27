@@ -197,6 +197,8 @@ impl Chat {
     }
 
     fn turn_once(&mut self, ctx: &Ctx, user: &str, memory: &str, on: &mut dyn FnMut(Event)) -> Result<String, String> {
+        let calibrated = crate::calibrate::apply(ctx);          // the model profile of `penelope calibrate`, when one exists
+        let ctx = &calibrated;
         if let Some(family) = crate::crew::family_of(&ctx.cfg["main"]) {
             return Err(format!("The main model is {} 1, one of the Laertes families. It is in training and cannot answer yet. \
 Choose a hosted model: penelope provider use NAME --role main.", family));
@@ -210,7 +212,8 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
         if masked > 0 {
             on(Event::Masked(masked));
         }
-        let mut system = if memory.is_empty() { rules(ctx) } else { format!("{}\n\nNotes from the memory map for this request:\n{}", rules(ctx), memory) };
+        let rules = crate::calibrate::rules_for(ctx);
+        let mut system = if memory.is_empty() { rules } else { format!("{}\n\nNotes from the memory map for this request:\n{}", rules, memory) };
         let skills = crate::plugins::skill_index(ctx);
         if !skills.is_empty() {
             system.push_str(&format!("\n\nInstalled skills (read one with the tool skill before you use it):\n{}", skills));
@@ -438,7 +441,9 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
             return Err(format!("this session is stored in the format {} and the main model now uses {}. Start a new session.", self.history_kind, kind));
         }
         let mine = mcp::main_tools(ctx);
-        let tools: Vec<Value> = mcp::tool_specs().as_array().unwrap().iter().filter(|t| mine.contains(&t["name"].as_str().unwrap_or(""))).cloned().collect();
+        let full: Vec<Value> = mcp::tool_specs().as_array().unwrap().iter().filter(|t| mine.contains(&t["name"].as_str().unwrap_or(""))).cloned().collect();
+        let (tools, system) = crate::calibrate::shape_tools(m, full.clone(), system.to_string());
+        let system = system.as_str();
         let before = self.history.len();
         self.history.push(crate::llm::user_message(user));
         self.history_kind = kind.clone();
@@ -449,7 +454,9 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
         let out = crate::llm::run_loop(m, system, &mut history, &tools, 12, Some(&*self.cancel), &mut usage,
             &mut |call| {
                 (*events.borrow_mut())(Event::ToolStart { id: call.id.clone(), name: short_name(&call.name), detail: tool_detail(&call.args) });
-                let called = if mine.contains(&call.name.as_str()) {
+                let called = if call.name == crate::calibrate::DESCRIBE && m["tool_list"].as_str() == Some("index") {
+                    crate::calibrate::describe(&full, &call.args)
+                } else if mine.contains(&call.name.as_str()) {
                     crate::tools::dispatch_retry(ctx, "lead", &call.name, &call.args)
                 } else {
                     (format!("NOT called. unknown tool {} — it is not in the tool list of this turn.", call.name), false)

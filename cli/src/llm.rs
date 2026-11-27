@@ -55,6 +55,12 @@ pub fn user_message(text: &str) -> Value {
 /// The messages that carry tool results back, in the format of the kind. The Messages API takes all results of one
 /// answer in a single user message. Chat completions take one message with the role `tool` per call.
 pub fn result_messages(kind: &str, results: &[(String, String, bool)]) -> Vec<Value> {
+    if kind == "text" {
+        // Text tool calls (`"tool_format": "text"`): the results go back as one user message of <tool_response> blocks.
+        let body: Vec<String> = results.iter().map(|(id, text, ok)| format!("<tool_response id=\"{}\"{}>\n{}\n</tool_response>", id,
+                                                                            if *ok { "" } else { " error=\"true\"" }, text)).collect();
+        return vec![user_message(&body.join("\n"))];
+    }
     if kind == "anthropic" {
         let blocks: Vec<Value> = results.iter().map(|(id, text, ok)| {
             let mut b = json!({"type": "tool_result", "tool_use_id": id, "content": text});
@@ -239,8 +245,14 @@ pub fn chat_cancel(model: &Value, system: &str, history: &[Value], tools: &[Valu
             return Err(format!("the answer holds no content: {}", v.to_string().chars().take(200).collect::<String>()));
         }
         let text = blocks.iter().filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join("\n").trim().to_string();
-        let calls = blocks.iter().filter(|b| b["type"] == "tool_use").map(|b| ToolCall {
+        let mut calls: Vec<ToolCall> = blocks.iter().filter(|b| b["type"] == "tool_use").map(|b| ToolCall {
             id: b["id"].as_str().unwrap_or("").to_string(), name: b["name"].as_str().unwrap_or("").to_string(), args: b["input"].clone() }).collect();
+        let mut text = text;
+        if calls.is_empty() && model["tool_format"].as_str() == Some("text") && text.contains("<tool_call>") {
+            let (found, rest) = text_tool_calls(&text);
+            calls = found;
+            text = rest;
+        }
         let u = &v["usage"];
         let tokens_in = ["input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"].iter().map(|k| u[*k].as_u64().unwrap_or(0)).sum();
         let detail = v["stop_details"]["category"].as_str().map(|c| format!(" (category {})", c)).unwrap_or_default();
@@ -357,7 +369,7 @@ pub fn run_loop(model: &Value, system: &str, history: &mut Vec<Value>, tools: &[
 pub fn run_loop_with(model: &Value, system: &str, history: &mut Vec<Value>, tools: &[Value], rounds: usize, cancel: Option<&AtomicBool>, usage: &mut Usage,
                      tick: &mut dyn FnMut(&Usage) -> Option<String>,
                      exec: &mut dyn FnMut(&ToolCall) -> (String, bool), on_text: &mut dyn FnMut(&str)) -> Result<String, String> {
-    let kind = kind_of(model).to_string();
+    let kind = if model["tool_format"].as_str() == Some("text") { "text".to_string() } else { kind_of(model).to_string() };
     for round in 0..rounds {
         if cancel.map(|c| c.load(Ordering::SeqCst)).unwrap_or(false) {
             return Err("stopped".to_string());
