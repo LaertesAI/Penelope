@@ -729,7 +729,10 @@ fn main() {
             }
         }
         "research" if args.iter().any(|a| a == "--deep") => {
-            println!("{}", deepresearch::run(&ctx, &deepresearch::Params { verbose: true, ..deepresearch::parse_args(&args[1..]) }));
+            match deepresearch::parse_args(&args[1..]) {
+                Ok(p) => println!("{}", deepresearch::run(&ctx, &deepresearch::Params { verbose: true, ..p })),
+                Err(e) => { loom::warn(&e); std::process::exit(2); }
+            }
         }
         "research" => {
             let mut depth = "standard".to_string();

@@ -138,7 +138,8 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd { name: "/context", help: "show what @ and the memory map would send", key: "", takes_text: true },
     Cmd { name: "/rewind", help: "restore files and transcript N turns back: /rewind 3", key: "", takes_text: true },
     Cmd { name: "/search", help: "search several engines and show the ranked results; /search fanout on|off", key: "", takes_text: true },
-    Cmd { name: "/research", help: "search, read the best pages and show a cited report; /research deep QUESTION runs the multi-round method", key: "", takes_text: true },
+    Cmd { name: "/research", help: "search, read the best pages and show a cited report; /research --deep QUESTION runs the multi-round method", key: "", takes_text: true },
+    Cmd { name: "/deep", help: "deep research: plan, parallel researchers, gap loop, checked citations; /deep [--max-rounds N] [--budget EUR] QUESTION", key: "", takes_text: true },
     Cmd { name: "/route", help: "the roles and their models; /route auto|fixed sets the cost mode", key: "", takes_text: true },
     Cmd { name: "/escalate", help: "cost mode: move this task to the main model", key: "", takes_text: false },
     Cmd { name: "/tools", help: "every tool, its arguments and its roles; /tools search QUERY, install N, yes, no", key: "", takes_text: false },
@@ -1793,13 +1794,12 @@ impl App {
                 });
             }
             "/search" => self.toast("/search WORDS".to_string()),
-            "/research" if rest == "deep" || rest.starts_with("deep ") => {
-                let words: Vec<String> = rest[4..].split_whitespace().map(String::from).collect();
-                let params = penelope_core::deepresearch::parse_args(&words);
-                if params.question.trim().is_empty() {
-                    self.toast("/research deep [--max-rounds N] [--budget EUR] QUESTION".to_string());
-                } else {
-                    self.start_bg(move |ctx| Ok(penelope_core::deepresearch::run(&ctx, &params)));
+            "/research" | "/deep" if name == "/deep" || rest == "--deep" || rest.starts_with("--deep ") => {
+                let words: Vec<String> = rest.split_whitespace().map(String::from).collect();
+                match penelope_core::deepresearch::parse_args(&words) {
+                    Ok(params) if !params.question.trim().is_empty() => self.start_bg(move |ctx| Ok(penelope_core::deepresearch::run(&ctx, &params))),
+                    Ok(_) => self.toast("/deep [--max-rounds N] [--budget EUR] QUESTION".to_string()),
+                    Err(e) => self.toast(e),
                 }
             }
             "/research" if !rest.is_empty() => {

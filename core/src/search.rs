@@ -259,11 +259,17 @@ fn local_searxng() -> bool {
     *FOUND.get_or_init(|| {
         let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 8888));
         if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).is_err() { return false; }
-        match crate::net::agent(1).get(&format!("{}/", LOCAL_SEARXNG)).call() {
-            Ok(_) | Err(ureq::Error::Status(_, _)) => true,
+        // Any web server can sit on that port. Only a SearXNG that answers a JSON search gets queries.
+        match crate::net::agent(2).get(&format!("{}/search?q=test&format=json", LOCAL_SEARXNG)).call() {
+            Ok(r) => r.into_json::<Value>().map(|v| is_searxng_answer(&v)).unwrap_or(false),
             Err(_) => false,
         }
     })
+}
+
+/// A SearXNG JSON answer has a `results` list and a `query` that echoes the search.
+fn is_searxng_answer(v: &Value) -> bool {
+    v["results"].is_array() && v["query"].is_string()
 }
 
 /// The SearXNG instances set in the config: `url`, `urls` and `searxng_url`.
@@ -803,6 +809,8 @@ mod tests {
         let cfg = serde_json::json!({"searxng_url": "http://localhost:9999/", "url": "", "urls": ["http://other.example"]});
         assert_eq!(searxng_bases(&cfg), vec!["http://localhost:9999/".to_string(), "http://other.example".to_string()]);
         assert!(searxng_bases(&serde_json::json!({"searxng_url": "", "url": ""})).is_empty());
+        assert!(is_searxng_answer(&serde_json::json!({"query": "test", "results": []})));
+        assert!(!is_searxng_answer(&serde_json::json!({"results": []})) && !is_searxng_answer(&serde_json::json!({"hello": "world"})));
     }
 
     #[test]
