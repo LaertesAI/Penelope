@@ -118,3 +118,72 @@ fn run_agent_refuses_an_agent_that_was_never_stored() {
     assert_eq!(code, 2, "{} {}", out, err);
     assert!(err.contains("no stored agent nosuch"), "{}", err);
 }
+
+#[test]
+fn a_refusal_exits_2_for_plugins_mcp_servers_and_worktrees() {
+    let dir = project("refusals");
+    for args in [
+        &["plugin", "remove", "nosuch"][..], &["plugin", "allow", "nosuch"], &["plugin", "deny", "nosuch"], &["plugin", "update", "nosuch"],
+        &["plugin", "add", "/nonexistent"], &["mcp", "remove", "nosuch"], &["mcp", "allow", "nosuch"], &["mcp", "allow-tool", "nosuch", "t"],
+        &["mcp", "call", "nosuch", "t", "{}"], &["work", "diff", "nosuch"], &["work", "apply", "nosuch"], &["jobs", "stop", "99"],
+    ] {
+        let (code, out, err) = run(&dir, args, b"");
+        assert_eq!(code, 2, "{:?} {} {}", args, out, err);
+    }
+}
+
+#[test]
+fn app_install_and_update_check_the_target_before_the_yes_message() {
+    let dir = project("appcheck");
+    for args in [&["app", "install", "/nonexistent/app"][..], &["app", "install", "/nonexistent/app", "--yes"], &["app", "update", "nosuch"]] {
+        let (code, out, err) = run(&dir, args, b"");
+        assert_eq!(code, 2, "{:?} {} {}", args, out, err);
+        assert!(!err.contains("A pipe cannot answer yes"), "{:?} {}", args, err);
+    }
+}
+
+#[test]
+fn bad_values_get_a_usage_line_and_exit_2() {
+    let dir = project("usage");
+    for args in [
+        &["jobs", "stop", "abc"][..], &["jobs", "stop"], &["jobs", "bogus"], &["search", "fanout", "maybe"], &["input", "bogus"],
+        &["serve", "--bind", "nonsense", "--print-config"], &["serve", "--bind", "host:0", "--print-config"],
+        &["provider", "use", "claude-cli", "--workspace"], &["provider", "use", "claude-cli", "--model"],
+        &["plugin", "add"], &["plugin", "deny"], &["plugin", "allow"], &["chat", "--resume"], &["work", "diff"],
+    ] {
+        let (code, out, err) = run(&dir, args, b"");
+        assert_eq!(code, 2, "{:?} {} {}", args, out, err);
+        let said = format!("{}{}", out, err);
+        assert!(said.contains("usage") || said.contains("needs") || said.contains("not HOST:PORT"), "{:?} {}", args, said);
+    }
+    let (code, _, _) = run(&dir, &["serve", "--bind", "127.0.0.1:9", "--print-config"], b"");
+    assert_eq!(code, 0);
+    let (code, out, _) = run(&dir, &["jobs"], b"");
+    assert_eq!(code, 0, "{}", out);
+}
+
+#[test]
+fn an_unlisted_model_is_set_with_a_warning() {
+    let dir = project("modelwarn");
+    let (code, out, _) = run(&dir, &["provider", "use", "opencode", "--model", "brand-new-model"], b"");
+    assert_eq!(code, 0, "{}", out);
+    assert!(out.contains("Warning: brand-new-model"), "{}", out);
+    let (_, out, _) = run(&dir, &["provider", "use", "claude-cli", "--model", "haiku"], b"");
+    assert!(!out.contains("Warning"), "{}", out);
+}
+
+#[test]
+fn the_mcp_server_with_root_refuses_a_file_outside_the_project() {
+    let dir = project("mcproot");
+    std::fs::write(dir.join("a.txt"), "inside").unwrap();
+    let call = |id: u64, path: &str| json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {"name": "read", "arguments": {"path": path}}});
+    let input = format!("{}\n{}\n{}\n", call(1, "a.txt"), call(2, "/etc/hostname"), call(3, "../../outside"));
+    let (code, out, _) = run(&dir, &["mcp"], input.as_bytes());
+    assert_eq!(code, 0);
+    let answers: Vec<Value> = out.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert!(answers[0]["result"]["content"][0]["text"].as_str().unwrap().contains("inside"), "{}", answers[0]);
+    for a in &answers[1..] {
+        assert_eq!(a["result"]["isError"], json!(true), "{}", a);
+        assert!(a["result"]["content"][0]["text"].as_str().unwrap().contains("outside the project"), "{}", a);
+    }
+}

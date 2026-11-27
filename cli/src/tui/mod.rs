@@ -2665,7 +2665,7 @@ impl App {
                 self.set_input(&format!("{}{}", cmd.name, if cmd.takes_text { " " } else { "" }));
             }
             KeyCode::Tab if slash.is_empty() && self.input_text().starts_with("/folder ") => { self.complete_folder_input(); }
-            KeyCode::Enter if !slash.is_empty() && !alt => {
+            KeyCode::Enter if !slash.is_empty() && !alt && !line_has_arguments(&self.input_text()) => {
                 let cmd = slash[self.slash_sel.min(slash.len() - 1)];
                 self.run_cmd(cmd);
             }
@@ -2733,6 +2733,21 @@ impl App {
 /// folder `~/.penelope` is the person's own settings and never asks.
 fn folder_needs_confirmation(root: &std::path::Path, current: &std::path::Path, home: &std::path::Path) -> bool {
     root != current && root != home.join(".penelope") && root.join("config.json").is_file()
+}
+
+/// True when a typed command line has text after the command name: `/effort low`, not `/effort` or `/effort `.
+fn line_has_arguments(line: &str) -> bool {
+    line.trim().split_once(char::is_whitespace).map(|(_, rest)| !rest.trim().is_empty()).unwrap_or(false)
+}
+
+/// One line for a first start that imported many plugins, the lines themselves for one or two.
+fn summarize_import(lines: Vec<String>) -> Vec<String> {
+    if lines.len() <= 2 {
+        return lines;
+    }
+    let failed = lines.iter().filter(|l| l.contains("NOT ")).count();
+    vec![format!("{} plugins imported from the folders of other harnesses{} · /plugins lists them", lines.len() - failed,
+                 if failed > 0 { format!(", {} refused", failed) } else { String::new() })]
 }
 
 fn folder_settings(root: &std::path::Path) -> Vec<String> {
@@ -2824,7 +2839,7 @@ pub fn run(ctx: Ctx, resume: Option<serde_json::Value>) -> Result<(), String> {
     let mut painter = picture::Painter::default();
     let imported = plugins::import_known(&ctx);
     let mut app = App::new(ctx);
-    for line in imported {
+    for line in summarize_import(imported) {
         app.note("◆", "plugins", line, art::SEA);
     }
     if let Some(entry) = resume {
@@ -3527,6 +3542,23 @@ mod tests {
         assert!(!folder_needs_confirmation(&home.join(".penelope"), &current, &home), "the shared folder asked");
         assert!(folder_needs_confirmation(&project, &current, &home), "a project folder with settings must ask");
         assert!(!folder_needs_confirmation(&project, &project, &home), "the folder that is already open must not ask");
+    }
+
+    #[test]
+    fn many_imported_plugins_make_one_line_and_a_command_with_text_is_not_completed() {
+        let many: Vec<String> = (0..231).map(|i| format!("~/x/p{}: plugin p{} registered", i, i)).collect();
+        assert_eq!(summarize_import(many).len(), 1);
+        assert_eq!(summarize_import(vec!["a".into(), "b".into()]).len(), 2);
+        assert!(summarize_import(Vec::new()).is_empty());
+        assert!(line_has_arguments("/effort low") && line_has_arguments("/folder /a b"));
+        assert!(!line_has_arguments("/effort") && !line_has_arguments("/effort  "));
+        let mut a = app();
+        a.set_input("/effort low");
+        press(&mut a, KeyCode::Enter);
+        assert_eq!(a.input_text(), "", "a line with arguments runs");
+        a.set_input("/effort");
+        press(&mut a, KeyCode::Enter);
+        assert_eq!(a.input_text(), "/effort ", "a bare name that takes text completes and waits");
     }
 
     #[test]

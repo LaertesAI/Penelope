@@ -112,3 +112,9 @@ Same method (`mcpvet::tests::initialize_with_and_without_mitos_and_the_index_is_
 | 2 | 867 bytes | 502 bytes | 42.1 % |
 
 The saving grows with the number of tools, as the table in `MITOS.md` shows for 8, 40 and 128 tools. With 2 tools the fixed `_meta` block takes a large share of the index.
+
+## Tool server with `--root`
+
+`penelope mcp --root DIR` serves Penelope's own tools (read, find, grep, tree, outline, lsp, json_query, git_diff, write, edit, unzip). With `--root`, a call whose `path`, `dir`, `cwd`, `archive` or `into` lies outside the project folder (the parent of `DIR` when it is named `.penelope`) is refused with `NOT called`. The check resolves `..` and symlinks first. Allowed besides the project: the folders in `brief.roots`, `plugin_dirs` and `mcp.roots` of `config.json`. `"mcp": {"allow_outside_root": true}` switches the check off for a person who wants a client to read anywhere. Without `--root` nothing changes. The server has no interactive main session, so there is no per-role exception.
+
+A line that is not UTF-8, not JSON or not an object gets -32700 or -32600, and the server keeps running.
