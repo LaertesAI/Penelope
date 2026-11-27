@@ -140,11 +140,10 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd { name: "/research", help: "search, read the best pages and show a cited report", key: "", takes_text: true },
     Cmd { name: "/route", help: "the roles and their models; /route auto|fixed sets the cost mode", key: "", takes_text: true },
     Cmd { name: "/escalate", help: "cost mode: move this task to the main model", key: "", takes_text: false },
-    Cmd { name: "/tools", help: "every tool, its arguments and its roles", key: "", takes_text: false },
+    Cmd { name: "/tools", help: "every tool, its arguments and its roles; /tools search QUERY, install N, yes, no", key: "", takes_text: false },
     Cmd { name: "/consolidate", help: "keep the lasting rules of this session for every project", key: "", takes_text: false },
     Cmd { name: "/forge", help: "write a tool from the notes at a memory waypoint", key: "", takes_text: true },
     Cmd { name: "/plugins", help: "the filterable plugin screen; install, import, allow, deny, update, remove", key: "", takes_text: false },
-    Cmd { name: "/tools", help: "find a tool: search QUERY, install N, yes, no", key: "", takes_text: true },
     Cmd { name: "/mcp", help: "MCP servers: list, probe, add, remove, allow, deny, call", key: "", takes_text: false },
     Cmd { name: "/screen", help: "ScreenCodec: tools, open URL, see, click ID, desktop", key: "", takes_text: false },
     Cmd { name: "/cursor", help: "move Penelope's cursor: /cursor X Y [click]", key: "", takes_text: false },
@@ -807,7 +806,7 @@ impl App {
             Err(e) => return self.toast(e),
         };
         let root = crate::config::root_from(&target, false);
-        if root != self.ctx.root && root.join("config.json").is_file() {
+        if folder_needs_confirmation(&root, &self.ctx.root, &crate::platform::home()) {
             let lines = folder_settings(&root);
             self.overlay = Overlay::FolderTrust { path: target, lines };
             return;
@@ -2679,7 +2678,7 @@ impl App {
                 self.set_input(&format!("{}{}", cmd.name, if cmd.takes_text { " " } else { "" }));
             }
             KeyCode::Tab if slash.is_empty() && self.input_text().starts_with("/folder ") => { self.complete_folder_input(); }
-            KeyCode::Enter if !slash.is_empty() && !alt => {
+            KeyCode::Enter if !slash.is_empty() && !alt && !line_has_arguments(&self.input_text()) => {
                 let cmd = slash[self.slash_sel.min(slash.len() - 1)];
                 self.run_cmd(cmd);
             }
@@ -2743,6 +2742,27 @@ impl App {
 
 /// What the `.penelope/config.json` of another folder would apply: its mode, its `human` setting, every `base_url`
 /// and every MCP server command. A person reads this before the folder is entered.
+/// True when the `.penelope` of the target folder has settings of its own that the person has not seen. The shared
+/// folder `~/.penelope` is the person's own settings and never asks.
+fn folder_needs_confirmation(root: &std::path::Path, current: &std::path::Path, home: &std::path::Path) -> bool {
+    root != current && root != home.join(".penelope") && root.join("config.json").is_file()
+}
+
+/// True when a typed command line has text after the command name: `/effort low`, not `/effort` or `/effort `.
+fn line_has_arguments(line: &str) -> bool {
+    line.trim().split_once(char::is_whitespace).map(|(_, rest)| !rest.trim().is_empty()).unwrap_or(false)
+}
+
+/// One line for a first start that imported many plugins, the lines themselves for one or two.
+fn summarize_import(lines: Vec<String>) -> Vec<String> {
+    if lines.len() <= 2 {
+        return lines;
+    }
+    let failed = lines.iter().filter(|l| l.contains("NOT ")).count();
+    vec![format!("{} plugins imported from the folders of other harnesses{} · /plugins lists them", lines.len() - failed,
+                 if failed > 0 { format!(", {} refused", failed) } else { String::new() })]
+}
+
 fn folder_settings(root: &std::path::Path) -> Vec<String> {
     let cfg: serde_json::Value = fs::read_to_string(root.join("config.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
     let mut out = vec![
@@ -2832,7 +2852,7 @@ pub fn run(ctx: Ctx, resume: Option<serde_json::Value>) -> Result<(), String> {
     let mut painter = picture::Painter::default();
     let imported = plugins::import_known(&ctx);
     let mut app = App::new(ctx);
-    for line in imported {
+    for line in summarize_import(imported) {
         app.note("◆", "plugins", line, art::SEA);
     }
     if let Some(entry) = resume {
@@ -3520,6 +3540,52 @@ mod tests {
         let _ = fs::remove_dir_all(&other);
         a.reload_workspace(&other);
         assert!(!marker.exists() && a.approve_dir.starts_with(&other));
+    }
+
+    #[test]
+    fn the_shared_home_settings_never_ask_for_a_folder_yes() {
+        let home = std::env::temp_dir().join(format!("penelope-home-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&home);
+        fs::create_dir_all(home.join(".penelope")).unwrap();
+        fs::write(home.join(".penelope/config.json"), "{}").unwrap();
+        let project = home.join("proj/.penelope");
+        fs::create_dir_all(&project).unwrap();
+        fs::write(project.join("config.json"), "{}").unwrap();
+        let current = home.join("here/.penelope");
+        assert!(!folder_needs_confirmation(&home.join(".penelope"), &current, &home), "the shared folder asked");
+        assert!(folder_needs_confirmation(&project, &current, &home), "a project folder with settings must ask");
+        assert!(!folder_needs_confirmation(&project, &project, &home), "the folder that is already open must not ask");
+    }
+
+    #[test]
+    fn many_imported_plugins_make_one_line_and_a_command_with_text_is_not_completed() {
+        let many: Vec<String> = (0..231).map(|i| format!("~/x/p{}: plugin p{} registered", i, i)).collect();
+        assert_eq!(summarize_import(many).len(), 1);
+        assert_eq!(summarize_import(vec!["a".into(), "b".into()]).len(), 2);
+        assert!(summarize_import(Vec::new()).is_empty());
+        assert!(line_has_arguments("/effort low") && line_has_arguments("/folder /a b"));
+        assert!(!line_has_arguments("/effort") && !line_has_arguments("/effort  "));
+        let mut a = app();
+        a.set_input("/effort low");
+        press(&mut a, KeyCode::Enter);
+        assert_eq!(a.input_text(), "", "a line with arguments runs");
+        a.set_input("/effort");
+        press(&mut a, KeyCode::Enter);
+        assert_eq!(a.input_text(), "/effort ", "a bare name that takes text completes and waits");
+    }
+
+    #[test]
+    fn tools_with_a_word_reaches_the_tool_search_and_without_one_the_table() {
+        let mut a = app();
+        a.command("/tools");
+        assert!(matches!(a.overlay, Overlay::Pager { .. }), "/tools shows the table");
+        a.overlay = Overlay::None;
+        a.command("/tools no");
+        assert!(matches!(a.overlay, Overlay::None), "/tools no is a tool search verb, not the table");
+        assert!(a.toast.is_some());
+        a.command("/tools bogus");
+        assert!(a.toast.as_ref().unwrap().0.contains("/tools search QUERY"), "{:?}", a.toast);
+        assert_eq!(COMMANDS.iter().filter(|c| c.name == "/tools").count(), 1, "one palette entry for /tools");
     }
 
     #[test]
