@@ -85,6 +85,9 @@ pub fn run(ctx: &Ctx, args: &[String]) -> Result<(), String> {
             "--bind" | "-b" => {
                 i += 1;
                 bind = args.get(i).cloned().ok_or("--bind needs an address such as 127.0.0.1:8765")?;
+                if !valid_bind(&bind) {
+                    return Err(format!("--bind {} is not HOST:PORT (for example 127.0.0.1:8765 or [::1]:8765, port 1 to 65535)", bind));
+                }
             }
             "--allow-remote" => allow_remote = true,
             "--quiet" => quiet = true,
@@ -130,6 +133,13 @@ pub fn run(ctx: &Ctx, args: &[String]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// HOST:PORT with a non-empty host without spaces or slashes and a port from 1 to 65535.
+pub fn valid_bind(bind: &str) -> bool {
+    let Some((host, port)) = bind.rsplit_once(':') else { return false };
+    let host = host.trim_matches(['[', ']']);
+    !host.is_empty() && !host.contains(|c: char| c.is_whitespace() || c == '/') && port.parse::<u16>().map(|p| p > 0).unwrap_or(false)
 }
 
 fn loopback(bind: &str) -> bool {
@@ -557,13 +567,8 @@ fn redact_text(text: &str, level: &str) -> (String, Vec<Item>) {
         }
     }
     if level == "pii" {
-        let email = regex::Regex::new(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}").unwrap();
-        for m in email.find_iter(text) {
-            found.push(Item { start: m.start(), end: m.end(), kind: "email" });
-        }
-        let iban = regex::Regex::new(r"\b[A-Z]{2}\d{2}[A-Z0-9]{10,30}\b").unwrap();
-        for m in iban.find_iter(text) {
-            found.push(Item { start: m.start(), end: m.end(), kind: "iban" });
+        for span in crate::pii::spans(text) {
+            found.push(Item { start: span.start, end: span.end, kind: span.kind });
         }
     }
     found.sort_by(|a, b| a.start.cmp(&b.start).then(b.end.cmp(&a.end)));
@@ -605,6 +610,12 @@ fn redact(body: &Value) -> (u16, Value) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_bind_needs_a_host_and_a_port_from_1_to_65535() {
+        for ok in ["127.0.0.1:8765", "[::1]:8765", "localhost:80", "0.0.0.0:65535"] { assert!(valid_bind(ok), "{}", ok); }
+        for bad in ["nonsense", ":80", "host:0", "host:70000", "host:abc", "a b:80", "http://x:80", ""] { assert!(!valid_bind(bad), "{}", bad); }
+    }
+
     use super::*;
 
     fn state(name: &str, token: Option<&str>) -> (State, std::path::PathBuf) {

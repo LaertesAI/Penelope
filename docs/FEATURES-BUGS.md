@@ -38,6 +38,7 @@ live run on this PC backs it.
 | CI stream | `penelope ask --json` events | live Claude JSON stream |
 | Editors | `penelope acp`: JSON-RPC over stdio for Zed/Neovim with initialize, session/new, prompt, cancel, streamed text and tool updates, shutdown | 6 CLI tests with a fake local endpoint |
 | PR | `pr_create` with a question, never pushes | spec/handler, no live PR |
+| Checker | `verify_fix` and `/check`: reproduction test must fail on HEAD and pass on the change, module tests must still pass, best-of-N tries the working tree first, then the smallest passing model fix; commands gated like `run`; see `docs/CHECKER.md` | 23 tests: 14 with a git fixture repo, 9 unit tests; no live run |
 
 ## Bugs and weak spots
 

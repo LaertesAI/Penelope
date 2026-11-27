@@ -1840,3 +1840,88 @@ Open:
 - The pin compares `HEAD` only. An edit to the files of a pinned folder without a commit is not detected.
 - A registry written before this change has no `commit`; those plugins run unpinned until their next `add` or `update`.
 - The plugins screen of the TUI drops a blocked plugin; only `plugin list` names it with the reason.
+
+## Mitos version 0 (branch `feat/mitos-core`)
+
+`mitos.rs` adds an MCP extension with four parts: an index in `tools/list` for a client that announces
+`laertes/mitos`, `mitos/describe` for the full spec of named tools, a list hash in `_meta`, and the origin level `l`
+on every `tools/call` result. `penelope mcp` speaks it; the MCP client announces it, asks `mitos/describe` only when a
+brief needs the schema or the model calls `mcp_servers` with `server` and `tool`, and caches the answer. The spec is
+in `docs/MITOS.md`.
+
+Measured: the index saves 58.7 % of the bytes at 8 tools, 64.3 % at 40 and 67.8 % at 128, on Penelope's own specs.
+A flag per index entry cost 37 bytes and moved to the list's `_meta`; before that the index saved 54.4 % at 40.
+`cargo test` 371 passed, 1 ignored. Open: the bytes are not tokens of one tokenizer, and no other client speaks
+Mitos yet.
+
+## Eurykleia, the watcher of tool calls (branch `feat/eurykleia`)
+
+`eurykleia.rs` checks every tool call before it runs, without a model and without network. `tools::dispatch_retry`
+calls it first. Checks in order, each with a code: `E_NAME` unknown tool, `E_REQ` missing required argument, `E_TYPE`
+wrong JSON type, `E_EXTRA` argument not in the schema, `E_FMT` value outside a stated format (date YYYY-MM-DD, ISO
+date-time, "City, State", e-mail, URL, enum, minimum and maximum). Schemas come from `spec.rs`, from forged tools and,
+for `mcp_call`, from the tool list the MCP client already holds. A server that is not running is not checked.
+
+A failed call does not run. The model reads one line, for example `NOT run. E_REQ path: required by read.` The third
+failed call of one tool in one user turn gives `E_STRIKES`, and that tool stays closed until the next turn.
+
+Config `eurykleia`: `on` (default) or `off`. Counts per code go to `stats.json` and `penelope stats`. Tests: 11 new,
+`cargo test` 393 passed, 1 ignored.
+
+Open:
+- The format check reads the property description, so a description that names a format loosely can reject a call.
+- Strikes are counted per thread. A scout thread starts at zero and has no turn reset.
+- `route::validate` still runs after the watcher and says `NOT called.` for the cases the watcher misses, such as an
+  empty required string inside a nested object.
+
+## Executable checker for code tasks (branch `feat/exec-checker`)
+
+`checker.rs` runs the code that Eurykleia only shapes. The tool `verify_fix` takes a reproduction test, runs it in a
+detached git worktree at HEAD (it must fail), applies the working-tree change (it must pass) and runs the module tests
+(they must pass, or must already fail on HEAD). Best-of-N asks the candidate models for SEARCH/REPLACE fixes; the
+working tree goes first and wins when it passes, the model candidates follow smallest diff first. `check.mode` `gate`
+sends one reminder when the lead model answers after a code edit without a check; every code turn ends with a verdict
+line, and unverified turns are counted in `.penelope/check/log.jsonl`. Hypotheses with numbers in `docs/CHECKER.md`.
+
+Review round 1 fixed:
+- The commands of a check now pass the gate of `run`: safe list, allow list or a yes, and bubblewrap with
+  `sandbox: bwrap`. The default interpreter run of a model-written test needs one yes per session.
+- Candidates may change only the listed files and never `sitecustomize.py`, `conftest.py`, `*.pth` or a test config.
+  A one-line `sitecustomize.py` had turned exit 1 into exit 0 for every Python test.
+- Ignored build output (`node_modules`, `.venv`, `venv`, `*.so`, `*.pyd`, `*.dylib`) comes into the worktree.
+  Import, syntax and collection errors before and after give `env_error`, no longer `still_fails`.
+- The record is keyed per repository and session (`check/KEY/last.json`), so parallel eval tasks do not share a pass.
+- Long files go to the candidates as the lead's hunks with 80 lines of context, with the cut ranges named.
+- CRLF files keep CRLF. A second block without a path keeps the previous path. An empty SEARCH never appends.
+- Hooks are off for the worktree (`core.hooksPath` points at an empty folder), and `check.budget` (1200 s) caps one call.
+- The reminder in the API loop is skipped on the last round. The judge role no longer has `verify_fix`.
+- Test output passes the privacy guard.
+
+Tests: `checker.rs` has 23 tests, 14 with a git fixture repository and 9 without. `cargo test` in the binary: 526
+passed, 1 failed, 1 ignored. The failure is the known clusters test
+`a_tool_call_without_cwd_from_an_api_part_writes_in_its_worktree` under the custom TMPDIR; it passes without it. The 7
+CLI test files pass (29 tests). The first version of this entry said 476 passed; the count was 475 passed, 1 failed,
+1 ignored.
+
+Open:
+- No live run yet. H1 needs one eval run with `gate` and `run_policy` `all` or a safe-list run command.
+- The winner of best-of-N is written to `winner.diff`, not applied.
+- Module tests are the configured command; there is no test selection as in Agentless.
+- Folder links for `node_modules` need developer mode on Windows; without it the worktree lacks them.
+
+## Tool description scan (branch `feat/tool-description-scan`, 2026-11-27)
+
+Closes the open point of the vet entry: tool names, descriptions and input schemas from `tools/list` and from
+`.mcp.json` server objects now run the prose rules of `vet.rs` plus rules for tool poisoning (docs/TOOL-SCAN.md).
+The gate sits in `probe`, `describe` and `call`; tool search skips a refused server. The list hash per server lives in
+`<root>/mcp/toolscan.json`; a changed tool that gains a warning holds the server until `penelope mcp allow NAME`.
+`mcp allow` and `mcp add --allow` start the server once and scan its list; a refused list denies it again.
+`/tools install N` scans the registry entry first. New commands: `penelope mcp scan NAME`, `penelope mcp trust NAME`.
+
+Measured: written attack set 44 of 44 blocked; published MCPTox and MCP-ITP payloads 7 of 10 before tuning, 10 of 10
+after; paraphrases without trigger words 1 of 12; 442 offline tools of 15 servers 1 blocked (0.23 %), 9 warned; 249 us
+per tool in a release build.
+
+Found on the way: the TUI arm `"/tools" =>` for the contracts table caught `/tools search`, `install`, `yes` and `no`,
+so the TUI install flow never ran (the compiler warned "unreachable pattern"). Bare `/tools` keeps the table.
+

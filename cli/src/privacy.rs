@@ -1,5 +1,5 @@
 //! The privacy filter. It masks secrets in requests and tool output before any model reads the text. Today it works
-//! with fixed rules. An Utis model takes this place later. The level "pii" also masks e-mail addresses and IBANs.
+//! with fixed rules. An Utis model takes this place later. The level "pii" also masks personal data (`pii.rs`).
 
 const KEY_NAMES: &[&str] = &["password", "passwd", "secret", "token", "api_key", "apikey", "api-key", "access_key", "private_key", "authorization"];
 /// Prefix of a known key format and the shortest length that counts.
@@ -36,7 +36,48 @@ fn known_key(word: &str) -> bool {
     word.starts_with("eyJ") && word.len() >= 30 && word.matches('.').count() == 2      // a signed web token
 }
 
+/// A URL is one word, and read whole its scheme is the key name (`https` before the first `:`), so `?api_key=...`
+/// and `?k=AKIA...` passed. Each path part and each query value is checked on its own.
+fn url_word(w: &str, hits: &mut usize) -> String {
+    let (head, rest) = w.split_once('?').map(|(h, r)| (h, Some(r))).unwrap_or((w, None));
+    let mut out = String::with_capacity(w.len());
+    for (i, part) in head.split('/').enumerate() {
+        if i > 0 {
+            out.push('/');
+        }
+        if known_key(part) {
+            *hits += 1;
+            out.push_str("[masked:key]");
+        } else {
+            out.push_str(part);
+        }
+    }
+    let Some(rest) = rest else { return out };
+    let (query, fragment) = rest.split_once('#').map(|(q, f)| (q, Some(f))).unwrap_or((rest, None));
+    out.push('?');
+    for (i, pair) in query.split('&').enumerate() {
+        if i > 0 {
+            out.push('&');
+        }
+        let (key, value) = pair.split_once('=').map(|(k, v)| (k, Some(v))).unwrap_or((pair, None));
+        match value {
+            Some(v) if known_key(v) => { *hits += 1; out.push_str(&format!("{}=[masked:key]", key)); }
+            Some(v) if is_key_name(key) && is_value(v) => { *hits += 1; out.push_str(&format!("{}=[masked:secret]", key)); }
+            _ => out.push_str(pair),
+        }
+    }
+    if let Some(f) = fragment {
+        out.push('#');
+        out.push_str(f);
+    }
+    out
+}
+
 fn word(w: &str, wait: &mut Wait, hits: &mut usize) -> String {
+    if w.contains("://") && !known_key(w) {
+        *wait = Wait::Nothing;
+        return url_word(w, hits);
+    }
     if known_key(w) {
         *wait = Wait::Nothing;
         *hits += 1;
@@ -110,66 +151,10 @@ pub fn mask(text: &str) -> (String, usize) {
     (out, hits)
 }
 
-fn is_email(w: &str) -> bool {
-    let Some((local, domain)) = w.split_once('@') else { return false };
-    !local.is_empty() && !domain.contains('@') && domain.contains('.') && !domain.starts_with('.') && !domain.ends_with('.')
-        && local.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '+'))
-        && domain.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'))
-}
-
-/// Country code, two check digits, then 11 to 30 letters or digits.
-fn is_iban(w: &str) -> bool {
-    let b = w.as_bytes();
-    (15..=34).contains(&b.len()) && b[0].is_ascii_uppercase() && b[1].is_ascii_uppercase() && b[2].is_ascii_digit() && b[3].is_ascii_digit()
-        && b[4..].iter().all(|c| c.is_ascii_digit() || c.is_ascii_uppercase())
-}
-
-/// The second pass of the level "pii": e-mail addresses and IBANs, written in one piece or in groups of four.
+/// The second pass of the level "pii": names, IBANs, postal addresses, phone numbers, e-mail addresses, tax ids and
+/// birth dates, each replaced by `[masked:KIND]`. The rules live in `pii.rs`.
 pub fn mask_pii(text: &str) -> (String, usize) {
-    let (mut out, mut hits) = (String::with_capacity(text.len()), 0usize);
-    for line in text.split_inclusive('\n') {
-        let (body, end) = match line.strip_suffix('\n') {
-            Some(b) => (b, "\n"),
-            None => (line, ""),
-        };
-        let words: Vec<&str> = body.split(' ').collect();
-        let mut i = 0;
-        let mut first = true;
-        while i < words.len() {
-            if !first {
-                out.push(' ');
-            }
-            first = false;
-            let w = words[i];
-            let core = w.trim_matches(|c: char| is_delim(c) || matches!(c, '.' | ':' | '!' | '?'));
-            if is_email(core) {
-                out.push_str(&w.replace(core, "[masked:email]"));
-                hits += 1;
-            } else if is_iban(core) {
-                out.push_str(&w.replace(core, "[masked:iban]"));
-                hits += 1;
-            } else {
-                // an IBAN in groups: DE89 3704 0044 0532 0130 00
-                let mut joined = String::new();
-                let mut j = i;
-                while j < words.len() && joined.len() < 34 && !words[j].is_empty() && words[j].len() <= 4
-                    && words[j].chars().all(|c| c.is_ascii_digit() || c.is_ascii_uppercase()) {
-                    joined.push_str(words[j]);
-                    j += 1;
-                }
-                if j - i >= 4 && is_iban(&joined) {
-                    out.push_str("[masked:iban]");
-                    hits += 1;
-                    i = j;
-                    continue;
-                }
-                out.push_str(w);
-            }
-            i += 1;
-        }
-        out.push_str(end);
-    }
-    (out, hits)
+    crate::pii::mask(text)
 }
 
 /// The privacy model between the other models. It gets the text after the fixed rules and must answer with one JSON
@@ -222,6 +207,18 @@ pub fn note_failure(ctx: &crate::config::Ctx, why: &str) {
 #[cfg(test)]
 mod tests {
     use super::{mask, mask_pii};
+
+    #[test]
+    fn a_key_inside_a_url_is_masked() {
+        for (url, kind) in [("https://e.example/c?api_key=0123456789abcdef", "secret"), ("https://e.example/c?k=AKIAIOSFODNN7EXAMPLE", "key"),
+                            ("http://e.example/a/ghp_0123456789abcdefghijABCDEFGHIJ/b", "key"), ("https://e.example/?x=1&token=s3cr3tvalue#top", "secret"),
+                            ("ftp://u@e.example/f?password=hunter22xx", "secret")] {
+            let (out, hits) = mask(&format!("see {} now", url));
+            assert_eq!(hits, 1, "{} -> {}", url, out);
+            assert!(out.contains(&format!("[masked:{}]", kind)) && out.starts_with("see ") && out.ends_with(" now"), "{}", out);
+        }
+        assert_eq!(mask("https://docs.rs/serde/latest/serde/?search=json").1, 0);
+    }
 
     #[test]
     fn masks_mail_addresses_and_ibans() {

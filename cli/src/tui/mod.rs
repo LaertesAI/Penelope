@@ -2,9 +2,13 @@
 //!
 //! One thread draws and reads keys. A turn of the main model runs in a second thread and reports through a channel.
 
+mod ask;
 pub(crate) mod art;
 pub(crate) mod picture;
+mod graph;
+mod paths;
 mod text;
+mod toolsearch;
 mod view;
 
 use crate::backend::{Chat, Event as TurnEvent};
@@ -55,7 +59,7 @@ pub enum Overlay {
     None,
     Palette { query: String, sel: usize },
     /// Exact model names of one target: main, weak, scout or a role such as tool, condenser or worker.
-    Models { sel: usize, target: String },
+    Models { sel: usize, target: String, filter: String },
     /// Providers and their login state. Enter signs in or opens the key dialog.
     Providers { sel: usize, target: String, scroll: usize },
     /// The list of role models: tool calls, processing, research, coding, judge, router, filter.
@@ -69,8 +73,12 @@ pub enum Overlay {
     Sessions { sel: usize },
     /// A question of the main model with fixed answers.
     Question { id: String, question: String, options: Vec<String>, sel: usize },
+    /// The question dialog of `ask_user`: 1 to 6 questions with tabs, a free answer and a summary page.
+    Ask { id: String, dialog: crate::ask::Dialog },
     /// The memory map as a graph, with the vault command.
     Brain { scroll: usize },
+    /// The knowledge graph: nodes, search, neighbours and a walk with Enter and Backspace. See `graph.rs`.
+    Graph(Box<graph::GraphView>),
     /// Registered plugins with commands, skills and MCP servers.
     Plugins { sel: usize, scroll: usize, filter: String, mode: u8 },
     /// The commands of one plugin.
@@ -79,6 +87,8 @@ pub enum Overlay {
     Apps { sel: usize, scroll: usize },
     /// One checked app that waits for the yes of the person.
     AppInstall { prepared: apps::Prepared },
+    /// A folder with its own `.penelope` settings waits for a yes. `lines` is what those settings would apply.
+    FolderTrust { path: PathBuf, lines: Vec<String> },
 }
 
 pub struct Cmd {
@@ -92,6 +102,8 @@ pub struct Cmd {
 pub const COMMANDS: &[Cmd] = &[
     Cmd { name: "/new", help: "start a new session", key: "ctrl+n", takes_text: false },
     Cmd { name: "/model", help: "choose the model of the main or the weaker setting", key: "ctrl+o", takes_text: false },
+    Cmd { name: "/effort", help: "effort of the main model: /effort shows the levels, /effort LEVEL sets one", key: "alt+e", takes_text: true },
+    Cmd { name: "/folder", help: "the workspace folder: /folder shows it, /folder PATH changes it", key: "", takes_text: true },
     Cmd { name: "/mode", help: "auto, manual, safe, review, privacy or power", key: "", takes_text: false },
     Cmd { name: "/sessions", help: "list the stored sessions and open one", key: "f2", takes_text: false },
     Cmd { name: "/setup", help: "answer the setup questions again", key: "", takes_text: false },
@@ -100,6 +112,7 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd { name: "/auth", help: "the login status of Claude and the providers", key: "", takes_text: false },
     Cmd { name: "/update", help: "check for a newer Penelope", key: "", takes_text: false },
     Cmd { name: "/audit", help: "look for key and plain-http leaks in .penelope", key: "", takes_text: false },
+    Cmd { name: "/check", help: "code checker: /check TEST, /check best TEST [N] -- ISSUE, /check gate|report|off", key: "", takes_text: true },
     Cmd { name: "/input", help: "native pointer helper: status, install, enable", key: "", takes_text: false },
     Cmd { name: "/providers", help: "connect a provider: login or API key", key: "", takes_text: false },
     Cmd { name: "/undo", help: "take back the last change to a file", key: "", takes_text: false },
@@ -119,14 +132,16 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd { name: "/clusters", help: "the cluster tree with reports and memory", key: "", takes_text: false },
     Cmd { name: "/factory", help: "factories: new NAME --profile P --every 3h|--at HH:MM, list, install, run, stop", key: "", takes_text: true },
     Cmd { name: "/app", help: "apps: install LINK|DIR|ZIP, update NAME, list, on NAME, off, remove NAME, show NAME", key: "f7", takes_text: false },
+    Cmd { name: "/graph", help: "the knowledge graph of the memory: search, neighbours, walk with enter and backspace", key: "", takes_text: false },
     Cmd { name: "/brain", help: "the memory map as a graph; /brain write makes an Obsidian vault", key: "", takes_text: false },
     Cmd { name: "/cost", help: "tokens and euro per role and model", key: "", takes_text: false },
     Cmd { name: "/context", help: "show what @ and the memory map would send", key: "", takes_text: true },
     Cmd { name: "/rewind", help: "restore files and transcript N turns back: /rewind 3", key: "", takes_text: true },
     Cmd { name: "/search", help: "search several engines and show the ranked results; /search fanout on|off", key: "", takes_text: true },
-    Cmd { name: "/research", help: "search, read the best pages and show a cited report", key: "", takes_text: true },
-    Cmd { name: "/route", help: "the roles, their tools and their models", key: "", takes_text: false },
-    Cmd { name: "/tools", help: "every tool, its arguments and its roles", key: "", takes_text: false },
+    Cmd { name: "/research", help: "search, read the best pages and show a cited report; /research deep QUESTION runs the multi-round method", key: "", takes_text: true },
+    Cmd { name: "/route", help: "the roles and their models; /route auto|fixed sets the cost mode", key: "", takes_text: true },
+    Cmd { name: "/escalate", help: "cost mode: move this task to the main model", key: "", takes_text: false },
+    Cmd { name: "/tools", help: "every tool, its arguments and its roles; /tools search QUERY, install N, yes, no", key: "", takes_text: false },
     Cmd { name: "/consolidate", help: "keep the lasting rules of this session for every project", key: "", takes_text: false },
     Cmd { name: "/forge", help: "write a tool from the notes at a memory waypoint", key: "", takes_text: true },
     Cmd { name: "/plugins", help: "the filterable plugin screen; install, import, allow, deny, update, remove", key: "", takes_text: false },
@@ -204,6 +219,8 @@ pub struct App {
     pub learning: bool,
     /// True while the last transcript item is a reply that still grows.
     streaming: bool,
+    /// The tail of the thinking the provider streamed in the current step, for the loom under the transcript.
+    pub thinking: String,
     /// Lines between the lower edge of the view and the end of the transcript.
     pub scroll: usize,
     pub page: usize,
@@ -272,7 +289,7 @@ pub struct App {
 }
 
 /// Labels and icons of status lines, so that a stored transcript finds its fixed texts again.
-const NOTE_KINDS: &[(&str, &str)] = &[("memory", "◆"), ("learned", "✦"), ("utis", "◆"), ("resumed", "↺"), ("unravel", "↺"), ("stopped", "■"), ("lesson", "✦"), ("scout", "◆"), ("note", "◆"), ("cluster", "◆")];
+const NOTE_KINDS: &[(&str, &str)] = &[("memory", "◆"), ("learned", "✦"), ("utis", "◆"), ("resumed", "↺"), ("unravel", "↺"), ("stopped", "■"), ("lesson", "✦"), ("scout", "◆"), ("note", "◆"), ("cluster", "◆"), ("answered", "◆")];
 
 fn item_json(item: &Item) -> serde_json::Value {
     use serde_json::json;
@@ -310,14 +327,14 @@ impl App {
     pub fn new(ctx: Ctx) -> App {
         let (tx, rx) = channel();
         let approve_dir = ctx.root.join("approvals");
-        let _ = fs::remove_dir_all(&approve_dir);
         let _ = fs::create_dir_all(&approve_dir);
+        crate::ask::drop_stale(&approve_dir);          // files of dead processes and of questions past their deadline
         let history = fs::read_to_string(ctx.root.join("history.jsonl")).unwrap_or_default().lines()
             .filter_map(|l| serde_json::from_str::<String>(l).ok()).collect::<Vec<_>>();
         let history = history[history.len().saturating_sub(200)..].to_vec();
         let mut app = App {
             ctx, items: Vec::new(), input: Vec::new(), cursor: 0, history, hist_at: None, overlay: Overlay::None, slash_sel: 0,
-            busy: None, learning: false, streaming: false, scroll: 0, page: 10, sidebar: true, tick: 0, last_key: Instant::now(), flash: None, toast: None,
+            busy: None, learning: false, streaming: false, thinking: String::new(), scroll: 0, page: 10, sidebar: true, tick: 0, last_key: Instant::now(), flash: None, toast: None,
             palette: art::Palette::DEFAULT, layout: mods::Layout::Side, keys: mods::Keys::default(), mod_name: None, mod_restore: None, mod_startup: None,
             chat: Some(Chat::new()), cancel: Arc::new(AtomicBool::new(false)), pid: Arc::new(AtomicU32::new(0)), tx, rx,
             tokens: (0, 0), turns: 0, tool_calls: 0, trail: Vec::new(), learned: Vec::new(), side: Side::default(),
@@ -497,7 +514,7 @@ impl App {
     }
 
     pub fn mood(&self) -> Mood {
-        if matches!(self.overlay, Overlay::Approve { .. } | Overlay::Question { .. }) {
+        if matches!(self.overlay, Overlay::Approve { .. } | Overlay::Question { .. } | Overlay::Ask { .. }) {
             return Mood::Asking;
         }
         if self.busy.is_some() {
@@ -563,27 +580,87 @@ impl App {
         crate::providers::efforts(&provider, model).iter().map(|e| e.to_string()).collect()
     }
 
-    /// Shows the cached list at once and asks the provider in the background for a fresh one.
+    /// The providers the picker lists, the target's own first. A provider counts when it has a key, a stored login or
+    /// the Claude command; a local server counts once it answered with a model list.
+    pub fn connected_providers(&self, target: &str) -> Vec<String> {
+        let current = self.provider_name(target);
+        let mut out = vec![current.clone()];
+        for p in crate::providers::TABLE {
+            if p.name == current { continue; }
+            let local = p.key_optional && p.kind == "openai";
+            let answered = self.model_cache.get(p.name).map(|l| !l.is_empty()).unwrap_or(false);
+            if crate::providers::connected(p) || (local && answered) {
+                out.push(p.name.to_string());
+            }
+        }
+        out
+    }
+
+    /// Every model of every connected provider as (provider, model), the target's provider first.
+    pub fn model_rows(&self, target: &str) -> Vec<(String, String)> {
+        let current = self.provider_name(target);
+        let mut out: Vec<(String, String)> = self.model_choices(target).into_iter().map(|m| (current.clone(), m)).collect();
+        for provider in self.connected_providers(target).into_iter().skip(1) {
+            let names: Vec<String> = match self.model_cache.get(&provider) {
+                Some(list) => list.iter().map(|m| m.id.clone()).collect(),
+                None => crate::providers::static_models(&provider).into_iter().map(|m| m.id).collect(),
+            };
+            for name in names {
+                if !out.iter().any(|(p, m)| *p == provider && *m == name) {
+                    out.push((provider.clone(), name));
+                }
+            }
+        }
+        out
+    }
+
+    /// The rows whose model name contains `filter`, ignoring case, across all providers. An empty filter keeps all rows.
+    pub fn model_rows_filtered(&self, target: &str, filter: &str) -> Vec<(String, String)> {
+        let q = filter.trim().to_lowercase();
+        self.model_rows(target).into_iter().filter(|(_, m)| q.is_empty() || m.to_lowercase().contains(&q)).collect()
+    }
+
+    /// The effort levels of one model at one provider, the provider's answer before the static rules.
+    pub fn provider_efforts(&self, provider: &str, model: &str) -> Vec<String> {
+        if let Some(found) = self.model_cache.get(provider).and_then(|list| list.iter().find(|m| m.id == model)) {
+            return found.efforts.clone();
+        }
+        crate::providers::efforts(provider, model).iter().map(|e| e.to_string()).collect()
+    }
+
+    /// Shows the cached lists at once and asks every connected provider and every local server in the background.
     fn load_models(&mut self, target: &str) {
-        let provider = self.provider_name(target);
-        if matches!(provider.as_str(), "claude-cli" | "laertes") {
-            self.model_source = if provider == "claude-cli" { "built-in Claude aliases".to_string() } else { "the family is in training".to_string() };
-            return;
+        let current = self.provider_name(target);
+        let mut asked = Vec::new();
+        for p in crate::providers::TABLE {
+            let local = p.key_optional && p.kind == "openai";
+            if p.name != current && !crate::providers::connected(p) && !local { continue; }
+            if matches!(p.kind, "claude-cli" | "laertes") { continue; }
+            let cached = crate::providers::cached_models(&self.ctx, p.name);
+            if !cached.is_empty() && (!local || p.name == current) {
+                self.model_cache.insert(p.name.to_string(), cached);
+            }
+            if !self.models_fetching.insert(p.name.to_string()) { continue; }
+            let model = if p.name == current { self.model_value(target).clone() }
+                else { serde_json::json!({"kind": p.kind, "base_url": p.base, "api_key_env": p.key_env}) };
+            let (ctx, tx, provider) = (self.ctx.clone(), self.tx.clone(), p.name.to_string());
+            asked.push(provider.clone());
+            std::thread::spawn(move || {
+                let result = crate::providers::fetch_models(&ctx, &provider, &model);
+                let _ = tx.send(Msg::Models { provider, result });
+            });
         }
-        let cached = crate::providers::cached_models(&self.ctx, &provider);
-        if !cached.is_empty() {
-            self.model_source = format!("{} cached models · {} · refreshing", cached.len(), provider);
-            self.model_cache.insert(provider.clone(), cached);
-        } else {
-            self.model_source = format!("asking {} for its models", provider);
-        }
-        if !self.models_fetching.insert(provider.clone()) { return; }
-        let model = self.model_value(target).clone();
-        let (ctx, tx) = (self.ctx.clone(), self.tx.clone());
-        std::thread::spawn(move || {
-            let result = crate::providers::fetch_models(&ctx, &provider, &model);
-            let _ = tx.send(Msg::Models { provider, result });
-        });
+        self.model_source = self.models_summary(target);
+        if !asked.is_empty() { self.model_source.push_str(" · refreshing"); }
+    }
+
+    /// One line above the list: the model count per provider, and how many providers still lack a key.
+    fn models_summary(&self, target: &str) -> String {
+        let rows = self.model_rows(target);
+        let missing = crate::providers::TABLE.iter().filter(|p| !p.key_optional && !crate::providers::connected(p)).count();
+        let counts: Vec<String> = self.connected_providers(target).iter()
+            .map(|p| format!("{} {}", rows.iter().filter(|(rp, _)| rp == p).count(), provider_label(p))).collect();
+        format!("{} · {} providers without a key: /providers", counts.join(" · "), missing)
     }
 
     fn model_value(&self, target: &str) -> &serde_json::Value {
@@ -610,7 +687,7 @@ impl App {
 
     fn cycle_effort(&mut self, target: &str) {
         let (_sel, model) = match &self.overlay {
-            Overlay::Models { sel, .. } => (*sel, self.model_choices(target).get(*sel).cloned()),
+            Overlay::Models { sel, filter, .. } => (*sel, self.model_rows_filtered(target, filter).get(*sel).filter(|(p, _)| *p == self.provider_name(target)).map(|(_, m)| m.clone())),
             _ => return,
         };
         let Some(model) = model else { return };
@@ -626,6 +703,214 @@ impl App {
         value["effort"] = serde_json::json!(next);
         save_config(&self.ctx);
         self.toast(format!("{} · effort {}", model, next));
+    }
+
+    /// The model of the main role, its effort levels and the effort that is sent. The levels are empty for a model
+    /// without an effort field. A config without a valid level sends the default of the picker: "high" if the model
+    /// has it, else the first level.
+    pub fn main_effort(&self) -> (String, Vec<String>, String) {
+        let model = self.ctx.cfg["main"]["model"].as_str().unwrap_or("").to_string();
+        let levels = self.model_efforts("main", &model);
+        let set = self.ctx.cfg["main"]["effort"].as_str().unwrap_or("");
+        let current = if levels.iter().any(|e| e == set) { set.to_string() }
+            else if levels.iter().any(|e| e == "high") { "high".to_string() }
+            else { levels.first().cloned().unwrap_or_default() };
+        (model, levels, current)
+    }
+
+    /// The model and effort of the main role for the footer: `sonnet · high`, or `haiku · no effort`.
+    pub fn model_label(&self) -> String {
+        if let Some(line) = crate::autoroute::label(&self.ctx, self.route_chat().as_deref()) {
+            return line;
+        }
+        let (model, levels, current) = self.main_effort();
+        if levels.is_empty() { format!("{} · no effort", model) } else { format!("{} · {}", model, current) }
+    }
+
+    /// Stores one effort level of the main model. The next request of the running session reads it from the config.
+    fn store_main_effort(&mut self, level: &str) {
+        self.ctx.cfg["main"]["effort"] = serde_json::json!(level);
+        save_config(&self.ctx);
+        let model = self.ctx.cfg["main"]["model"].as_str().unwrap_or("").to_string();
+        self.toast(format!("{} · effort {} · applies to the next request", model, level));
+    }
+
+    /// `/route`: the roles and models, with the cost mode on top. `/route auto|fixed` sets the mode.
+    fn route_command(&mut self, rest: &str) {
+        let chat = self.route_chat();
+        match crate::autoroute::command(&mut self.ctx, rest, chat.as_deref()) {
+            Ok((text, true)) => {
+                save_config(&self.ctx);
+                self.toast(text);
+            }
+            Ok((text, false)) => {
+                let report = format!("{}\n\n{}", text, crate::route::report(&self.ctx));
+                self.pager("Roles and models", report);
+            }
+            Err(e) => self.toast(e),
+        }
+    }
+
+    /// The cost-mode id of the chat on screen. `None` while a turn holds the chat: the latest chat of the root is used.
+    fn route_chat(&self) -> Option<String> {
+        self.chat.as_ref().map(|c| c.route_id().to_string())
+    }
+
+    fn escalate_command(&mut self) {
+        match crate::autoroute::escalate_now(&self.ctx, self.route_chat().as_deref()) {
+            Ok(text) | Err(text) => self.toast(text),
+        }
+    }
+
+    /// Alt+E in the chat view: the next level of the main model, from the highest back to the lowest.
+    fn cycle_main_effort(&mut self) {
+        let (model, levels, current) = self.main_effort();
+        if levels.is_empty() {
+            self.toast(format!("{} has no effort field; nothing is sent.", model));
+            return;
+        }
+        let at = levels.iter().position(|e| *e == current).unwrap_or(0);
+        let next = levels[(at + 1) % levels.len()].clone();
+        self.store_main_effort(&next);
+    }
+
+    /// `/effort` shows the level and the choices, `/effort LEVEL` sets one.
+    fn effort_command(&mut self, rest: &str) {
+        let (model, levels, current) = self.main_effort();
+        if levels.is_empty() {
+            self.toast(format!("{} has no effort field; nothing is sent.", model));
+            return;
+        }
+        let level = rest.trim().to_lowercase();
+        if level.is_empty() {
+            self.note("◆", "effort", format!("{} · {} · levels: {} · alt+e cycles", model, current, levels.join(", ")), art::SEA);
+        } else if levels.contains(&level) {
+            self.store_main_effort(&level);
+        } else {
+            self.toast(format!("unknown effort {}; {} has: {}", level, model, levels.join(", ")));
+        }
+    }
+
+    /// `/folder` shows the workspace, `/folder PATH` moves into another folder.
+    fn change_folder(&mut self, rest: &str) {
+        let cwd = std::env::current_dir().unwrap_or_default();
+        if rest.trim().is_empty() {
+            self.note("◆", "folder", crate::files::show(&cwd), art::SEA);
+            return;
+        }
+        if self.busy.is_some() || crate::clusters::working(&self.ctx) > 0 {
+            self.toast("a turn or a cluster is running; clusters share the folder. Wait or stop them before you change it".to_string());
+            return;
+        }
+        let target = match paths::resolve_folder(rest, &cwd, &crate::platform::home_str()) {
+            Ok(p) => p,
+            Err(e) => return self.toast(e),
+        };
+        let root = crate::config::root_from(&target, false);
+        if folder_needs_confirmation(&root, &self.ctx.root, &crate::platform::home()) {
+            let lines = folder_settings(&root);
+            self.overlay = Overlay::FolderTrust { path: target, lines };
+            return;
+        }
+        self.enter_folder(&target);
+    }
+
+    /// Moves the process into the folder and reloads everything that depends on it.
+    fn enter_folder(&mut self, target: &std::path::Path) {
+        if self.busy.is_some() || crate::clusters::working(&self.ctx) > 0 {
+            return self.toast("a turn or a cluster is running; the folder stays".to_string());
+        }
+        if let Err(e) = std::env::set_current_dir(target) {
+            return self.toast(format!("cannot enter {}: {}", target.display(), e));
+        }
+        self.save_session();
+        self.reload_workspace(&crate::config::root_from(target, false));
+        let shown = crate::files::show(target);
+        let root = crate::files::show(&self.ctx.root);
+        self.note("◆", "folder", format!("{} · settings, memory and sessions from {}", shown, root), art::SEA);
+    }
+
+    /// Reads again what depends on the working folder: the nearest `.penelope` with its config, memory, rules and
+    /// sessions, the mod, the history, the approval folder and the side panel. The transcript starts empty. What the
+    /// person allowed in the old folder (allow all, seen approvals, open dialogs) does not carry over.
+    fn reload_workspace(&mut self, root: &std::path::Path) {
+        crate::mcpclient::shutdown();
+        self.restore_previous();
+        let old_approvals = self.approve_dir.clone();
+        let models = std::mem::take(&mut self.model_cache);
+        self.ctx = crate::config::load(root);
+        self.model_cache = models;
+        self.approve_dir = self.ctx.root.join("approvals");
+        if old_approvals != self.approve_dir {
+            let _ = fs::remove_dir_all(&old_approvals);
+        }
+        let _ = fs::create_dir_all(&self.approve_dir);
+        std::env::set_var("PENELOPE_APPROVE_DIR", &self.approve_dir);
+        self.allow_all = false;
+        self.seen.clear();
+        self.overlay = Overlay::None;
+        self.delete_armed = None;
+        self.plugin_armed = None;
+        self.app_armed = None;
+        self.app_rows.clear();
+        self.plugin_rows.clear();
+        self.history = fs::read_to_string(self.ctx.root.join("history.jsonl")).unwrap_or_default().lines()
+            .filter_map(|l| serde_json::from_str::<String>(l).ok()).collect();
+        self.history = self.history[self.history.len().saturating_sub(200)..].to_vec();
+        self.hist_at = None;
+        self.items.clear();
+        self.session_id = None;
+        self.chat = Some(Chat::new());
+        self.tokens = (0, 0);
+        self.turns = 0;
+        self.tool_calls = 0;
+        self.trail.clear();
+        self.learned.clear();
+        self.context_refs.clear();
+        self.scroll = 0;
+        self.refresh_tabs();
+        self.refresh_side();
+        self.load_saved_mod();
+    }
+
+    /// Tab after `/folder `: completes the folder name as far as it is clear.
+    fn complete_folder_input(&mut self) -> bool {
+        let text = self.input_text();
+        let Some(arg) = text.strip_prefix("/folder ") else { return false };
+        let cwd = std::env::current_dir().unwrap_or_default();
+        if let Some(done) = paths::complete_folder(arg, &cwd, &crate::platform::home_str()) {
+            self.set_input(&format!("/folder {}", done));
+        }
+        true
+    }
+
+    /// A drop: the pasted text names only existing files or folders. They become `@` tokens in the input, so the
+    /// existing context rules apply (at most 5 references, 6000 characters, a long file as its outline). A single
+    /// folder path that was not written in drop form (quotes, `file://`, escapes) stays text.
+    fn drop_paths(&mut self, text: &str) -> bool {
+        let Some(list) = paths::dropped(text, &crate::platform::home_str()) else { return false };
+        if list.len() == 1 && list[0].is_dir() && !paths::drop_form(text) {
+            return false;
+        }
+        let mut tokens = Vec::new();
+        for p in &list {
+            match crate::context::token_for(&p.display().to_string()) {
+                Some(t) => tokens.push(t),
+                None => {
+                    self.note("◆", "drop", format!("{} has a quote in its name and cannot be attached; pasted as text", p.display()), art::CLAY);
+                    return false;
+                }
+            }
+        }
+        let sent = list.len().min(5);
+        let mut names = Vec::new();
+        for (p, token) in list.iter().zip(&tokens).take(sent) {
+            self.insert(&format!("{} ", token));
+            names.push(format!("{}{}", p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| p.display().to_string()), if p.is_dir() { "/" } else { "" }));
+        }
+        let left = if list.len() > sent { format!(" · {} left out, 5 at most", list.len() - sent) } else { String::new() };
+        self.note("◆", "drop", format!("{} attached · {}{} · sent with the next request", sent, names.join(", "), left), art::SEA);
+        true
     }
 
     /// The indices of the plugins that match the filter. A command name matches too, so typing `fix` finds the plugin
@@ -777,6 +1062,9 @@ impl App {
             Overlay::None => prompt = true,
             _ => {}
         }
+        if prompt && self.drop_paths(&clean) {
+            return;
+        }
         if prompt {
             self.insert(&clean);
         }
@@ -814,6 +1102,7 @@ impl App {
         self.cancel = chat.cancel.clone();
         self.pid = chat.pid.clone();
         self.busy = Some(Instant::now());
+        self.thinking.clear();
         self.items.push(Item::User(text.clone()));
         self.scroll = 0;
         let mut ctx = self.ctx.clone();
@@ -899,7 +1188,13 @@ impl App {
                     self.trail = trail;
                     self.note("◆", "memory", way, art::SEA);
                 }
+                Msg::Turn(TurnEvent::Thinking(t)) => {
+                    self.thinking.push_str(&t);
+                    let excess = self.thinking.chars().count().saturating_sub(600);
+                    if excess > 0 { self.thinking = self.thinking.chars().skip(excess).collect(); }
+                }
                 Msg::Turn(TurnEvent::Delta(t)) => {
+                    self.thinking.clear();
                     match self.items.last_mut() {
                         Some(Item::Reply(text)) if self.streaming => text.push_str(&t),
                         _ => self.items.push(Item::Reply(t.trim_start().to_string())),
@@ -908,6 +1203,7 @@ impl App {
                     self.scroll = 0;
                 }
                 Msg::Turn(TurnEvent::Text(t)) => {
+                    self.thinking.clear();
                     match self.items.last_mut() {
                         Some(Item::Reply(text)) if self.streaming => *text = t,        // the finished block replaces its pieces
                         _ => self.items.push(Item::Reply(t)),
@@ -960,18 +1256,20 @@ impl App {
                     self.models_fetching.remove(&provider);
                     match result {
                         Ok(list) => {
-                            let count = list.len();
                             self.model_cache.insert(provider.clone(), list);
-                            self.model_source = format!("{} models from {}", count, provider);
-                            if let Overlay::Models { sel: _, target } = &self.overlay {
-                                let last = self.model_choices(target).len().saturating_sub(1);
+                            if let Overlay::Models { sel: _, target, filter } = &self.overlay {
+                                let (target, filter) = (target.clone(), filter.clone());
+                                self.model_source = self.models_summary(&target);
+                                let last = self.model_rows_filtered(&target, &filter).len().saturating_sub(1);
                                 if let Overlay::Models { sel, .. } = &mut self.overlay { *sel = (*sel).min(last); }
                             }
                         }
                         Err(e) => {
-                            let cached = self.model_cache.get(&provider).map(|l| l.len()).unwrap_or(0);
-                            self.model_source = if cached > 0 { format!("{} cached models · provider unreachable: {}", cached, e) } else { format!("built-in names · {}", e) };
-                            self.toast(format!("the {} model list is unavailable: {}", provider, e));
+                            // A local server that is not running is normal; only the target's own provider is reported.
+                            let own = match &self.overlay { Overlay::Models { target, .. } => self.provider_name(target) == provider, _ => false };
+                            if own {
+                                self.toast(format!("the {} model list is unavailable: {}", provider, e));
+                            }
                         }
                     }
                 }
@@ -1058,7 +1356,7 @@ impl App {
         if self.tick % 3 != 0 {
             return;
         }
-        if let Overlay::Approve { id, .. } | Overlay::Question { id, .. } = &self.overlay {       // the asker gave up: the question is gone
+        if let Overlay::Approve { id, .. } | Overlay::Question { id, .. } | Overlay::Ask { id, .. } = &self.overlay {       // the asker gave up: the question is gone
             if id != "x" && !self.approve_dir.join(format!("{}.req", id)).exists() {
                 self.overlay = Overlay::None;
                 self.toast("the question ran out of time and counted as no".to_string());
@@ -1077,6 +1375,13 @@ impl App {
             self.seen.insert(id.to_string());
             let v: serde_json::Value = fs::read_to_string(entry.path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
             let command = v["command"].as_str().unwrap_or("").to_string();
+            if v["kind"].as_str() == Some("questions") {
+                match crate::ask::Dialog::from_request(&v) {
+                    Some(dialog) => self.overlay = Overlay::Ask { id: id.to_string(), dialog },
+                    None => self.answer_text(id, ""),                   // a request nobody can show counts as closed
+                }
+                return;
+            }
             if v["kind"].as_str() == Some("question") {
                 let options = v["options"].as_array().map(|a| a.iter().filter_map(|o| o.as_str().map(String::from)).collect()).unwrap_or_default();
                 self.overlay = Overlay::Question { id: id.to_string(), question: command, options, sel: 0 };
@@ -1148,8 +1453,8 @@ impl App {
                 let target = "main".to_string();
                 self.load_models(&target);
                 let current = self.model_value(&target)["model"].as_str().unwrap_or("").to_string();
-                let at = self.model_choices(&target).iter().position(|m| *m == current).unwrap_or(0);
-                self.overlay = Overlay::Models { sel: at, target };
+                let at = self.model_rows(&target).iter().position(|(_, m)| *m == current).unwrap_or(0);
+                self.overlay = Overlay::Models { sel: at, target, filter: String::new() };
             }
             "/mode" if !rest.is_empty() => {
                 match crate::mode::apply(&mut self.ctx, rest) {
@@ -1160,6 +1465,8 @@ impl App {
                     Err(e) => self.items.push(Item::Error(e)),
                 }
             }
+            "/effort" => self.effort_command(rest),
+            "/folder" => self.change_folder(rest),
             "/mode" => self.pager("Modes", crate::mode::report(&self.ctx)),
             "/map" => self.pager("Memory map", tools::memory_map(&self.ctx)),
             "/go" if !rest.is_empty() => self.pager("Memory map: the way", tools::memory_go(&self.ctx, rest)),
@@ -1180,6 +1487,18 @@ impl App {
             "/auth" => self.pager("Login and keys", crate::auth::status(&self.ctx)),
             "/update" => self.start_bg(|ctx| crate::update::check(&ctx)),
             "/audit" => self.pager("Leak audit", crate::audit::run(&self.ctx)),
+            "/check" => match rest {
+                "" => self.pager("Checker", crate::checker::status(&self.ctx)),
+                "gate" | "report" | "off" | "on" => {
+                    self.ctx.cfg["check"]["mode"] = serde_json::json!(if rest == "on" { "gate" } else { rest });
+                    save_config(&self.ctx);
+                    self.pager("Checker", crate::checker::status(&self.ctx));
+                }
+                _ => {
+                    let line = rest.to_string();
+                    self.start_bg(move |ctx| Ok(crate::checker::command(&ctx, &line)));
+                }
+            },
             "/input" => match rest {
                 "install" => self.start_bg(|_| crate::input::install()),
                 "enable" => match crate::input::enable(&mut self.ctx) {
@@ -1330,7 +1649,7 @@ impl App {
                     self.toast("/cluster GOAL [--profile NAME] [--sequential], or /cluster profiles".to_string());
                 } else {
                     let profile = profile.clone();
-                    self.start_bg(move |ctx| crate::clusters::orchestrate(&ctx, &goal, profile.as_deref(), parallel));
+                    self.start_bg(move |ctx| crate::clarify::start_cluster(&ctx, &goal, profile.as_deref(), parallel, &serde_json::Map::new()));
                 }
             }
             "/factory" if rest.is_empty() => {
@@ -1344,6 +1663,11 @@ impl App {
                 } else {
                     self.start_bg(move |ctx| crate::factories::run(&ctx, &name));
                 }
+            }
+            "/factory" if rest.starts_with("new ") && !rest.contains("--dry") => {
+                // the questions wait for a person, so they run off the thread that reads the keys
+                let rest = rest.to_string();
+                self.start_bg(move |ctx| crate::factories::slash_asked(&ctx, &rest));
             }
             "/factory" => {
                 let report = crate::factories::slash(&self.ctx, rest);
@@ -1432,9 +1756,12 @@ impl App {
                 }
             }
             "/brain" => self.overlay = Overlay::Brain { scroll: 0 },
+            "/graph" => self.overlay = Overlay::Graph(Box::new(graph::GraphView::open(&self.ctx))),
             "/cost" => self.pager("Cost in euro", crate::cost::report(&self.ctx)),
-            "/route" => self.pager("Roles and models", crate::route::report(&self.ctx)),
-            "/tools" => self.pager("Tool contracts", crate::route::table(&self.ctx)),
+            "/route" => self.route_command(rest),
+            "/escalate" => self.escalate_command(),
+            // Bare /tools shows the contracts; /tools search, install, yes and no go to tools_command below.
+            "/tools" if rest.is_empty() => self.pager("Tool contracts", crate::route::table(&self.ctx)),
             "/consolidate" => {
                 let users: Vec<String> = self.items.iter().filter_map(|i| if let Item::User(t) = i { Some(t.clone()) } else { None }).collect();
                 let ids = tools::consolidate(&self.ctx, &users);
@@ -1466,11 +1793,21 @@ impl App {
                 });
             }
             "/search" => self.toast("/search WORDS".to_string()),
+            "/research" if rest == "deep" || rest.starts_with("deep ") => {
+                let words: Vec<String> = rest[4..].split_whitespace().map(String::from).collect();
+                let params = crate::deepresearch::parse_args(&words);
+                if params.question.trim().is_empty() {
+                    self.toast("/research deep [--max-rounds N] [--budget EUR] QUESTION".to_string());
+                } else {
+                    self.start_bg(move |ctx| Ok(crate::deepresearch::run(&ctx, &params)));
+                }
+            }
             "/research" if !rest.is_empty() => {
                 let q = rest.to_string();
                 self.start_bg(move |ctx| Ok(crate::research::run(&ctx, &q, "standard", 4, "")));
             }
             "/research" => self.toast("/research QUESTION".to_string()),
+            "/tools" => self.tools_command(rest),
             "/mcp" => {
                 if rest == "probe" {
                     self.start_bg(|ctx| Ok(crate::mcpclient::list(&ctx, true)));
@@ -1488,12 +1825,24 @@ impl App {
                         let allow = parts.iter().any(|p| *p == "--allow");
                         let extra: Vec<String> = parts[2..].iter().filter(|p| **p != "--allow").map(|p| p.to_string()).collect();
                         let report = crate::plugins::mcp_add(&self.ctx, parts[0], parts[1], &extra, allow);
-                        self.pager("MCP servers", report);
+                        if allow && !report.starts_with("NOT") {
+                            let name = parts[0].to_string();
+                            self.start_bg(move |ctx| Ok(crate::toolscan::after_allow(&ctx, &name, &report)));
+                        } else {
+                            self.pager("MCP servers", report);
+                        }
                     }
                 } else if rest.starts_with("remove ") {
                     self.pager("MCP servers", crate::plugins::mcp_remove(&self.ctx, rest[7..].trim()));
                 } else if rest.starts_with("allow ") {
-                    self.pager("MCP servers", crate::plugins::mcp_set_allow(&self.ctx, rest[6..].trim(), true));
+                    let name = rest[6..].trim().to_string();
+                    let said = crate::plugins::mcp_set_allow(&self.ctx, &name, true);
+                    self.start_bg(move |ctx| Ok(crate::toolscan::after_allow(&ctx, &name, &said)));
+                } else if rest.starts_with("scan ") {
+                    let name = rest[5..].trim().to_string();
+                    self.start_bg(move |ctx| Ok(crate::toolscan::report(&ctx, &name)));
+                } else if rest.starts_with("trust ") {
+                    self.pager("MCP servers", crate::toolscan::trust(&self.ctx, rest[6..].trim()));
                 } else if rest.starts_with("deny ") {
                     self.pager("MCP servers", crate::plugins::mcp_set_allow(&self.ctx, rest[5..].trim(), false));
                 } else {
@@ -1802,6 +2151,21 @@ impl App {
     }
 
     fn overlay_key(&mut self, key: KeyEvent) {
+        if let Overlay::FolderTrust { path, .. } = &self.overlay {
+            let path = path.clone();
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Enter => {
+                    self.overlay = Overlay::None;
+                    self.enter_folder(&path);
+                }
+                KeyCode::Char('n') | KeyCode::Esc => {
+                    self.overlay = Overlay::None;
+                    self.toast("the folder stays; its settings were not loaded".to_string());
+                }
+                _ => {}
+            }
+            return;
+        }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let mut close = false;
         let mut run: Option<&'static Cmd> = None;
@@ -1811,10 +2175,12 @@ impl App {
         let mut roles_open = false;
         let mut providers_open: Option<String> = None;
         let mut key_save: Option<(String, String, String, String)> = None;
-        let mut pick: Option<(usize, String)> = None;
+        let mut pick: Option<(usize, String, String)> = None;
+        let mut group_jump: Option<bool> = None;
         let mut effort: Option<String> = None;
         let mut open: Option<usize> = None;
         let mut said: Option<(String, String)> = None;
+        let mut ask_done: Option<(String, Option<(Vec<crate::ask::Question>, Vec<crate::ask::Answer>)>)> = None;
         let mut plugin_open: Option<String> = None;
         let mut plugin_back: Option<String> = None;
         let mut plugin_toggle: Option<(String, bool)> = None;
@@ -1893,16 +2259,21 @@ impl App {
                 KeyCode::Char(c) if !ctrl => { input.insert(*cursor, c); *cursor += 1; error.clear(); }
                 _ => {}
             },
-            Overlay::Models { sel, target } => match key.code {
+            Overlay::Models { sel, target, filter } => match key.code {
+                KeyCode::Esc if !filter.is_empty() => { filter.clear(); *sel = 0; }
                 KeyCode::Esc => close = true,
                 KeyCode::Up => *sel = sel.saturating_sub(1),
                 KeyCode::Down => *sel += 1,
                 KeyCode::PageUp => *sel = sel.saturating_sub(10),
                 KeyCode::PageDown => *sel += 10,
+                KeyCode::Left => group_jump = Some(false),
+                KeyCode::Right => group_jump = Some(true),
                 KeyCode::Tab => models_open = Some(if target == "main" { "weak".to_string() } else { "main".to_string() }),
-                KeyCode::Enter => pick = Some((*sel, target.clone())),
-                KeyCode::Char('e') => effort = Some(target.clone()),
-                KeyCode::Char('r') => roles_open = true,
+                KeyCode::Enter => pick = Some((*sel, target.clone(), filter.clone())),
+                KeyCode::Char('e') if ctrl => effort = Some(target.clone()),
+                KeyCode::Char('r') if ctrl => roles_open = true,
+                KeyCode::Backspace => { filter.pop(); *sel = 0; }
+                KeyCode::Char(c) if !ctrl && !key.modifiers.contains(KeyModifiers::ALT) => { filter.push(c); *sel = 0; }
                 _ => {}
             },
             Overlay::Pager { scroll, lines, .. } => match key.code {
@@ -1922,6 +2293,12 @@ impl App {
                 KeyCode::Esc => said = Some((id.clone(), String::new())),
                 _ => {}
             },
+            Overlay::Ask { .. } if ctrl => {}
+            Overlay::Ask { id, dialog } => match dialog.key(key.code) {
+                crate::ask::Outcome::Continue => {}
+                crate::ask::Outcome::Send(answers) => ask_done = Some((id.clone(), Some((dialog.qs.clone(), answers)))),
+                crate::ask::Outcome::Close => ask_done = Some((id.clone(), None)),
+            },
             Overlay::Sessions { sel } => match key.code {
                 KeyCode::Esc | KeyCode::Char('q') => close = true,
                 KeyCode::Up => *sel = sel.saturating_sub(1),
@@ -1935,6 +2312,7 @@ impl App {
                 }
                 _ => {}
             },
+            Overlay::Graph(view) => close = view.key(key),
             Overlay::Brain { scroll } => match key.code {
                 KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => close = true,
                 KeyCode::Up => *scroll = scroll.saturating_sub(1),
@@ -2022,6 +2400,7 @@ impl App {
                 KeyCode::Char('n') | KeyCode::Esc => app_install = Some(false),
                 _ => {}
             },
+            Overlay::FolderTrust { .. } => {}
             Overlay::Approve { id, .. } => match key.code {
                 KeyCode::Char('y') | KeyCode::Enter => reply = Some((id.clone(), true, false)),
                 KeyCode::Char('a') => reply = Some((id.clone(), true, true)),
@@ -2029,8 +2408,15 @@ impl App {
                 _ => {}
             },
         }
-        if let Overlay::Models { sel: _, target } = &self.overlay {
-            let last = self.model_choices(target).len().saturating_sub(1);
+        if let Some(forward) = group_jump {
+            if let Overlay::Models { sel, target, filter } = &self.overlay {
+                let rows = self.model_rows_filtered(target, filter);
+                let at = jump_group(&rows, *sel, forward);
+                if let Overlay::Models { sel, .. } = &mut self.overlay { *sel = at; }
+            }
+        }
+        if let Overlay::Models { sel: _, target, filter } = &self.overlay {
+            let last = self.model_rows_filtered(target, filter).len().saturating_sub(1);
             if let Overlay::Models { sel, .. } = &mut self.overlay {
                 *sel = (*sel).min(last);
             }
@@ -2048,8 +2434,8 @@ impl App {
         if let Some(target) = models_open {
             self.load_models(&target);
             let current = self.model_value(&target)["model"].as_str().unwrap_or("").to_string();
-            let at = self.model_choices(&target).iter().position(|m| *m == current).unwrap_or(0);
-            self.overlay = Overlay::Models { sel: at, target };
+            let at = self.model_rows(&target).iter().position(|(_, m)| *m == current).unwrap_or(0);
+            self.overlay = Overlay::Models { sel: at, target, filter: String::new() };
             close = false;
         }
         if roles_open {
@@ -2184,8 +2570,11 @@ impl App {
             self.cycle_effort(&target);
             close = false;
         }
-        if let Some((sel, target)) = pick {
-            if let Some(model) = self.model_choices(&target).get(sel).cloned() {
+        if let Some((sel, target, filter)) = pick {
+            if let Some((provider, model)) = self.model_rows_filtered(&target, &filter).get(sel).cloned() {
+                if provider != self.provider_name(&target) {
+                    self.select_provider(&provider, &target);
+                }
                 self.set_model(&target, &model);
             }
             close = true;
@@ -2219,6 +2608,21 @@ impl App {
             self.answer_text(&id, &text);
             close = true;
         }
+        if let Some((id, sent)) = ask_done {
+            match sent {
+                Some((qs, answers)) => {
+                    self.answer_text(&id, &crate::ask::answers_file(&answers));
+                    for line in crate::ask::answer_lines(&qs, &answers) {
+                        self.note("◆", "answered", line, art::CLAY);        // the answers stay in the transcript
+                    }
+                }
+                None => {
+                    self.answer_text(&id, "");
+                    self.note("■", "stopped", "the question dialog was closed without an answer".to_string(), art::ASH);
+                }
+            }
+            close = true;
+        }
         if let Some(index) = open {
             self.overlay = Overlay::None;
             self.open_tab(index);
@@ -2244,7 +2648,7 @@ impl App {
             return;
         }
         if !matches!(self.overlay, Overlay::None) {
-            if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) && !matches!(self.overlay, Overlay::Approve { .. } | Overlay::Question { .. }) {
+            if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) && !matches!(self.overlay, Overlay::Approve { .. } | Overlay::Question { .. } | Overlay::Ask { .. }) {
                 let previous = std::mem::replace(&mut self.overlay, Overlay::None);
                 if let Overlay::AppInstall { prepared } = previous {
                     self.toast(apps::cancel(prepared));
@@ -2280,6 +2684,7 @@ impl App {
             KeyCode::F(5) => self.command("/new"),
             KeyCode::F(6) => self.arm_delete_session(),
             KeyCode::F(7) => self.command("/app"),
+            KeyCode::Char('e') if alt && !ctrl => self.cycle_main_effort(),
             KeyCode::Char(c) if alt && c.is_ascii_digit() && c != '0' => self.open_tab(c as usize - '1' as usize),
             KeyCode::Esc => {
                 if self.busy.is_some() {
@@ -2294,7 +2699,8 @@ impl App {
                 let cmd = slash[self.slash_sel.min(slash.len() - 1)];
                 self.set_input(&format!("{}{}", cmd.name, if cmd.takes_text { " " } else { "" }));
             }
-            KeyCode::Enter if !slash.is_empty() && !alt => {
+            KeyCode::Tab if slash.is_empty() && self.input_text().starts_with("/folder ") => { self.complete_folder_input(); }
+            KeyCode::Enter if !slash.is_empty() && !alt && !line_has_arguments(&self.input_text()) => {
                 let cmd = slash[self.slash_sel.min(slash.len() - 1)];
                 self.run_cmd(cmd);
             }
@@ -2356,10 +2762,69 @@ impl App {
     }
 }
 
+/// What the `.penelope/config.json` of another folder would apply: its mode, its `human` setting, every `base_url`
+/// and every MCP server command. A person reads this before the folder is entered.
+/// True when the `.penelope` of the target folder has settings of its own that the person has not seen. The shared
+/// folder `~/.penelope` is the person's own settings and never asks.
+fn folder_needs_confirmation(root: &std::path::Path, current: &std::path::Path, home: &std::path::Path) -> bool {
+    root != current && root != home.join(".penelope") && root.join("config.json").is_file()
+}
+
+/// True when a typed command line has text after the command name: `/effort low`, not `/effort` or `/effort `.
+fn line_has_arguments(line: &str) -> bool {
+    line.trim().split_once(char::is_whitespace).map(|(_, rest)| !rest.trim().is_empty()).unwrap_or(false)
+}
+
+/// One line for a first start that imported many plugins, the lines themselves for one or two.
+fn summarize_import(lines: Vec<String>) -> Vec<String> {
+    if lines.len() <= 2 {
+        return lines;
+    }
+    let failed = lines.iter().filter(|l| l.contains("NOT ")).count();
+    vec![format!("{} plugins imported from the folders of other harnesses{} · /plugins lists them", lines.len() - failed,
+                 if failed > 0 { format!(", {} refused", failed) } else { String::new() })]
+}
+
+fn folder_settings(root: &std::path::Path) -> Vec<String> {
+    let cfg: serde_json::Value = fs::read_to_string(root.join("config.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    let mut out = vec![
+        format!("settings: {}", crate::files::show(&root.join("config.json"))),
+        format!("mode: {}", cfg["mode"].as_str().unwrap_or("auto (default)")),
+        format!("human: {}", cfg["human"].as_str().unwrap_or("unset")),
+    ];
+    let mut urls = Vec::new();
+    collect_urls(&cfg, "", &mut urls);
+    for u in urls { out.push(format!("base_url {}", u)); }
+    let ctx = Ctx { root: root.to_path_buf(), cfg: serde_json::json!({}) };
+    if let Some(servers) = crate::plugins::servers(&ctx).as_object() {
+        for (name, s) in servers {
+            let args = s["args"].as_array().map(|a| a.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(" ")).unwrap_or_default();
+            out.push(format!("mcp {}: {} {}", name, s["command"].as_str().unwrap_or(s["url"].as_str().unwrap_or("?")), args).trim_end().to_string());
+        }
+    }
+    out
+}
+
+fn collect_urls(v: &serde_json::Value, at: &str, out: &mut Vec<String>) {
+    match v {
+        serde_json::Value::Object(m) => for (k, x) in m {
+            if k == "base_url" {
+                if let Some(u) = x.as_str().filter(|u| !u.is_empty()) { out.push(format!("{} ({})", u, at)); }
+            } else {
+                collect_urls(x, &if at.is_empty() { k.clone() } else { format!("{}.{}", at, k) }, out);
+            }
+        },
+        serde_json::Value::Array(a) => for x in a { collect_urls(x, at, out); },
+        _ => {}
+    }
+}
+
 fn help_text() -> String {
     let mut out = String::from("Keys\n\
         enter            send the request\n\
         alt+enter        new line in the request (also ctrl+j)\n\
+        alt+e            next effort level of the main model (ctrl+e stays end of line)\n\
+        drop a file      a dropped file or folder is attached like @path\n\
         up, down         earlier and later requests\n\
         page up, down    scroll the transcript (also the mouse wheel)\n\
         esc              stop the running turn, or empty the input\n\
@@ -2373,6 +2838,35 @@ fn help_text() -> String {
     out
 }
 
+/// The name the picker shows for a provider.
+pub fn provider_label(name: &str) -> String {
+    match name {
+        "claude-cli" => "Claude subscription".to_string(),
+        other => crate::providers::get(other).map(|x| x.label.to_string()).unwrap_or_else(|| other.to_string()),
+    }
+}
+
+/// The rows grouped by provider: (provider, first row, row count). Rows of one provider are contiguous.
+pub fn row_groups(rows: &[(String, String)]) -> Vec<(String, usize, usize)> {
+    let mut out: Vec<(String, usize, usize)> = Vec::new();
+    for (i, (p, _)) in rows.iter().enumerate() {
+        match out.last_mut() {
+            Some(g) if g.0 == *p => g.2 += 1,
+            _ => out.push((p.clone(), i, 1)),
+        }
+    }
+    out
+}
+
+/// The first row of the next (or previous) provider group; the ends wrap around.
+pub fn jump_group(rows: &[(String, String)], sel: usize, forward: bool) -> usize {
+    let groups = row_groups(rows);
+    if groups.len() < 2 { return sel; }
+    let at = groups.iter().position(|(_, first, n)| sel >= *first && sel < first + n).unwrap_or(0);
+    let to = if forward { (at + 1) % groups.len() } else { (at + groups.len() - 1) % groups.len() };
+    groups[to].1
+}
+
 /// Runs the interface until the person leaves it.
 pub fn run(ctx: Ctx, resume: Option<serde_json::Value>) -> Result<(), String> {
     art::detect_colour();
@@ -2380,7 +2874,7 @@ pub fn run(ctx: Ctx, resume: Option<serde_json::Value>) -> Result<(), String> {
     let mut painter = picture::Painter::default();
     let imported = plugins::import_known(&ctx);
     let mut app = App::new(ctx);
-    for line in imported {
+    for line in summarize_import(imported) {
         app.note("◆", "plugins", line, art::SEA);
     }
     if let Some(entry) = resume {
@@ -2393,6 +2887,9 @@ pub fn run(ctx: Ctx, resume: Option<serde_json::Value>) -> Result<(), String> {
         loop {
             app.drain();
             app.poll_approvals();
+            if let Ok(size) = terminal.size() {
+                painter.watch((size.width, size.height), &mut std::io::stdout());
+            }
             let frame = terminal.draw(|f| view::draw(f, &mut app)).map_err(|e| e.to_string())?;
             if app.shot {
                 app.shot = false;
@@ -2407,6 +2904,7 @@ pub fn run(ctx: Ctx, resume: Option<serde_json::Value>) -> Result<(), String> {
                 return Ok(());
             }
             if let Some(provider) = app.login.take() {   // Claude login or an API key needs the plain terminal
+                painter.end(&mut std::io::stdout());       // the new alternate screen starts without the picture
                 let _ = execute!(std::io::stdout(), DisableMouseCapture, DisableBracketedPaste);
                 ratatui::restore();
                 match crate::auth::login(&provider) {
@@ -2487,6 +2985,10 @@ mod tests {
         app.key(KeyEvent::new(code, KeyModifiers::NONE));
     }
 
+    fn ctrl_e(app: &mut App) {
+        app.key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL));
+    }
+
     fn type_text(app: &mut App, text: &str) {
         for c in text.chars() {
             press(app, KeyCode::Char(c));
@@ -2531,6 +3033,35 @@ mod tests {
         a.tx.send(Msg::Turn(TurnEvent::Delta("Next".into()))).unwrap();
         a.drain();
         assert!(matches!(a.items.as_slice(), [Item::Reply(t), Item::Reply(n)] if t == "Two files: a and b." && n == "Next"));
+    }
+
+    #[test]
+    fn the_loom_runs_while_the_model_thinks_and_shows_its_thinking() {
+        let mut a = app();
+        a.items.push(Item::User("why".into()));
+        a.busy = Some(Instant::now());
+        a.tx.send(Msg::Turn(TurnEvent::Thinking("The user asks why. ".into()))).unwrap();
+        a.tx.send(Msg::Turn(TurnEvent::Thinking("Check the  notes first.".into()))).unwrap();
+        a.drain();
+        assert_eq!(a.thinking, "The user asks why. Check the  notes first.");
+        let text = screen(&mut a, 120, 40);
+        assert!(text.contains("◆") && text.contains("╪") && text.contains("warping the loom"), "{}", text);
+        assert!(text.contains("The user asks why. Check the notes first."), "{}", text);
+        a.tx.send(Msg::Turn(TurnEvent::Delta("Because".into()))).unwrap();
+        a.drain();
+        assert!(a.thinking.is_empty());
+        let text = screen(&mut a, 120, 40);
+        assert!(!text.contains("warping the loom"), "the loom hides while the answer streams: {}", text);
+    }
+
+    #[test]
+    fn the_shuttle_moves_along_the_weft() {
+        let mut a = app();
+        let shuttle = |a: &App| crate::tui::view::loom(a, 80, 0)[0].spans.iter().position(|s| s.content == "◆").unwrap();
+        a.tick = 0;
+        let first = shuttle(&a);
+        a.tick = 10;
+        assert_ne!(first, shuttle(&a));
     }
 
     #[test]
@@ -2607,6 +3138,85 @@ mod tests {
         a.poll_approvals();
         assert_eq!(fs::read_to_string(a.approve_dir.join("9.ans")).unwrap(), "yes");
         assert!(matches!(a.overlay, Overlay::None));
+    }
+
+    fn questions_request(deadline: u64) -> String {
+        serde_json::json!({"kind": "questions", "command": "x", "cwd": "", "deadline": deadline, "questions": [
+            {"question": "Which database?", "header": "Database", "options": [{"label": "sqlite", "description": "one file"}, "postgres", "mysql"]},
+            {"question": "Which checks?", "header": "Checks", "multi_select": true, "options": ["lint", "tests", "audit"]}]}).to_string()
+    }
+
+    fn answer_of(a: &App, id: &str) -> String {
+        fs::read_to_string(a.approve_dir.join(format!("{}.ans", id))).unwrap_or_default()
+    }
+
+    #[test]
+    fn the_question_dialog_takes_a_choice_several_choices_and_a_summary() {
+        let mut a = app();
+        fs::write(a.approve_dir.join("q1.req"), questions_request(crate::ask::now_secs() + 900)).unwrap();
+        a.poll_approvals();
+        assert!(matches!(&a.overlay, Overlay::Ask { dialog, .. } if dialog.qs.len() == 2));
+        assert_eq!(a.mood(), Mood::Asking);
+        press(&mut a, KeyCode::Down);
+        press(&mut a, KeyCode::Enter);                       // postgres
+        press(&mut a, KeyCode::Char(' '));                   // lint
+        press(&mut a, KeyCode::Down);
+        press(&mut a, KeyCode::Down);
+        press(&mut a, KeyCode::Char(' '));                   // audit
+        press(&mut a, KeyCode::Enter);
+        assert!(matches!(&a.overlay, Overlay::Ask { dialog, .. } if dialog.on_summary()));
+        let shown = screen(&mut a, 100, 40);
+        assert!(shown.contains("Your answers") && shown.contains("postgres") && shown.contains("lint, audit") && shown.contains("left"), "{}", shown);
+        press(&mut a, KeyCode::Enter);
+        assert!(matches!(a.overlay, Overlay::None));
+        let v: serde_json::Value = serde_json::from_str(&answer_of(&a, "q1")).unwrap();
+        assert_eq!(v["answers"][0]["labels"], serde_json::json!(["postgres"]));
+        assert_eq!(v["answers"][1]["labels"], serde_json::json!(["lint", "audit"]));
+        let notes: Vec<String> = a.items.iter().filter_map(|i| if let Item::Note { label: "answered", text, .. } = i { Some(text.clone()) } else { None }).collect();
+        assert_eq!(notes.len(), 2, "the answers stay in the transcript");
+        assert!(notes[0].contains("Database") && notes[0].contains("postgres"), "{:?}", notes);
+    }
+
+    #[test]
+    fn the_question_dialog_takes_a_typed_answer_by_number_keys_and_tabs() {
+        let mut a = app();
+        fs::write(a.approve_dir.join("q2.req"), questions_request(crate::ask::now_secs() + 900)).unwrap();
+        a.poll_approvals();
+        type_text(&mut a, "own database");                   // letters start the free answer
+        press(&mut a, KeyCode::Enter);
+        press(&mut a, KeyCode::Char('2'));                   // multi-select: toggles tests
+        press(&mut a, KeyCode::Enter);
+        press(&mut a, KeyCode::Enter);
+        let v: serde_json::Value = serde_json::from_str(&answer_of(&a, "q2")).unwrap();
+        assert_eq!(v["answers"][0]["text"], "own database");
+        assert_eq!(v["answers"][0]["labels"], serde_json::json!([]));
+        assert_eq!(v["answers"][1]["labels"], serde_json::json!(["tests"]));
+    }
+
+    #[test]
+    fn escape_closes_the_whole_question_dialog_with_an_empty_answer() {
+        let mut a = app();
+        fs::write(a.approve_dir.join("q3.req"), questions_request(crate::ask::now_secs() + 900)).unwrap();
+        a.poll_approvals();
+        press(&mut a, KeyCode::Char('1'));
+        press(&mut a, KeyCode::Esc);
+        assert!(matches!(a.overlay, Overlay::None));
+        assert_eq!(answer_of(&a, "q3"), "");
+        assert!(matches!(crate::ask::parse_reply(&answer_of(&a, "q3"), 2), crate::ask::Reply::Closed));
+    }
+
+    #[test]
+    fn the_question_dialog_shows_the_remaining_time_and_closes_when_the_asker_gives_up() {
+        let mut a = app();
+        fs::write(a.approve_dir.join("q4.req"), questions_request(crate::ask::now_secs() + 125)).unwrap();
+        a.poll_approvals();
+        let shown = screen(&mut a, 100, 40);
+        assert!(shown.contains("2:0") || shown.contains("2:05") || shown.contains("1:5"), "{}", shown);
+        assert!(shown.contains("Which database?") && shown.contains("Database") && shown.contains("one file"), "{}", shown);
+        fs::remove_file(a.approve_dir.join("q4.req")).unwrap();
+        a.tick = 3;
+        a.poll_approvals();
+        assert!(matches!(a.overlay, Overlay::None), "the timeout of the asker removes the request");
     }
 
     #[test]
@@ -2783,9 +3393,93 @@ mod tests {
         ]);
         assert_eq!(a.model_choices("main"), vec!["deepseek-v4.1-flash".to_string(), "from-provider".to_string()]);
         assert_eq!(a.model_efforts("main", "from-provider"), vec!["low".to_string(), "high".to_string()]);
-        a.overlay = Overlay::Models { sel: 0, target: "main".into() };
-        press(&mut a, KeyCode::Char('e'));
+        a.overlay = Overlay::Models { sel: 0, target: "main".into(), filter: String::new() };
+        ctrl_e(&mut a);
         assert_eq!(a.ctx.cfg["main"]["effort"], serde_json::json!("high"));
+    }
+
+    fn two_provider_app() -> App {
+        let mut a = app();
+        a.ctx.cfg["main"] = serde_json::json!({"kind": "openai", "base_url": "https://opencode.ai/zen/go/v1", "model": "go-model-0"});
+        let info = |id: &str| crate::providers::ModelInfo { id: id.into(), label: id.into(), efforts: vec![] };
+        a.model_cache.insert("opencode".to_string(), (0..31).map(|i| info(&format!("go-model-{}", i))).collect());
+        a.model_cache.insert("ollama".to_string(), vec![info("qwen3:1.7b"), info("llama3:8b")]);
+        a.overlay = Overlay::Models { sel: 0, target: "main".into(), filter: String::new() };
+        a
+    }
+
+    fn picker_sel(a: &App) -> usize {
+        match &a.overlay { Overlay::Models { sel, .. } => *sel, _ => panic!("no picker") }
+    }
+
+    #[test]
+    fn the_picker_rows_hold_both_providers_in_groups_with_counts() {
+        let a = two_provider_app();
+        let rows = a.model_rows("main");
+        let groups = row_groups(&rows);
+        assert_eq!((groups[0].0.as_str(), groups[0].2), ("opencode", 31), "the own provider comes first");
+        assert!(groups.iter().any(|g| g.0 == "ollama" && g.2 == 2));
+        let summary = a.models_summary("main");
+        assert!(summary.starts_with(&format!("31 {}", provider_label("opencode"))) && summary.contains(&format!("2 {}", provider_label("ollama"))), "{}", summary);
+    }
+
+    #[test]
+    fn arrow_keys_walk_over_rows_only_and_left_right_jump_between_groups() {
+        let mut a = two_provider_app();
+        let groups = row_groups(&a.model_rows("main"));
+        let second = groups[1].1;
+        for _ in 0..second - 1 { press(&mut a, KeyCode::Down); }
+        assert_eq!(a.model_rows_filtered("main", "")[picker_sel(&a)].0, "opencode");
+        press(&mut a, KeyCode::Down);                       // the header of the next group is no row
+        assert_eq!(picker_sel(&a), second);
+        press(&mut a, KeyCode::Left);
+        assert_eq!(picker_sel(&a), 0);
+        press(&mut a, KeyCode::Right);
+        assert_eq!(picker_sel(&a), second);
+        for _ in 1..groups.len() { press(&mut a, KeyCode::Right); }
+        assert_eq!(picker_sel(&a), 0, "the jump wraps around");
+    }
+
+    #[test]
+    fn typing_filters_across_providers_and_enter_picks_the_match() {
+        let mut a = two_provider_app();
+        type_text(&mut a, "LLAMA");
+        assert_eq!(a.model_rows_filtered("main", "LLAMA"), vec![("ollama".to_string(), "llama3:8b".to_string())]);
+        press(&mut a, KeyCode::Backspace);
+        match &a.overlay { Overlay::Models { filter, .. } => assert_eq!(filter, "LLAM"), _ => panic!() }
+        press(&mut a, KeyCode::Enter);
+        assert_eq!(a.ctx.cfg["main"]["model"], serde_json::json!("llama3:8b"));
+        assert_eq!(a.provider_name("main"), "ollama");
+    }
+
+    #[test]
+    fn the_picker_lists_a_local_server_that_answered_and_enter_switches_to_it() {
+        let mut a = app();
+        a.ctx.cfg["main"] = serde_json::json!({"kind": "openai", "base_url": "https://opencode.ai/zen/go/v1",
+                                               "model": "deepseek-v4.1-flash", "effort": "low"});
+        a.model_cache.insert("opencode".to_string(), vec![
+            crate::providers::ModelInfo { id: "deepseek-v4.1-flash".into(), label: "DeepSeek".into(), efforts: vec!["low".into()] },
+        ]);
+        a.model_cache.insert("ollama".to_string(), vec![
+            crate::providers::ModelInfo { id: "qwen3:1.7b".into(), label: "qwen3:1.7b".into(), efforts: vec![] },
+        ]);
+        let rows = a.model_rows("main");
+        assert_eq!(rows.first(), Some(&("opencode".to_string(), "deepseek-v4.1-flash".to_string())), "{:?}", rows);
+        let at = rows.iter().position(|(p, m)| p == "ollama" && m == "qwen3:1.7b").expect("the local server is listed");
+        assert!(a.connected_providers("main").iter().any(|p| p == "ollama"));
+        a.overlay = Overlay::Models { sel: at, target: "main".into(), filter: String::new() };
+        press(&mut a, KeyCode::Enter);
+        assert_eq!(a.ctx.cfg["main"]["base_url"], serde_json::json!("http://localhost:11434/v1"));
+        assert_eq!(a.ctx.cfg["main"]["model"], serde_json::json!("qwen3:1.7b"));
+    }
+
+    #[test]
+    fn a_provider_without_a_key_is_not_listed() {
+        let mut a = app();
+        a.ctx.cfg["main"] = serde_json::json!({"kind": "openai", "base_url": "https://opencode.ai/zen/go/v1", "model": "deepseek-v4.1-flash"});
+        let providers = a.connected_providers("main");
+        assert_eq!(providers.first().map(String::as_str), Some("opencode"));
+        assert!(!providers.iter().any(|p| p == "laertes" || p == "ollama"), "{:?}", providers);
     }
 
     #[test]
@@ -2795,22 +3489,202 @@ mod tests {
         assert!(a.ctx.cfg["main"]["effort"].is_null());          // mimo-v2.6-flash has no effort field
         a.ctx.cfg["main"] = serde_json::json!({"kind": "openai", "base_url": "https://opencode.ai/zen/go/v1",
                                                "model": "deepseek-v4.1-flash", "effort": "low"});
-        a.overlay = Overlay::Models { sel: 0, target: "main".into() };
-        press(&mut a, KeyCode::Char('e'));
+        a.overlay = Overlay::Models { sel: 0, target: "main".into(), filter: String::new() };
+        ctrl_e(&mut a);
         assert_eq!(a.ctx.cfg["main"]["effort"], serde_json::json!("high"));      // low -> high for deepseek-v4.1-flash
-        press(&mut a, KeyCode::Char('e'));
+        ctrl_e(&mut a);
         assert_eq!(a.ctx.cfg["main"]["effort"], serde_json::json!("max"));
-        press(&mut a, KeyCode::Char('e'));
+        ctrl_e(&mut a);
         assert_eq!(a.ctx.cfg["main"]["effort"], serde_json::json!("low"));       // wraps to the first level
         a.select_provider("claude-cli", "main");
         assert_eq!((a.ctx.cfg["main"]["model"].as_str(), a.ctx.cfg["main"]["effort"].as_str()), (Some("claude-sonnet-5-5"), Some("high")));
     }
 
     #[test]
+    fn alt_e_and_the_effort_command_change_the_main_effort_in_the_chat() {
+        let mut a = app();
+        a.ctx.cfg["main"] = serde_json::json!({"kind": "openai", "base_url": "https://opencode.ai/zen/go/v1",
+                                               "model": "deepseek-v4.1-flash", "effort": "low"});
+        let alt_e = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::ALT);
+        a.key(alt_e);
+        assert_eq!(a.ctx.cfg["main"]["effort"], serde_json::json!("high"));
+        a.key(alt_e);
+        a.key(alt_e);
+        assert_eq!(a.ctx.cfg["main"]["effort"], serde_json::json!("low"));       // wraps from the highest to the lowest
+        press(&mut a, KeyCode::Char('e'));
+        assert_eq!(a.input_text(), "e");                                         // plain e stays a letter
+        a.key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL));
+        assert_eq!(a.cursor, 1);                                                 // ctrl+e stays end of line
+        a.command("/effort max");
+        assert_eq!(a.ctx.cfg["main"]["effort"], serde_json::json!("max"));
+        a.command("/effort turbo");
+        assert_eq!(a.ctx.cfg["main"]["effort"], serde_json::json!("max"));
+        assert!(a.toast.as_ref().unwrap().0.contains("low, high, max"));
+        assert!(a.model_label().ends_with("deepseek-v4.1-flash · max"), "{}", a.model_label());
+        assert!(screen(&mut a, 120, 30).contains("deepseek-v4.1-flash · max"));
+        a.command("/effort");
+        assert!(matches!(a.items.last(), Some(Item::Note { label: "effort", .. })));
+    }
+
+    #[test]
+    fn a_model_without_effort_levels_says_so() {
+        let mut a = app();
+        a.ctx.cfg["main"] = serde_json::json!({"kind": "openai", "base_url": "https://opencode.ai/zen/go/v1", "model": "mimo-v2.6-flash"});
+        assert!(a.model_label().ends_with("no effort"));
+        a.key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::ALT));
+        assert!(a.toast.as_ref().unwrap().0.contains("no effort field"));
+        assert!(a.ctx.cfg["main"]["effort"].is_null());
+    }
+
+    #[test]
+    fn the_first_alt_e_changes_the_level_that_is_shown() {
+        let mut a = app();
+        a.ctx.cfg["main"] = serde_json::json!({"kind": "openai", "base_url": "https://opencode.ai/zen/go/v1", "model": "deepseek-v4.1-flash"});
+        assert!(a.model_label().ends_with("· high"), "{}", a.model_label());      // unset: the default that is sent
+        a.key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::ALT));
+        assert_eq!(a.ctx.cfg["main"]["effort"], serde_json::json!("max"));
+        assert!(a.model_label().ends_with("· max"));
+    }
+
+    #[test]
+    fn a_folder_switch_drops_allow_all_and_keeps_the_same_approvals_folder() {
+        let mut a = app();
+        a.allow_all = true;
+        a.seen.insert("x".into());
+        a.overlay = Overlay::Pager { title: "t".into(), lines: vec![], scroll: 0 };
+        let marker = a.approve_dir.join("5.req");
+        fs::write(&marker, "{}").unwrap();
+        let root = a.ctx.root.clone();
+        a.reload_workspace(&root);
+        assert!(!a.allow_all && a.seen.is_empty() && matches!(a.overlay, Overlay::None));
+        assert!(marker.exists(), "the same root keeps its approvals folder");
+        let other = std::env::temp_dir().join(format!("penelope-other-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&other);
+        a.reload_workspace(&other);
+        assert!(!marker.exists() && a.approve_dir.starts_with(&other));
+    }
+
+    #[test]
+    fn the_shared_home_settings_never_ask_for_a_folder_yes() {
+        let home = std::env::temp_dir().join(format!("penelope-home-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&home);
+        fs::create_dir_all(home.join(".penelope")).unwrap();
+        fs::write(home.join(".penelope/config.json"), "{}").unwrap();
+        let project = home.join("proj/.penelope");
+        fs::create_dir_all(&project).unwrap();
+        fs::write(project.join("config.json"), "{}").unwrap();
+        let current = home.join("here/.penelope");
+        assert!(!folder_needs_confirmation(&home.join(".penelope"), &current, &home), "the shared folder asked");
+        assert!(folder_needs_confirmation(&project, &current, &home), "a project folder with settings must ask");
+        assert!(!folder_needs_confirmation(&project, &project, &home), "the folder that is already open must not ask");
+    }
+
+    #[test]
+    fn many_imported_plugins_make_one_line_and_a_command_with_text_is_not_completed() {
+        let many: Vec<String> = (0..231).map(|i| format!("~/x/p{}: plugin p{} registered", i, i)).collect();
+        assert_eq!(summarize_import(many).len(), 1);
+        assert_eq!(summarize_import(vec!["a".into(), "b".into()]).len(), 2);
+        assert!(summarize_import(Vec::new()).is_empty());
+        assert!(line_has_arguments("/effort low") && line_has_arguments("/folder /a b"));
+        assert!(!line_has_arguments("/effort") && !line_has_arguments("/effort  "));
+        let mut a = app();
+        a.set_input("/effort low");
+        press(&mut a, KeyCode::Enter);
+        assert_eq!(a.input_text(), "", "a line with arguments runs");
+        a.set_input("/effort");
+        press(&mut a, KeyCode::Enter);
+        assert_eq!(a.input_text(), "/effort ", "a bare name that takes text completes and waits");
+    }
+
+    #[test]
+    fn tools_with_a_word_reaches_the_tool_search_and_without_one_the_table() {
+        let mut a = app();
+        a.command("/tools");
+        assert!(matches!(a.overlay, Overlay::Pager { .. }), "/tools shows the table");
+        a.overlay = Overlay::None;
+        a.command("/tools no");
+        assert!(matches!(a.overlay, Overlay::None), "/tools no is a tool search verb, not the table");
+        assert!(a.toast.is_some());
+        a.command("/tools bogus");
+        assert!(a.toast.as_ref().unwrap().0.contains("/tools search QUERY"), "{:?}", a.toast);
+        assert_eq!(COMMANDS.iter().filter(|c| c.name == "/tools").count(), 1, "one palette entry for /tools");
+    }
+
+    #[test]
+    fn a_folder_with_its_own_settings_waits_for_a_yes() {
+        let mut a = app();
+        let dir = std::env::temp_dir().join(format!("penelope-trust-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(".penelope")).unwrap();
+        fs::write(dir.join(".penelope/config.json"), r#"{"mode": "power", "human": "no", "main": {"base_url": "http://evil.example/v1"}}"#).unwrap();
+        let before = std::env::current_dir().unwrap();
+        a.command(&format!("/folder {}", dir.display()));
+        let Overlay::FolderTrust { lines, .. } = &a.overlay else { panic!("no confirmation") };
+        let all = lines.join("\n");
+        assert!(all.contains("mode: power") && all.contains("human: no") && all.contains("http://evil.example/v1"), "{}", all);
+        press(&mut a, KeyCode::Char('n'));
+        assert!(matches!(a.overlay, Overlay::None));
+        assert_eq!(std::env::current_dir().unwrap(), before);
+    }
+
+    #[test]
+    fn a_bare_folder_path_stays_text_but_a_quoted_one_and_a_file_attach() {
+        let mut a = app();
+        let dir = std::env::temp_dir().join(format!("penelope-bare-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("sub")).unwrap();
+        for i in 1..=7 { fs::write(dir.join(format!("f{}.txt", i)), "x").unwrap(); }
+        a.paste(&dir.join("sub").display().to_string());
+        assert_eq!(a.input_text(), dir.join("sub").display().to_string());
+        a.set_input("");
+        a.paste(&format!("'{}'", dir.join("sub").display()));
+        assert!(a.input_text().starts_with('@'));
+        a.set_input("");
+        a.paste(&dir.join("f1.txt").display().to_string());
+        assert!(a.input_text().starts_with('@'));
+        a.set_input("");
+        a.paste(&(1..=7).map(|i| dir.join(format!("f{}.txt", i)).display().to_string()).collect::<Vec<_>>().join(" "));
+        assert_eq!(a.input_text().matches('@').count(), 5);
+        assert!(matches!(a.items.last(), Some(Item::Note { label: "drop", text, .. }) if text.contains("5 attached") && text.contains("2 left out")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_name_with_a_quote_is_pasted_as_text_with_a_note() {
+        let mut a = app();
+        let dir = std::env::temp_dir().join(format!("penelope-quote-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("a\"b.txt");
+        fs::write(&file, "x").unwrap();
+        a.paste(&format!("'{}'", file.display()));
+        assert!(a.input_text().contains("a\"b.txt") && !a.input_text().starts_with('@'));
+        assert!(matches!(a.items.last(), Some(Item::Note { label: "drop", text, .. }) if text.contains("quote")));
+    }
+
+    #[test]
+    fn a_paste_of_existing_paths_attaches_them_and_other_text_stays_text() {
+        let mut a = app();
+        let dir = std::env::temp_dir().join(format!("penelope-paste-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("two words.txt"), "hi").unwrap();
+        a.paste(&format!("'{}/two words.txt'", dir.display()));
+        assert!(a.input_text().starts_with("@\""), "{}", a.input_text());
+        assert!(matches!(a.items.last(), Some(Item::Note { label: "drop", text, .. }) if text.contains("1 attached") && text.contains("two words.txt")));
+        a.set_input("");
+        a.paste("just some words");
+        assert_eq!(a.input_text(), "just some words");
+        a.overlay = Overlay::Palette { query: String::new(), sel: 0 };
+        a.paste(&format!("{}/two words.txt", dir.display()));
+        assert!(matches!(&a.overlay, Overlay::Palette { query, .. } if query.contains("two words")));
+    }
+
+    #[test]
     fn roles_have_models_and_opencode_and_claude_names_are_exact() {
         let mut a = app();
         a.command("/model");
-        press(&mut a, KeyCode::Char('r'));
+        a.key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
         assert!(matches!(a.overlay, Overlay::Roles { .. }));
         press(&mut a, KeyCode::Enter);
         match &a.overlay {

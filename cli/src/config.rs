@@ -14,18 +14,23 @@ pub fn default_config() -> Value {
     json!({
         "main": {"kind": "claude-cli", "model": "sonnet", "effort": "high"},
         "weak": {"kind": "claude-cli", "model": "haiku", "effort": "high"},
+        "route": "fixed",
+        "route_context_limit": 100000,
         "run_policy": "safe",
         "sandbox": "off",
         "edit_policy": "ask",
         "test_command": "",
         "test_attempts": 3,
+        "eurykleia": "on",
+        "check": {"mode": "gate", "module_tests": "", "run": "", "candidates": 3, "models": ["weak"], "timeout": 300, "budget": 1200, "nudges": 1},
         "delegate": "auto",
         "search": {"kind": "auto", "url": "", "api_key_env": "BRAVE_API_KEY", "tavily_api_key_env": "TAVILY_API_KEY",
                    "exa_api_key_env": "EXA_API_KEY", "firecrawl_api_key_env": "FIRECRAWL_API_KEY", "fanout": true,
                    "cache": true, "cache_ttl": 3600, "limit": 8, "language": "en", "safe": true,
                    "jina": false, "jina_base": "https://r.jina.ai/", "wikipedia": false,
-                   "api_url": "", "server_api_key_env": "PENELOPE_SEARCH_API_KEY", "urls": [],
+                   "searxng_url": "", "api_url": "", "server_api_key_env": "PENELOPE_SEARCH_API_KEY", "urls": [],
                    "rerank": {"url": "", "api_key_env": "RERANK_API_KEY", "enabled": false}},
+        "research": {"max_rounds": 3, "max_parallel": 3, "pages_per_sub": 4, "page_chars": 12000, "max_queries": 3},
         "reader": {"enabled": true, "url": "", "api_key_env": "PENELOPE_READER_API_KEY"},
         "privacy": "rules",
         "privacy_answers": true,
@@ -45,10 +50,12 @@ pub fn default_config() -> Value {
         "plugin_dirs": null,
         "plugin_home": null,
         "brief": {"hosts": [], "roots": []},
+        "mitos": {"attach_over_bytes": 4096, "fetch_cap_bytes": 16384, "store_max_bytes": 524288000},
         "apps": {"allow_install": false, "rights": {"files": false, "network": false, "shell": false}},
         "update": {"url": "", "channel": "stable", "public_key": ""},
         "global_memory": null,
-        "clipboard": {"read": "", "write": ""}
+        "clipboard": {"read": "", "write": ""},
+        "ask": {"timeout_secs": 900}
     })
 }
 
@@ -57,20 +64,28 @@ pub fn find_root(explicit: Option<&str>) -> PathBuf {
     if let Some(p) = explicit {
         return PathBuf::from(p);
     }
-    let mut dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    root_from(&std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")), true)
+}
+
+/// The same search from a given folder. With `rename` false an old `.strix` or `.kate` folder is left alone, so a
+/// folder switch never changes files on disk.
+pub fn root_from(start: &Path, rename: bool) -> PathBuf {
+    let mut dir = start.to_path_buf();
     loop {
         if dir.join(".penelope").is_dir() {
             return dir.join(".penelope");
         }
-        if let Some(old) = adopt(&dir) {
-            return old;
+        if rename {
+            if let Some(old) = adopt(&dir) {
+                return old;
+            }
         }
         if !dir.pop() {
             break;
         }
     }
     let home = crate::platform::home();
-    if !home.join(".penelope").is_dir() {
+    if !home.join(".penelope").is_dir() && rename {
         if let Some(old) = adopt(&home) {
             return old;
         }
@@ -92,6 +107,8 @@ fn adopt(dir: &Path) -> Option<PathBuf> {
 }
 
 pub fn load(root: &Path) -> Ctx {
+    let redirected = state_dir(root);
+    let root = redirected.as_path();
     let _ = fs::create_dir_all(root.join("runs"));
     let path = root.join("config.json");
     let mut cfg = default_config();
@@ -103,6 +120,18 @@ pub fn load(root: &Path) -> Ctx {
         let _ = fs::write(&path, serde_json::to_string_pretty(&cfg).unwrap());
     }
     Ctx { root: root.to_path_buf(), cfg }
+}
+
+/// The folder that holds Penelope's own files. A path that is a project (it has `.git` or a `.penelope` folder) and is
+/// not itself named `.penelope` gets its `.penelope` folder, so `config.json`, `runs/` and `stats.json` never land
+/// between the files of the project.
+pub fn state_dir(root: &Path) -> PathBuf {
+    let named = root.file_name().map(|n| n == ".penelope").unwrap_or(false);
+    if !named && (root.join(".git").exists() || root.join(".penelope").is_dir()) {
+        root.join(".penelope")
+    } else {
+        root.to_path_buf()
+    }
 }
 
 /// Merges the saved settings over the defaults, one level deeper for objects. A new setting reaches an old folder
@@ -144,4 +173,25 @@ pub fn which(name: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod state_dir_tests {
+    use super::*;
+
+    #[test]
+    fn a_project_folder_gets_its_penelope_folder_and_no_files_of_its_own() {
+        let dir = std::env::temp_dir().join(format!("penelope-state-dir-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(".git")).unwrap();
+        let ctx = load(&dir);
+        assert_eq!(ctx.root, dir.join(".penelope"));
+        assert!(dir.join(".penelope/config.json").is_file());
+        assert!(!dir.join("config.json").exists() && !dir.join("runs").exists(), "files between the project files");
+        // A state folder that is not a project stays as it is.
+        let plain = std::env::temp_dir().join(format!("penelope-state-plain-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&plain);
+        assert_eq!(load(&plain).root, plain);
+        assert_eq!(state_dir(&dir.join(".penelope")), dir.join(".penelope"));
+    }
 }

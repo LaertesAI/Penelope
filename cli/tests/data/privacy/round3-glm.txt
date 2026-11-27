@@ -1,0 +1,690 @@
+Ventus Klimatechnik GmbH
+Klima- und Lüftungstechnik für Handel und Gewerbe
+⟦address|Werkstraße 12⟧ · ⟦address|45127 Essen⟧
+USt-IdNr. DE 245 813 762 · Amtsgericht Essen, HRB 112458
+
+RECHNUNG
+Rechnungsnr. RE-2026-0815 · Kundennummer KD-91458 · Essen, den 03.11.2026
+Leistungszeitraum: 01.10.2026 bis 29.10.2026
+
+Rechnungsempfängerin:
+Frau ⟦name|Marie-Claire von Ahrenfeld⟧
+⟦address|Rosenheimer Str. 9⟧
+⟦address|81371 München⟧
+
+Pos 1 | NS-2200 | Wartungs-Servicepaket Klima Premium, Jahreswartung | 1 × 189,00 €
+Pos 2 | FT-014 | Filtereinsatz F-14, grob | 2 × 24,50 €
+Pos 3 | LOG-02 | Anfahrtspauschale Zone 2 | 1 × 39,00 €
+
+Zwischensumme: 277,00 €
+zzgl. Umsatzsteuer 19 %: 52,63 €
+Rechnungsbetrag: 329,63 €
+
+Der Rechnungsbetrag ist fällig am 17.11.2026, zahlbar ohne Abzug. Bankverbindung: IBAN ⟦iban⟧, BIC VENTDE33XXX.
+
+Für Rückfragen steht Ihnen unser Kundenservice gerne zur Verfügung:
+Herr ⟦name|Emre Kaya⟧ · Telefon ⟦phone|0201 478 99 12⟧ · E-Mail ⟦email|e.kaya@example.de⟧
+
+Mit freundlichen Grüßen
+Ventus Klimatechnik GmbH
+i. A. ⟦name|Heide Sievers⟧ · Rechnungsstellung
+
+=====
+
+Einrichtungshaus VierJahreszeiten GmbH
+Kundenservice
+⟦address|Klingelberg 17⟧ · ⟦address|23552 Lübeck⟧
+
+Mahnung Nr. M-2026-0341 · Kundennummer KD 44-1175 · Lübeck, den 18.11.2026
+
+Herrn ⟦name|Silvio Moretti⟧
+⟦address|Am Krummholtz 38⟧
+⟦address|23558 Lübeck⟧
+
+Sehr geehrter Herr ⟦name|Moretti⟧,
+
+die Rechnung RE-2026-0762 vom 05.10.2026 über 1.148,40 € für das Loungeset „Verona" (Bestellnummer B-2219) wäre am 19.10.2026 fällig gewesen. Einen Zahlungseingang konnten wir bis heute nicht feststellen, obwohl Sie den Betrag im Telefonat vom 12.11.2026 unserer Mitarbeiterin, Frau ⟦name|Resch⟧, zugesagt haben.
+
+Wir bitten Sie daher, den offenen Betrag von 1.148,40 € innerhalb von zehn Tagen, spätestens bis zum 02.12.2026, zu überweisen (IBAN ⟦iban⟧, BIC VJHZDE33XXX). Sollten Sie in dieser Zeit bereits gezahlt haben, betrachten Sie dieses Schreiben bitte als gegenstandslos.
+
+Bei Fragen erreichen Sie unser Mahnwesen werktags von 08:00 bis 16:00 Uhr: Frau ⟦name|Christine Brandstetter⟧, Telefon ⟦phone|0451/499 22 33⟧, E-Mail ⟦email|c.brandstetter@example.org⟧.
+
+Mit freundlichen Grüßen
+Einrichtungshaus VierJahreszeiten GmbH
+i. A. ⟦name|Christine Brandstetter⟧
+
+=====
+
+LIEFERSCHEIN Nr. LS-2026-4487
+Astra Bürotechnik GmbH · ⟦address|Hafenstraße 2⟧ · ⟦address|20457 Hamburg⟧
+Bestellnummer B-7788 vom 10.11.2026 · Ausstellung: Hamburg, den 25.11.2026
+
+Lieferadresse:
+Windrad Verlag GmbH
+z. Hd. Herrn ⟦name|Timo Fleischer-Zorn⟧
+⟦address|Am Windfang 88⟧
+⟦address|10435 Berlin⟧
+
+Auslieferung am 26.11.2026 ab 07:45 Uhr, Tour TS-118, Fahrer ⟦name|Piotr Wrona⟧.
+Kommissionierung: Disponent ⟦name|Nikolai Bersenow⟧, Lager Hamburg.
+
+Pos 1 | BS-MODPRO-24 | Bürostuhl Modus Pro, Bezug Schwarz | 12 Stück
+Pos 2 | ET-98120 | Ersatzrollen-Set Doppellauf | 12 Stück
+Pos 3 | VS-3300 | Höhenverstellbarer Seitentisch 120 cm | 4 Stück
+
+Ware in einwandfreiem Zustand übergeben. Empfangsbestätigung 26.11.2026, 07:52 Uhr — Name des Empfängers: ⟦name|T. Fleischer-Zorn⟧.
+
+Reklamationen zu dieser Lieferung bitte innerhalb von fünf Werktagen schriftlich oder per Fax an ⟦phone|040 66 12 33 9⟧.
+
+=====
+
+GastroService Piccolo GmbH
+Partyservice · Eventcatering
+⟦address|Zur Bootshalle 3⟧ · ⟦address|70176 Stuttgart⟧
+
+ANGEBOT Nr. ANG-2026-118 · Stuttgart, den 26.11.2026
+
+An
+Frau Dr. ⟦name|Henriette von Falkenstein⟧
+⟦address|Schlossbergweg 1⟧
+⟦address|72070 Tübingen⟧
+
+Betreff: Catering für den Adventsempfang am 12.12.2026, 18:00 Uhr, ca. 60 Personen
+
+Sehr geehrte Frau Dr. ⟦name|von Falkenstein⟧,
+
+wie gewünscht unterbreiten wir Ihnen folgendes Angebot:
+
+— Antipasti-Gedeck (vegetarische Variante möglich) 16,90 € pro Person
+— Rindsfiletspieße mit Rosmarinjus 21,50 € pro Person
+— Tiramisu-Dessert 7,00 € pro Person
+— Servicepersonal, 2 Personen für 6 Stunden 290,00 € pauschal
+— Anfahrt Zone 3 65,00 € pauschal
+
+Summe: 60 × 45,40 € = 2.724,00 € zuzüglich Personal und Anfahrt, gesamt 3.079,00 € inkl. MwSt. Geschirr, Besteck und Gläser stellen wir.
+
+Das Angebot ist gültig bis 04.12.2026. Bei Buchung erbitten wir eine Anzahlung von 20 Prozent. Ihr Ansprechpartner: Herr ⟦name|Marco Esposito⟧, Telefon ⟦phone|+49 711 55 88 99⟧, mobil ⟦phone|0176 442 07 53⟧, E-Mail ⟦email|m.esposito@example.com⟧.
+
+Wir freuen uns auf Ihren Auftrag.
+
+Mit freundlichen Grüßen
+GastroService Piccolo GmbH
+⟦name|Marco Esposito⟧ · Ansprechpartner Vertrieb
+
+=====
+
+ARBEITSVERTRAG
+
+Zwischen der
+Möbelwerk Nordschrein GmbH, ⟦address|Am Holzbrink 4⟧, ⟦address|49074 Osnabrück⟧ — vertreten durch den Geschäftsführer ⟦name|Eberhard Schwandner⟧ —
+nachfolgend „Arbeitgeber" genannt,
+und Herrn ⟦name|Chinedu Okonkwo⟧, geboren am ⟦birth_date|21.06.1994⟧, wohnhaft ⟦address|Bauerngasse 41⟧, ⟦address|49076 Osnabrück⟧,
+nachfolgend „Arbeitnehmer" genannt, wird folgender Vertrag geschlossen:
+
+§ 1 Tätigkeit
+Der Arbeitnehmer wird als Fachkraft für Möbelbau in der Serienfertigung des Arbeitgebers beschäftigt. Aufgaben und Einsatzort können im Rahmen der betrieblichen Möglichkeiten angepasst werden.
+
+§ 2 Beginn und Probezeit
+Das Arbeitsverhältnis beginnt am 01.02.2027 und wird auf unbestimmte Zeit geschlossen. Die ersten sechs Monate gelten als Probezeit.
+
+§ 3 Arbeitszeit
+Die regelmäßige Arbeitszeit beträgt 38,5 Stunden pro Woche, verteilt von Montag bis Freitag nach dem Schichtplan der Fertigung. Schichtbeginn ist 06:30 Uhr.
+
+§ 4 Vergütung
+Der Arbeitnehmer erhält ein monatliches Bruttogehalt von 3.187,00 €, zahlbar jeweils am letzten Bankarbeitstag des Monats auf sein Konto (IBAN ⟦iban⟧).
+
+§ 5 Urlaub
+Der Arbeitnehmer erhält 28 Urlaubstage pro Kalenderjahr.
+
+§ 6 Mitteilungspflichten
+Für das Lohnsteuerabzugverfahren hat der Arbeitnehmer folgende Steuer-Identifikationsnummer angegeben: ⟦tax_id⟧. Änderungen der Lohnsteuermerkmale sind unverzüglich mitzuteilen.
+
+§ 7 Verschwiegenheit
+Der Arbeitnehmer verpflichtet sich, über Betriebs- und Geschäftsgeheimnisse Stillschweigen zu bewahren.
+
+§ 8 Kündigung
+Während der Probezeit kann das Arbeitsverhältnis mit einer Frist von zwei Wochen gekündigt werden; danach gelten die gesetzlichen Fristen.
+
+§ 9 Schlussbestimmungen
+Nebenabreden bestehen nicht. Änderungen bedürfen der Schriftform.
+
+Osnabrück, den 26.11.2026
+
+Möbelwerk Nordschrein GmbH
+⟦name|Eberhard Schwandner⟧ (Geschäftsführer)
+
+⟦name|Chinedu Okonkwo⟧
+
+=====
+
+MIETVERTRAG
+
+zwischen der Wohnbau Rheinblick GmbH, ⟦address|Am Werseufer 33a⟧, ⟦address|48143 Münster⟧ (HRB 19844, Amtsgericht Münster) — nachfolgend „Vermieterin" —
+und
+Frau ⟦name|Agnieszka Wiśniewska⟧, geboren am ⟦birth_date|09.11.1991⟧, sowie Herrn ⟦name|Tomasz Wawrzyniak⟧, geboren am ⟦birth_date|23.02.1988⟧ — nachfolgend „Mieter" —
+
+§ 1 Mietobjekt
+Die Vermieterin vermietet den Mietern die 3-Zimmer-Wohnung in ⟦address|Am Wiesengrund 12⟧, ⟦address|48155 Münster⟧, 3. Obergeschoss rechts, mit 74,3 m² Wohnfläche sowie Kellerabteil K 22. Die Wohnung wird unmöbliert übergeben.
+
+§ 2 Mietzins
+Kaltmiete 890,00 €; Betriebskostenvorauszahlung 195,00 €; Gesamtmiete 1.085,00 €. Die Miete ist jeweils bis zum dritten Werktag eines Monats im Voraus auf das Konto der Vermieterin zu zahlen (IBAN ⟦iban⟧).
+
+§ 3 Kaution
+Die Mieter leisten eine Kaution in Höhe von 2.670,00 € (drei Nettokaltmieten), zahlbar in drei gleichen Raten ab Vertragsbeginn.
+
+§ 4 Nutzung
+Die Wohnung darf nur zu Wohnzwecken genutzt werden. Tierhaltung bedarf der vorherigen Zustimmung der Vermieterin; Kleintiere in üblicher Anzahl sind gestattet.
+
+§ 5 Schönheitsreparaturen
+Die Mieter tragen die Schönheitsreparaturen entsprechend dem Aushang im Treppenhaus.
+
+§ 6 Kündigung
+Für beide Parteien gelten die gesetzlichen Kündigungsfristen. Eine Kündigung bedarf der Schriftform.
+
+§ 7 Objektbetreuung
+Die laufende Objektbetreuung liegt bei Frau ⟦name|Ronja Lammers⟧, Telefon ⟦phone|0251 33455-23⟧, E-Mail ⟦email|r.lammers@example.org⟧. Bei Wohnungsübergabe wird ein Übergabeprotokoll erstellt, in dem auch die Zählerstände dokumentiert werden.
+
+Münster, den 26.11.2026
+
+gez. für die Vermieterin: ⟦name|Guntram Fricke⟧ (Kaufmännischer Leiter)
+gez. ⟦name|Wiśniewska⟧
+gez. ⟦name|Wawrzyniak⟧
+
+=====
+
+⟦name|Gudrun Hartwick⟧
+⟦address|Am Silbersee 8⟧
+⟦address|45141 Essen⟧
+
+An die
+Bau- und Sparverein Rheingold eG
+⟦address|Hinter den Gärten 10⟧
+⟦address|45141 Essen⟧
+
+Essen, den 27.11.2026
+
+Kündigung des Mietverhältnisses
+
+Sehr geehrte Damen und Herren,
+
+hiermit kündige ich das Mietverhältnis über die Wohnung im 2. Obergeschoss, ⟦address|Am Silbersee 8⟧, ⟦address|45141 Essen⟧, ordentlich und fristgerecht zum 31.05.2027, hilfsweise zum nächstmöglichen Zeitpunkt. Bitte bestätigen Sie mir den Zugang und das Kündigungsdatum schriftlich.
+
+Die Kaution in Höhe von 1.350,00 € bitte ich nach Wohnungsübergabe und Abrechnung auf mein Konto zurückzuüberweisen (IBAN ⟦iban⟧, Kontoinhaberin ⟦name|Gudrun Hartwick⟧).
+
+Zur Übergabe schlage ich den 28.05.2027, 10:00 Uhr, vor. Ich bin erreichbar unter ⟦phone|0201 789 45 12⟧ oder per E-Mail an ⟦email|g.hartwick@example.de⟧.
+
+Mit freundlichen Grüßen
+⟦name|Gudrun Hartwick⟧
+
+=====
+
+⟦name|Jonna Kraack⟧
+⟦address|An der Bahnbrücke 3⟧
+⟦address|49080 Osnabrück⟧
+Telefon ⟦phone|0162 918 44 70⟧ · E-Mail ⟦email|j.kraack@example.com⟧
+
+Möbelwerk Nordschrein GmbH
+Personalabteilung, Frau ⟦name|Heide-Marie Bollmann⟧
+⟦address|Am Holzbrink 4⟧
+⟦address|49074 Osnabrück⟧
+
+Osnabrück, den 27.11.2026
+
+Kündigung meines Arbeitsverhältnisses
+
+Sehr geehrte Frau ⟦name|Bollmann⟧,
+
+hiermit kündige ich mein Arbeitsverhältnis als kaufmännische Sachbearbeiterin ordentlich und fristgerecht zum 31.01.2027, hilfsweise zum nächstmöglichen Zeitpunkt (Personalnummer PN-91120).
+
+Bitte bestätigen Sie mir den Kündigungstermin schriftlich und stellen Sie mir ein qualifiziertes Arbeitszeugnis aus. Außerdem teilen Sie mir mit, wie die Abwicklung meines Resturlaubs (9 Tage) erfolgen soll.
+
+Ich danke Ihnen und den Kolleginnen und Kollegen der Verwaltung für das Vertrauen und die gute Zusammenarbeit. Schlüssel und Werksausweis bringe ich am letzten Arbeitstag persönlich zurück.
+
+Mit freundlichen Grüßen
+⟦name|Jonna Kraack⟧
+
+=====
+
+Elbtal Logistik GmbH & Co. KG
+Niederlassung Duisburg
+⟦address|Am Hafentor 21⟧ · ⟦address|47051 Duisburg⟧
+
+ABMAHNUNG
+Personalnummer PN-201146 · Duisburg, den 26.11.2026
+
+Herrn ⟦name|Ronny Zschieschang⟧
+Lagerlogistik, Frühschicht
+persönlich
+
+Sehr geehrter Herr ⟦name|Zschieschang⟧,
+
+am 14.11.2026 und am 17.11.2026 sind Sie zu Ihrem Schichtbeginn um 06:00 Uhr nicht erschienen. Eine Entschuldigung liegt bis heute nicht vor; Sie waren an beiden Tagen ab 06:12 Uhr auch telefonisch nicht erreichbar. Die Disposition der Frühschicht musste jeweils kurzfristig umgestellt werden; dabei sind Zusatzkosten von rund 380,00 € entstanden.
+
+Ihr Schichtleiter, Herr ⟦name|Wendelin Osburg⟧, hat das Thema Fehlzeiten und Verspätungen bereits am 02.11.2026 mit Ihnen besprochen; dabei war Frau ⟦name|Imke Boysen⟧ aus der Disposition zugegen. Gleichwohl haben Sie sich in beiden Fällen weder vorab abgemeldet noch nachträglich eine Erklärung mitgeteilt.
+
+Wir mahnen Ihr Verhalten hiermit ab und weisen Sie darauf hin, dass unentschuldigtes Fernbleiben eine schuldhafte Verletzung Ihrer arbeitsvertraglichen Pflichten darstellt. Bei erneuten Pflichtverletzungen kann das Arbeitsverhältnis ordentlich, im Wiederholungsfall auch außerordentlich gekündigt werden.
+
+Sie haben bis zum 04.12.2026 Gelegenheit, sich schriftlich zu den Vorwürfen zu äußern. Eine Kopie dieser Abmahnung wird zu Ihrer Personalakte genommen; eine weitere erhält die Personalleitung, Frau ⟦name|Gertrud Steinbrecher⟧.
+
+Mit freundlichen Grüßen
+Elbtal Logistik GmbH & Co. KG, Niederlassungsleitung
+gez. ⟦name|Dietwald Kreuzer⟧
+
+Empfangsbestätigung
+Name: ⟦name|R. Zschieschang⟧ · Datum: 26.11.2026, 09:20 Uhr
+
+=====
+
+ARBEITSZEUGNIS
+
+Reinigungskonzept Aurum GmbH & Co. KG
+Objekt- und Gebäudeservice
+⟦address|Auf dem Rosenberg 6⟧ · ⟦address|40213 Düsseldorf⟧ · HRB 78110, Amtsgericht Düsseldorf
+
+Herr ⟦name|Kwame Mensah⟧, geboren am ⟦birth_date|12.05.1986⟧, war vom 01.09.2021 bis zum 30.11.2026 in unserem Unternehmen als Objektleiter beschäftigt. Herr ⟦name|Mensah⟧ trug die Verantwortung für neun Betreuungsobjekte im Großraum Düsseldorf mit bis zu 24 Mitarbeiterinnen und Mitarbeitern.
+
+Zu seinen Aufgaben gehörten:
+— Personaleinsatzplanung und Tourensteuerung der Reinigungsteams
+— Qualitätskontrolle nach dem internen Prüfschema QL-5
+— Unterweisung und Einarbeitung neuer Kolleginnen und Kollegen
+— Abstimmung mit den Objektkunden, einschließlich Jahresgesprächen
+— Verwaltung des Verbrauchsmaterialbudgets je Objekt
+
+Herr ⟦name|Mensah⟧ erledigte seine Aufgaben stets zu unserer vollsten Zufriedenheit. Er arbeitete äußerst sorgfältig, verlor auch unter Zeitdruck nicht die Übersicht und verstand es, seine Teams zuverlässig und mit Ruhe zu motivieren. Seine Einsatzplanungen waren stets vollständig, nachvollziehbar und termingerecht.
+
+Sein Verhalten gegenüber Vorgesetzten, Mitarbeitenden und Kundinnen und Kunden war jederzeit einwandfrei und vorbildlich.
+
+Herr ⟦name|Mensah⟧ verlässt uns zum 30.11.2026 auf eigenen Wunsch. Wir danken ihm für über fünf Jahre sehr gute, engagierte Zusammenarbeit und wünschen ihm für seinen weiteren Berufs- und Lebensweg alles Gute und viel Erfolg.
+
+Düsseldorf, den 27.11.2026
+
+Reinigungskonzept Aurum GmbH & Co. KG
+gez. ⟦name|Rosemarie Hildenhagen⟧, Personalleitung
+
+=====
+
+⟦name|Linh Pham⟧
+⟦address|Gartenhofweg 27⟧
+⟦address|38102 Braunschweig⟧
+Telefon: ⟦phone|0531 22 87 19⟧
+E-Mail: ⟦email|linh.pham@example.net⟧
+
+Siebenschläfer Software GmbH
+Personalleitung, Frau ⟦name|Darja Belova⟧
+⟦address|Mühlenbreite 11⟧
+⟦address|12555 Berlin⟧
+
+Braunschweig, den 27.11.2026
+
+Bewerbung als Junior Software-Entwicklerin · Stellenreferenz SIEB-2026-77
+
+Sehr geehrte Frau ⟦name|Belova⟧,
+
+mit großem Interesse habe ich Ihre Stellenausschreibung gelesen. Ich studiere Informatik an der Technischen Universität Braunschweig und werde meinen Bachelor voraussichtlich im Januar 2027 abschließen. Ich bin am ⟦birth_date|02.02.1998⟧ geboren und verfüge über sehr gute Kenntnisse in Java, TypeScript und React.
+
+In Werkstudententätigkeiten und im Praxissemester habe ich bereits Erfahrungen in der Softwareentwicklung gesammelt, zuletzt zwölf Monate bei einem regionalen IT-Dienstleister. Mein damaliger Praxisbetreuer, Herr ⟦name|Falk Böttger⟧, tritt auf Anfrage gerne als Referenz zur Verfügung.
+
+Ihr Fokus auf Lernsoftware für die Erwachsenenbildung begeistert mich besonders: Im Studium habe ich an einer Lern-App mitgearbeitet und kenne daher die Anforderungen an verständliche Oberflächen und Barrierefreiheit aus eigener Anschauung.
+
+Mein möglichster Eintrittstermin ist der 01.03.2027. Meine Gehaltsvorstellung liegt bei 46.000,00 € brutto im Jahr. Über ein persönliches Gespräch, auch per Videokonferenz, freue ich mich sehr.
+
+Anlagen: Lebenslauf, aktuelles Unizeugnis, Zertifikat AWS Cloud Practitioner (2025), Praktikumszeugnis.
+
+Mit freundlichen Grüßen
+⟦name|Linh Pham⟧
+
+=====
+
+Von: ⟦email|m.kessler@example.de⟧
+An: ⟦email|k.zaremba@example.org⟧
+Cc: ⟦email|h.sobolewska@example.org⟧
+Betreff: Krankmeldung ab Montag, den 30.11.2026
+
+Hallo ⟦name|Katarzyna⟧,
+
+leider muss ich mich für Montag, den 30.11.2026, krankmelden. Ich liege seit gestern Abend mit Fieber und Halsschmerzen flach und habe heute um 14:30 Uhr einen Termin bei Dr. ⟦name|Nuray Şimşek⟧. Falls ein Attest benötigt wird, reiche ich es umgehend bei Frau ⟦name|Sobolewska⟧ im Personalbüro ein.
+
+Voraussichtlich bin ich am Donnerstag, den 03.12.2026, wieder im Haus. Die Etatplanung für Heft 12 habe ich so weit vorbereitet, dass nichts liegen bleibt. Für Rückfragen bin ich unter ⟦phone|0157 812 34 56⟧ erreichbar.
+
+Bleibt gesund!
+Viele Grüße
+⟦name|Mila⟧
+
+=====
+
+REISEKOSTENABRECHNUNG
+Ventus Klimatechnik GmbH · Formular RK-12/2026
+
+Mitarbeiterin: ⟦name|Irina Petrowa⟧ · Personalnummer PN-30418 · Bereich Technische Beratung
+Zweck der Reise: Kundenworkshop „Klimakonzepte 2027"
+Zeitraum: 12.10.2026 bis 14.10.2026 · Veranstaltungsort: Seehotel Mondlicht, ⟦address|Am Seeufer 7⟧, ⟦address|82327 Tutzing⟧
+
+Datum | Position | Beleg-Nr. | Betrag
+12.10.2026 | Bahnfahrt 2. Klasse, Hin- und Rückfahrt | B-117701 | 138,60 €
+12.10.2026 | Übernachtung inkl. Frühstück | R-9941 | 118,00 €
+13.10.2026 | Übernachtung inkl. Frühstück | R-9942 | 118,00 €
+13.10.2026 | ÖPNV-Tagesticket Tutzing | B-117777 | 13,60 €
+12.–14.10.2026 | Verpflegungspauschale, 3 Tage | — | 60,00 €
+
+Summe: 448,20 €
+Erhaltener Vorschuss am 10.10.2026: 150,00 €
+Auszuzahlender Betrag: 298,20 € — Überweisung auf das Konto der Mitarbeiterin (IBAN ⟦iban⟧)
+
+Erklärung: Ich versichere, dass die Angaben vollständig und richtig sind und die Belege im Original vorliegen (Mappe RK-2026-118, Sekretariat).
+
+Essen, den 20.11.2026 — gez. ⟦name|Petrowa⟧
+
+Freigabe erteilt am 21.11.2026 — gez. ⟦name|Karim Haddad⟧ (Vertriebsleitung)
+
+=====
+
+PROTOKOLL der Redaktionssitzung
+Windrad Verlag GmbH · 25.11.2026 · 10:00 bis 11:35 Uhr · Besprechungsraum „Mühle", Hannover
+
+Teilnehmende (alphabetisch):
+⟦name|Amrani, Omar⟧ (Vertrieb Messen)
+⟦name|Hinrichs, Fentje⟧ (Sekretariat, Protokollführung)
+⟦name|Kastenmacher, Friedrich⟧ (Chefredaktion)
+⟦name|Nassar, Amira⟧ (Grafik und Layout)
+⟦name|Vo, Duc⟧ (Lizenzen, Ausland)
+
+Entschuldigt: ⟦name|Heinrich Klose⟧ (Herstellung, Dienstreise Druckerei)
+
+TOP 1 — Messeauftritt Buchmesse Leipzig, März 2027
+Stand C-402 in Halle 3 ist angemeldet, Mietkosten 8.900,00 €. ⟦name|Amrani⟧ koordiniert die Standbestückung und legt den Ablaufplan bis 15.01.2027 vor.
+
+TOP 2 — Titelprogramm Frühjahr 2027
+Vierzehn Neuerscheinungen sind bestätigt. ⟦name|Nassar⟧ zeigt drei Coverentwürfe für die Reihe „Hafengeschichten"; die Überarbeitung nach Anmerkungen von ⟦name|Kastenmacher⟧ erfolgt bis 08.12.2026.
+
+TOP 3 — Lizenzverkauf Niederlande
+⟦name|Vo⟧ berichtet über laufende Verhandlungen; Ziel ist ein Vertragsabschluss bis Ende Dezember. Die Beteiligung soll 7 % vom Nettoladenpreis betragen.
+
+TOP 4 — Weihnachtsfeier
+Termin: 18.12.2026, 18:00 Uhr, Kantine im Stammhaus. ⟦name|Fentje⟧ sammelt die Anmeldungen bis 10.12.2026.
+
+Nächster Termin: 09.12.2026, 10:00 Uhr.
+
+gez. ⟦name|F. Hinrichs⟧
+
+=====
+
+Auszug aus dem Kanal „#wareneingang-redaktion" im Firmen-Messenger, 26.11.2026
+
+08:02 ⟦name|ute.kamps⟧: Morgen! Die 12 Stühle aus Hamburg sind da. Fahrer war pünktlich um 07:45, Annahme ist unterschrieben.
+08:04 ⟦name|timo.fz⟧: Top. Aber laut Lieferschein LS-2026-4487 fehlen noch die Seitentische (Pos. 3). Kann das jemand prüfen?
+08:07 ⟦name|duc_vo⟧: Beim Auspacken ist an einem Stuhl eine Rolle gebrochen. Foto folgt gleich.
+08:09 ⟦name|ute.kamps⟧: Ich rufe nachher beim Anbieter an, Herr ⟦name|Niestroj⟧ aus dem Vertrieb kennt die Palette. Telefon ⟦phone|040 66 12 33 40⟧.
+08:11 ⟦name|kellner_f⟧: Bitte bis Mittag erledigen. Die Stühle müssen vor der Redaktionssitzung am 09.12. stehen.
+08:12 ⟦name|timo.fz⟧: Ok. @duc_vo schick mir das Foto per Direktnachricht.
+08:31 ⟦name|ute.kamps⟧: So, ⟦name|Niestroj⟧ sagt: Ersatzrollen kommen bis Donnerstag, den 03.12.2026, ohne Kosten. Kulanz, weil die Bestellung B-7788 so groß war.
+08:32 ⟦name|duc_vo⟧: Foto ist raus. Danke!
+08:33 ⟦name|timo.fz⟧: Klasse. Dann fehlen nur noch die Tische.
+
+[Ende des Auszugs]
+
+=====
+
+Von: ⟦name|Chiara Lombardi⟧ (⟦email|c.lombardi@example.com⟧)
+An: Redaktion-Lektorat-Verteiler; ⟦name|Timo Fleischer-Zorn⟧ (⟦email|t.fleischer-zorn@example.com⟧)
+Cc: ⟦name|Ute Kamps⟧ (⟦email|u.kamps@example.com⟧)
+Betreff: Umzug Redaktion in den 3. OG — Samstag, 05.12.2026
+
+Liebe Kolleginnen und Kollegen,
+
+am Samstag, den 05.12.2026, zieht die Redaktion vom zweiten in das dritte Obergeschoss. Die Umzugsfirma Hafenkante GmbH ist ab 08:00 Uhr vor Ort; der Lastenaufzug ist ab 07:45 Uhr reserviert.
+
+Kartonpakete erhaltet ihr ab Donnerstag, den 03.12.2026, im Büro 2-14 bei ⟦name|Ute Kamps⟧. Bitte räumt bis Freitag, den 04.12.2026, 12:00 Uhr, die Schreibtische vollständig leer und beschriftet Monitore und Kabel mit euren neuen Raumnummern.
+
+Fragen zur Telefon- und EDV-Umstellung beantwortet ⟦name|Yusuf Kandemir⟧ aus der IT, Durchwahl ⟦phone|0511 98 76 54-441⟧.
+
+Der Umzug dauert voraussichtlich bis 14:00 Uhr. Am Montag, den 07.12.2026, sind alle Arbeitsplätze im 3. OG einsatzbereit.
+
+Beste Grüße
+⟦name|Chiara Lombardi⟧ — Leitung Facility-Management
+
+P. S.: Der Kaffee am Montagmorgen geht auf mich.
+
+=====
+
+Von: ⟦name|Olga Sokolowa⟧ (⟦email|o.sokolowa@example.org⟧)
+An: Entwicklung, Vertrieb, Verwaltung (Rundverteiler)
+Cc: ⟦name|Darja Belova⟧ (⟦email|d.belova@example.org⟧)
+Betreff: Lizenzpaket Pixelnest — Verlängerung zum 01.01.2027
+
+Kolleginnen und Kollegen,
+
+am 15.12.2026 läuft unser Lizenzpaket für das Grafikwerkzeug Pixelnest aus (Lizenzschlüssel-Block LM-0034, 25 Arbeitsplätze). Ich verlängere fristgerecht zum 01.01.2027; die neuen Schlüssel stelle ich am 14.12.2026 über den internen Share bereit.
+
+Bis dahin bitte ich um Folgendes:
+— keine Neuinstallationen auf privaten Geräten,
+— Wünsche zu zusätzlichen Plätzen bis zum 08.12.2026 im Ticketsystem, Kategorie „Lizenzen", melden.
+
+Vielen Dank!
+Viele Grüße aus der IT
+⟦name|Olga⟧
+
+=====
+
+⟦name|Susanne Dieckmann-Roth⟧
+⟦address|Im Kirchfeld 18⟧
+⟦address|23701 Eutin⟧
+Telefon: ⟦phone|0152 334 55 67⟧
+E-Mail: ⟦email|s.dieckmann-roth@example.net⟧
+
+Einrichtungshaus VierJahreszeiten GmbH
+Kundenservice
+⟦address|Klingelberg 17⟧
+⟦address|23552 Lübeck⟧
+
+Eutin, den 24.11.2026
+
+Fehlerhafte Lieferung — Loungesofa „Verona" (Bestellung B-2699, Rechnung RE-2026-0902)
+
+Sehr geehrte Damen und Herren,
+
+am 08.11.2026 habe ich bei Ihnen das Loungesofa „Verona" bestellt und per Lastschrift bezahlt (1.299,00 €, Einzug am 09.11.2026). Die Lieferung sollte laut Auftragsbestätigung innerhalb von 14 Tagen erfolgen; tatsächlich kam das Sofa erst am 20.11.2026 an und auch nur nach zweimaligem Nachfragen.
+
+Beim Auspacken stellte ich einen rund 15 cm langen Riss im rechten Seitenbezug fest. Außerdem wackelt das Gestell am vorderen linken Fuß deutlich. Ihr Fahrer, ⟦name|Branimir Iliev⟧, hat den Mangel vor Ort notiert und ein Foto aufgenommen (Protokoll-Nr. 118044).
+
+Ich fordere Sie auf, bis spätestens 10.12.2026 ein mangelfreies Ersatzmöbel zu liefern. Sollte das nicht möglich sein, trete ich vom Vertrag zurück und erwarte die Rückzahlung des Kaufpreises auf mein Konto (IBAN ⟦iban⟧).
+
+Bitte teilen Sie mir kurz mit, wie Sie vorzugehen gedenken.
+
+Mit freundlichen Grüßen
+⟦name|Susanne Dieckmann-Roth⟧
+
+Anlagen: Fotos (4), Lieferschein LS-2026-4519
+
+=====
+
+⟦name|Wencke Johannsen⟧
+⟦address|Nordstraße 115⟧
+⟦address|26122 Oldenburg⟧
+Telefon: ⟦phone|0441 78 89 00⟧ · E-Mail: ⟦email|w.johannsen@example.de⟧
+
+Falkenwacht Versicherung AG
+Schadenabteilung
+⟦address|Am Fleetsteg 5⟧
+⟦address|20099 Hamburg⟧
+
+Oldenburg, den 25.11.2026
+
+Schadenanzeige — Leitungswasserschaden · Policennummer VS 88 45 12 3 · Schadennummer SCH-2026-77123
+
+Sehr geehrte Damen und Herren,
+
+hiermit zeige ich einen Leitungswasserschaden an meiner Wohnung an. In der Nacht zum 18.11.2026 hat sich der Zulaufschlauch meiner Waschmaschine in der Waschküche gelöst; das Wasser lief schätzungsweise zwei Stunden unentdeckt in den Nebenraum.
+
+Betroffen sind der Teppichboden im Nebenraum (rund 14 m², vollständig unbrauchbar) sowie drei Bücherkartons. Außerdem sind zwei Regalböden eines Bücherregals aufgequollen.
+
+Noch am Vormittag rief ich den Notdienst der RohrRettung GmbH. Der Installateur, Herr ⟦name|Tilman Högg⟧, hat den Schlauch ersetzt (Rechnung RN-2026-8812 über 248,50 €, anbei) und zwei Bautrockner aufgestellt. Die Trocknung läuft voraussichtlich fünf Tage; Herr ⟦name|Högg⟧ beziffert die weiteren Kosten auf rund 1.900,00 €.
+
+Ich bitte um Prüfung und Ausgleich nach den Bedingungen der Police „HausratPlus". Die Auszahlung bitte auf mein Konto: IBAN ⟦iban⟧, BIC FKWTDE33XXX, Kontoinhaberin ⟦name|Wencke Johannsen⟧.
+
+Mit freundlichen Grüßen
+⟦name|Wencke Johannsen⟧
+
+Anlagen: Schadensfotos (6), Rechnung RN-2026-8812, Liste der beschädigten Bücher
+
+=====
+
+VOLLMACHT
+
+Die Unterzeichnerin, Frau ⟦name|Ottilie Rehberg⟧, geboren am ⟦birth_date|17.03.1948⟧, wohnhaft in ⟦address|Am Lindenhain 2⟧, ⟦address|21339 Lüneburg⟧, erteilt hiermit ihrem Sohn, Herrn ⟦name|Jan Frederik Rehberg⟧, wohnhaft ⟦address|Auf der Heide 9⟧, ⟦address|21335 Lüneburg⟧, Telefon ⟦phone|04131 22 44 66⟧, eine widerrufliche Vollmacht für folgende Angelegenheiten:
+
+1. Entgegennahme von Post, Paketen und Einschreiben an meiner Anschrift.
+2. Vertretung gegenüber der Stadt Lüneburg, insbesondere bei der Beantragung eines neuen Personalausweises und bei Meldeangelegenheiten.
+3. Ein- und Auszahlungen, Überweisungen sowie die Abholung von Kontoauszügen für mein Konto mit der IBAN ⟦iban⟧.
+4. Schriftverkehr mit meiner Hausratversicherung, Falkenwacht Versicherung AG, Policennummer VS 91 33 02 7, einschließlich Schadenanzeigen.
+
+Die Vollmacht gilt ab dem 27.11.2026. Sie kann von mir jederzeit formlos widerrufen werden.
+
+Lüneburg, den 27.11.2026
+
+gez. ⟦name|O. Rehberg⟧ (Vollmachtgeberin)
+
+Der Bevollmächtigte nimmt die Vollmacht an:
+
+gez. ⟦name|Jan F. Rehberg⟧
+
+=====
+
+Systemexport · Anwendung FIBU 4.2 · Tabelle Debitorenstamm · Stand 26.11.2026, 14:22 Uhr · Mandant 118
+
+Kundennummer;Name;Straße;PLZ Ort;Telefon;E-Mail;Geburtsdatum;IBAN;Steuer-ID
+KD-10041;⟦name|Vogt, Marlene⟧;⟦address|Ahornring 15⟧;⟦address|01067 Dresden⟧;⟦phone|0351 21 34 56⟧;⟦email|m.vogt@example.de⟧;⟦birth_date|11.12.1962⟧;⟦iban⟧;⟦tax_id⟧
+KD-10042;⟦name|Nguyễn, Lan⟧;⟦address|Alte Poststraße 40⟧;⟦address|67659 Kaiserslautern⟧;⟦phone|(0631) 55 88 12⟧;⟦email|lan.nguyen@example.com⟧;⟦birth_date|03.04.1995⟧;⟦iban⟧;⟦tax_id⟧
+KD-10043;⟦name|Al-Amin, Yusra⟧;⟦address|Zur Bleiche 6⟧;⟦address|34117 Kassel⟧;⟦phone|+49 561 40 88 21⟧;⟦email|y.al-amin@example.net⟧;⟦birth_date|27.09.1987⟧;⟦iban⟧;⟦tax_id⟧
+KD-10044;⟦name|Ndiaye, Ibrahima⟧;⟦address|Am Sportplatz 3⟧;⟦address|44135 Dortmund⟧;⟦phone|0231 18 45 66⟧;⟦email|i.ndiaye@example.org⟧;⟦birth_date|15.06.1979⟧;⟦iban⟧;⟦tax_id⟧
+KD-10045;⟦name|Riedel-Kruse, Wiebke⟧;⟦address|Marienburger Str. 22⟧;⟦address|50667 Köln⟧;⟦phone|0221/47 11 08⟧;⟦email|wiebke.riedel-kruse@example.de⟧;⟦birth_date|29.02.1996⟧;⟦iban⟧;⟦tax_id⟧
+KD-10046;⟦name|Löwenfels, Adelheid von⟧;⟦address|Schlossgasse 1a⟧;⟦address|38100 Braunschweig⟧;⟦phone|0049 176 224 46 68⟧;⟦email|adelheid.vonloewenfels@example.com⟧;⟦birth_date|04.11.1951⟧;⟦iban⟧;⟦tax_id⟧
+KD-10047;⟦name|Keskin, Berivan⟧;⟦address|Am Nordkai 12⟧;⟦address|27568 Bremerhaven⟧;⟦phone|0471 55 90 43⟧;⟦email|b.keskin@example.net⟧;⟦birth_date|08.08.1990⟧;⟦iban⟧;⟦tax_id⟧
+KD-10048;⟦name|Greco, Antonella⟧;⟦address|Weinbergrain 9⟧;⟦address|74072 Heilbronn⟧;⟦phone|07131 94 51 22⟧;⟦email|antonella.greco@example.de⟧;⟦birth_date|19.01.1983⟧;⟦iban⟧;⟦tax_id⟧
+KD-10049;⟦name|Solowjowa, Nadeshda⟧;⟦address|Tannenweg 31⟧;⟦address|91054 Erlangen⟧;⟦phone|09131 88 33 51⟧;⟦email|n.solowjowa@example.org⟧;⟦birth_date|22.07.1968⟧;⟦iban⟧;⟦tax_id⟧
+KD-10050;⟦name|Onken, Tjark⟧;⟦address|Am Deich 5⟧;⟦address|25746 Heide⟧;⟦phone|0481 72 66 90⟧;⟦email|t.onken@example.de⟧;⟦birth_date|30.05.2001⟧;⟦iban⟧;⟦tax_id⟧
+
+=====
+
+Auftragsbestätigung · Auftrag Nr. AU-2026-339
+
+ThermenBerg SHK GmbH
+Heizungs- und Sanitärinstallation
+⟦address|An der Warme 11⟧ · ⟦address|94032 Passau⟧ · USt-IdNr. DE 445 118 207
+
+An
+Herrn ⟦name|Karsten Uhlmann⟧
+⟦address|Kirchplatz 5⟧
+⟦address|94034 Passau⟧
+
+Passau, den 26.11.2026
+
+Sehr geehrter Herr ⟦name|Uhlmann⟧,
+
+vielen Dank für Ihren Auftrag. Wir bestätigen die vereinbarten Leistungen zur Badsanierung im Erdgeschoss (Gästebad, ca. 8,4 m²):
+
+Pos 1 | Demontage der Alt-Sanitärobjekte und des Fliesenbodens | 680,00 €
+Pos 2 | Trockenbau-Vorwandinstallation | 920,00 €
+Pos 3 | Fliesenarbeiten Wand und Boden, ca. 26 m², inkl. Material | 2.480,00 €
+Pos 4 | Einbau Designheizkörper inkl. Anbindung | 410,00 €
+Pos 5 | Container 7 m³, Entsorgung Altmaterial | 380,00 €
+
+Gesamtsumme: 4.870,00 € inkl. MwSt.
+
+Termin: Beginn am Montag, den 07.12.2026, ca. 08:00 Uhr; Ausführungsdauer rund acht bis zehn Werktage. Die Objektleitung vor Ort übernimmt ⟦name|Alois Rackl⟧; Terminabsprachen unter ⟦phone|0851/750 90 22⟧ oder per E-Mail an ⟦email|a.rackl@example.org⟧.
+
+Zahlung: 30 % Anzahlung bei Auftragsbeginn (1.461,00 €), Restzahlung nach Abnahme. Bankverbindung: IBAN ⟦iban⟧, BIC THBGDE33XXX. Für alle Leistungen gilt die gesetzliche Gewährleistung.
+
+Mit freundlichen Grüßen
+ThermenBerg SHK GmbH — Bauleitung
+gez. ⟦name|Rackl⟧
+
+=====
+
+NordWasser Energie GmbH
+Wasser · Abwasser · Kundenservice
+⟦address|Am Pumpwerk 3⟧ · ⟦address|26135 Oldenburg⟧ · USt-IdNr. DE 244 556 091
+
+JAHRESABRECHNUNG WASSER/ABWASSER 2025/2026
+Kundennummer 58-447122-3 · Vertragskonto 991477 · Oldenburg, den 26.11.2026
+
+Rechnungsempfängerin und Verbrauchsstelle:
+⟦name|Telse Ehlers⟧
+⟦address|Zur alten Mühle 7⟧
+⟦address|26316 Varel⟧
+
+Abrechnungszeitraum: 01.10.2025 bis 30.09.2026 · Zähler-Nr. W 77-441-9
+Zählerstand: 2.418 m³ (Vorjahr 2.390 m³) — Verbrauch: 28 m³
+
+Frischwasser 28 m³ × 2,39 €/m³  66,92 €
+Schmutzwasser 28 m³ × 3,42 €/m³  95,76 €
+Grundgebühr 12 Monate × 8,90 €  106,80 €
+
+Abrechnungsbetrag: 269,48 €
+Gezahlte Abschläge: 12 × 18,00 € = 216,00 €
+Nachzahlung: 53,48 € — Einzug per SEPA-Lastschrift am 15.12.2026 (IBAN ⟦iban⟧)
+
+Ab dem 01.01.2027 beträgt der monatliche Abschlag 24,00 €.
+
+Rückfragen zu Zählerstand oder Rechnung beantwortet Ihre Sachbearbeiterin ⟦name|Anke Wittrock⟧, Telefon ⟦phone|04451 955 90⟧, E-Mail ⟦email|a.wittrock@example.org⟧.
+
+NordWasser Energie GmbH — i. A. ⟦name|Wittrock⟧
+
+=====
+
+Kanzlei Nordtor · Rechtsanwälte
+⟦address|Am Nordtor 6⟧ · ⟦address|28195 Bremen⟧
+
+Namens und in Vertretung der Einrichtungshaus VierJahreszeiten GmbH
+
+3. MAHNUNG — Aktenzeichen MN-2026-4471 · Bremen, den 24.11.2026
+
+Frau ⟦name|Fatoumata Sow⟧
+⟦address|Lilienstraße 14⟧
+⟦address|28203 Bremen⟧
+
+Sehr geehrte Frau ⟦name|Sow⟧,
+
+trotz unserer Mahnungen vom 27.10.2026 und vom 10.11.2026 ist die Forderung unserer Mandantin aus der Rechnung RE-2026-0918 vom 06.10.2026 über 679,90 € (Esstisch „Lago", Bestellung B-2654) weiterhin unbezahlt. Die Zahlung war bereits am 20.10.2026 fällig.
+
+Wir fordern Sie letztmalig auf, den Gesamtbetrag von 699,90 € (Kaufpreis zzgl. zweier Mahnpauschalen von je 10,00 €) bis spätestens zum 04.12.2026 auf das Treuhandkonto unserer Kanzlei zu überweisen (IBAN ⟦iban⟧, BIC NTRBDE33XXX).
+
+Sollte der Betrag nicht fristgerecht eingehen, werden wir ohne weitere Ankündigung gerichtliche Maßnahmen einleiten; die daraus entstehenden Kosten gehen zu Ihren Lasten.
+
+Rückfragen richten Sie bitte ausschließlich an diese Kanzlei: Rechtsanwalt ⟦name|Dimitri Sokolow⟧, Telefon ⟦phone|0421 33 87 12⟧, E-Mail ⟦email|d.sokolow@example.com⟧.
+
+Mit freundlichen Grüßen
+Kanzlei Nordtor
+Rechtsanwalt ⟦name|Dimitri Sokolow⟧
+
+=====
+
+Siebenschläfer Software GmbH
+Lernsoftware für die Erwachsenenbildung
+⟦address|Mühlenbreite 11⟧ · ⟦address|12555 Berlin⟧ · USt-IdNr. DE 317 908 114
+
+ANGEBOT Nr. AN-2026-207 · Berlin, den 25.11.2026
+
+An
+Hanseatisch Textilhandel GmbH
+z. Hd. Herrn ⟦name|Levi Ostrowski⟧ · IT-Leitung
+⟦address|Am Speicherfleet 8⟧
+⟦address|28217 Bremen⟧
+
+Betreff: Wartungsvertrag „SupportSpatz Premium"
+
+Sehr geehrter Herr ⟦name|Ostrowski⟧,
+
+für 25 Arbeitsplätze bieten wir Ihnen unsere Wartung „SupportSpatz Premium" mit einer Laufzeit von zwölf Monaten ab 01.01.2027:
+
+— Reaktionszeit höchstens 4 Stunden, werktags von 08:00 bis 18:00 Uhr
+— Updates und Patches für die Lernplattform inklusive
+— 45,00 € je Arbeitsplatz und Monat, also 1.125,00 € monatlich zzgl. USt
+— Kündigung mit Frist von drei Monaten zum Laufzeitende
+
+Das Angebot ist gültig bis 15.12.2026; der Vertrag kommt durch schriftliche Bestätigung oder per E-Mail zustande.
+
+Für Rückfragen wenden Sie sich an Frau ⟦name|Ayla Şahin⟧, Vertragsmanagement, Telefon ⟦phone|030 555 21 87⟧, E-Mail ⟦email|a.sahin@example.net⟧.
+
+Mit freundlichen Grüßen
+Siebenschläfer Software GmbH
+⟦name|Ayla Şahin⟧

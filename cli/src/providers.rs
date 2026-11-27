@@ -181,6 +181,16 @@ pub fn state_of(p: &Provider) -> &'static str {
     if crate::auth::has(p.name) { "stored" } else { env }
 }
 
+/// True when Penelope can reach the provider now: a key in the environment or the keyring, or the Claude command with
+/// its own login. A local server (`no key, optional`) counts only after it answered, so the caller decides that one.
+pub fn connected(p: &Provider) -> bool {
+    match p.kind {
+        "laertes" => false,
+        "claude-cli" => crate::config::which("claude").is_some(),
+        _ => matches!(state_of(p), "key set" | "stored"),
+    }
+}
+
 /// "key set" or "no key" for one variable name. The value itself is never returned.
 pub fn key_state(key_env: &str, optional: bool) -> &'static str {
     if key_env.is_empty() {
@@ -264,6 +274,13 @@ The console of Model Studio shows the ID in the column API Host.", p.name, p.bas
 /// `config.json`. The file gets the name of the key variable and no key.
 pub fn use_provider(ctx: &mut Ctx, args: &[String]) -> String {
     let flag = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).map(String::as_str);
+    for f in ["--role", "--model", "--workspace", "--base-url"] {
+        if let Some(i) = args.iter().position(|a| a == f) {
+            if args.get(i + 1).map(|v| v.is_empty() || v.starts_with("--")).unwrap_or(true) {
+                return format!("NOT set. {} needs a value.", f);
+            }
+        }
+    }
     let Some(name) = args.first().filter(|a| !a.starts_with("--")) else {
         return "NOT set. Name a provider: penelope provider use NAME. penelope providers lists the names.".to_string();
     };
@@ -303,9 +320,15 @@ pub fn use_provider(ctx: &mut Ctx, args: &[String]) -> String {
     if let Err(e) = std::fs::write(ctx.root.join("config.json"), serde_json::to_string_pretty(&ctx.cfg).unwrap()) {
         return format!("NOT set. cannot write config.json: {}", e);
     }
-    format!("set: {} model {} on {} ({}, {}). Key: {}{}.", role, value["model"].as_str().unwrap_or("?"), p.name, p.kind,
+    let chosen = value["model"].as_str().unwrap_or("?");
+    let known = models(p.name);
+    let alias = p.name == "claude-cli" && ["sonnet", "opus", "haiku", "fable"].contains(&chosen);
+    let warning = if !known.is_empty() && !alias && !known.iter().any(|m| m.id == chosen) && chosen != p.model {
+        format!(" Warning: {} is not in the model list Penelope knows for {}; it is set anyway because providers add models.", chosen, p.name)
+    } else { String::new() };
+    format!("set: {} model {} on {} ({}, {}). Key: {}{}.{}", role, chosen, p.name, p.kind,
             value["base_url"].as_str().unwrap_or("the claude command"), state_of(p),
-            if p.key_env.is_empty() { String::new() } else { format!(" in {}", p.key_env) })
+            if p.key_env.is_empty() { String::new() } else { format!(" in {}", p.key_env) }, warning)
 }
 
 /// One exact model name, its display name and the effort levels the provider accepts.
@@ -316,6 +339,7 @@ pub struct Model {
 }
 
 const CLAUDE_MODELS: &[Model] = &[
+    Model { id: "claude-fable-5-2", label: "Claude Fable 5.2", efforts: &["low", "medium", "high", "max"] },
     Model { id: "claude-opus-5-5", label: "Claude Opus 5.5", efforts: &["low", "medium", "high", "max"] },
     Model { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5", efforts: &["low", "medium", "high", "max"] },
     Model { id: "claude-haiku-5-5", label: "Claude Haiku 5.5", efforts: &["low", "medium", "high", "max"] },
@@ -622,7 +646,7 @@ mod tests {
         assert!(!supports_effort("opencode", "mimo-v2.6-flash"));
         assert!(supports_effort("openai", "gpt-6.2-astra") && !supports_effort("openai", "gpt-4o"));
         assert_eq!(static_models("openai")[0].id, "gpt-6.2-astra");
-        assert_eq!(static_models("anthropic")[0].id, "claude-opus-5-5");
+        assert_eq!(static_models("anthropic")[0].id, "claude-fable-5-2");
         assert!(supports_effort("openrouter", "openai/gpt-5.2") && supports_effort("openrouter", "anthropic/claude-sonnet-5-5"));
         assert!(supports_effort("deepseek", "deepseek-flash") && supports_effort("xai", "grok-4.7"));
         assert!(supports_effort("alibaba-intl", "qwen4-max") && supports_effort("zhipu", "glm-5.3"));

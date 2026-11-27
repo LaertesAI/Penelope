@@ -41,6 +41,9 @@ The tool count comes from `spec::TOOLS`, the provider count from `cli/src/provid
 
 ## What sets Penelope apart
 
+- Cost mode (`route: "auto"`): a task starts on Haiku with effort low and moves to Sonnet with effort high when the
+  tests fail twice, the watcher reports 3 strikes, you type `/escalate`, or the context passes 100,000 tokens. Measured
+  on 28 tasks at 9.6 % of the cost; the hold-out is still running. See [`docs/ROUTING.md`](docs/ROUTING.md).
 - Searches run on a cheaper model. In one request 12,218 tokens of searching stayed on Claude Haiku, the main model
   used 8,669.
 - Long command output is shortened before the main model reads it. In one run 6,947 characters became 168.
@@ -231,7 +234,7 @@ or output selects the plain chat by itself.
 
 Commands: `/new` (or F5), `/model` (`r` role models, `e` effort), `/providers` (connect a provider), `/sessions`, `/setup`, `/undo`, `/jobs`,
 `/scout [auto|web|offer|off]`, `/crew`, `/map`, `/go TEXT`, `/note TEXT`, `/btw TEXT`, `/rules [session|global] TEXT`, `/forge TOPIC`,
-`/unravel`, `/forget TEXT`, `/stats`, `/cost`, `/context TEXT`, `/route`, `/tools`, `/agents`, `/orchestrate GOAL`,
+`/unravel`, `/forget TEXT`, `/stats`, `/cost`, `/context TEXT`, `/route [auto|fixed]`, `/escalate`, `/tools`, `/agents`, `/orchestrate GOAL`,
 `/cluster GOAL [--profile NAME]`, `/clusters`.
 `/brain [write]`, `/mcp [probe|add NAME COMMAND|remove NAME|allow NAME|deny NAME|call SERVER TOOL JSON]`,
 `/screen tools|open URL|see|click ID|desktop`, `/cursor X Y [click]`, `/export`, `/price MODEL IN OUT`, `/auto`,
@@ -255,7 +258,9 @@ it. A `$name(...)` call runs an agent; the same form in `/orchestrate` or on the
 
 `/search WORDS` runs the ranked search, `/research QUESTION` runs the cited research report, and `penelope research
 QUESTION` does the same on the command line. The design, engine table and limits are in
-[`docs/SEARCH.md`](docs/SEARCH.md).
+[`docs/SEARCH.md`](docs/SEARCH.md). `/research deep QUESTION` and `penelope research --deep QUESTION` run the multi-round
+method with a plan, parallel researchers, a gap loop, checked citations and an assumptions list; see
+[`docs/DEEP-RESEARCH.md`](docs/DEEP-RESEARCH.md).
 
 The side panel shows the woven square. Its loose thread at the lower right takes the colour of the mood:
 
@@ -355,6 +360,8 @@ penelope doctor
   "weak": {"kind": "claude-cli", "model": "haiku"},
   "run_policy": "safe",
   "edit_policy": "ask",
+  "route": "fixed",
+  "route_context_limit": 100000,
   "test_command": "",
   "test_attempts": 3,
   "delegate": "auto",

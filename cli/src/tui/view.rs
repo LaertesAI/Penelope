@@ -16,11 +16,11 @@ fn fg(c: art::Rgb) -> Style {
     Style::default().fg(col(c))
 }
 
-fn on(c: art::Rgb, bg: art::Rgb) -> Style {
+pub(super) fn on(c: art::Rgb, bg: art::Rgb) -> Style {
     Style::default().fg(col(c)).bg(col(bg))
 }
 
-fn bold(c: art::Rgb) -> Style {
+pub(super) fn bold(c: art::Rgb) -> Style {
     fg(c).add_modifier(Modifier::BOLD)
 }
 
@@ -37,14 +37,14 @@ fn num(n: u64) -> String {
 }
 
 /// Writes text at (x, y), cut at the right edge of `area`.
-fn put(f: &mut Frame, area: Rect, x: u16, y: u16, text: &str, style: Style) {
+pub(super) fn put(f: &mut Frame, area: Rect, x: u16, y: u16, text: &str, style: Style) {
     if y < area.y || y >= area.bottom() || x >= area.right() {
         return;
     }
     f.buffer_mut().set_stringn(x, y, text, (area.right() - x) as usize, style);
 }
 
-fn fill(f: &mut Frame, area: Rect, bg: art::Rgb) {
+pub(super) fn fill(f: &mut Frame, area: Rect, bg: art::Rgb) {
     let area = area.intersection(f.area());
     f.buffer_mut().set_style(area, Style::default().bg(col(bg)));
 }
@@ -138,7 +138,12 @@ fn footer(f: &mut Frame, app: &App, area: Rect) {
     let right = format!("penelope {}", env!("CARGO_PKG_VERSION"));
     put(f, area, area.x + 2, area.y, &clip(&cwd, (area.width as usize).saturating_sub(width(&right) + 6)), fg(DIM));
     put(f, area, area.right().saturating_sub(width(&right) as u16 + 2), area.y, &right, fg(DIM));
-    let _ = app;
+    // The model and its effort sit left of the version, so an effort change shows at once.
+    let model = app.model_label();
+    let at = area.right().saturating_sub((width(&right) + width(&model) + 6) as u16);
+    if at > area.x + 2 + width(&cwd).min(12) as u16 {
+        put(f, area, at, area.y, &model, fg(SEA));
+    }
 }
 
 /// The input box with its lower edge on `bottom`. Returns the row above the box.
@@ -367,6 +372,49 @@ fn transcript(app: &App, w: usize) -> Vec<Line<'static>> {
             }
         }
     }
+    if let Some(since) = app.busy.filter(|_| !app.streaming) {
+        if !out.is_empty() {
+            out.push(Line::default());
+        }
+        out.extend(loom(app, w, since.elapsed().as_secs()));
+    }
+    out
+}
+
+/// What the loom says while the model works, one phase every three seconds.
+const LOOM_PHASES: [&str; 4] = ["warping the loom", "casting the shuttle", "beating the weft", "reading the pattern"];
+
+/// The waiting block under the transcript: a shuttle runs along the weft between two posts, woven thread behind it,
+/// open warp ahead. Below it the tail of the model's thinking, when the provider streams it.
+pub fn loom(app: &App, w: usize, secs: u64) -> Vec<Line<'static>> {
+    let span = w.saturating_sub(34).clamp(8, 40);
+    let step = (app.tick / 2) as usize % (2 * span);
+    let (at, right) = if step < span { (step, true) } else { (2 * span - 1 - step, false) };
+    let mut weft: Vec<Span<'static>> = vec![Span::raw("  "), Span::styled("╪", fg(ASH))];
+    for i in 0..span {
+        let span_style = if i == at {
+            Span::styled("◆", bold(SEA))
+        } else if (right && i < at) || (!right && i > at) {
+            Span::styled("═", fg(CLAY))
+        } else {
+            Span::styled("┄", fg(DIM))
+        };
+        weft.push(span_style);
+    }
+    weft.push(Span::styled("╪", fg(ASH)));
+    let working = app.mood() == Mood::Working;
+    let phase = if working { "a tool runs" } else { LOOM_PHASES[(secs / 3) as usize % LOOM_PHASES.len()] };
+    weft.push(Span::styled(format!("  {} · {}s", phase, secs), fg(ASH)));
+    let mut out = vec![Line::from(weft)];
+    let thought: String = app.thinking.split_whitespace().collect::<Vec<_>>().join(" ");
+    if !thought.is_empty() {
+        let rows = wrap_plain(&thought, w.saturating_sub(8).max(10));
+        let first = rows.len().saturating_sub(2);
+        for (i, row) in rows.into_iter().skip(first).enumerate() {
+            let lead = if i == 0 { "    ↳ " } else { "      " };
+            out.push(Line::from(vec![Span::styled(lead, fg(DIM)), Span::styled(row, fg(DIM).add_modifier(Modifier::ITALIC))]));
+        }
+    }
     out
 }
 
@@ -510,7 +558,7 @@ fn sidebar(f: &mut Frame, app: &App, area: Rect) {
 }
 
 /// A dialog in the middle of `area`. Returns the inner rectangle below the title row.
-fn dialog(f: &mut Frame, area: Rect, title: &str, want_w: u16, want_h: u16) -> Rect {
+pub(super) fn dialog(f: &mut Frame, area: Rect, title: &str, want_w: u16, want_h: u16) -> Rect {
     let w = want_w.min(area.width.saturating_sub(4)).max(10).min(area.width);
     let h = want_h.min(area.height.saturating_sub(2)).max(3).min(area.height);
     let rect = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
@@ -815,6 +863,15 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
         Overlay::PluginCommands { plugin, sel, scroll } => plugin_commands_dialog(f, app, area, plugin, *sel, *scroll),
         Overlay::Apps { sel, scroll } => apps_dialog(f, app, area, *sel, *scroll),
         Overlay::AppInstall { prepared } => app_install_dialog(f, area, prepared),
+        Overlay::FolderTrust { path, lines, .. } => {
+            let inner = dialog(f, area, "Enter folder", 96, 20);
+            put(f, inner, inner.x, inner.y, &clip(&format!("{} has its own settings. They would apply:", tilde(&path.display().to_string())), inner.width as usize), on(PAPER, RAISED).add_modifier(Modifier::BOLD));
+            let room = inner.height.saturating_sub(5) as usize;
+            for (i, line) in lines.iter().take(room).enumerate() {
+                put(f, inner, inner.x, inner.y + 2 + i as u16, &clip(line, inner.width as usize), on(ASH, RAISED));
+            }
+            put(f, inner, inner.x, inner.bottom().saturating_sub(1), "y or enter loads them and enters · n or esc stays", on(CLAY, RAISED));
+        }
         Overlay::ApiKey { label, input, cursor, error, .. } => api_key_dialog(f, app, area, label, input, *cursor, error),
         Overlay::None => {}
         Overlay::Palette { query, sel } => {
@@ -836,9 +893,16 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
                 put(f, row, inner.right().saturating_sub(cmd.key.len() as u16), y, cmd.key, on(if chosen { INK } else { DIM }, bg));
             }
         }
-        Overlay::Models { sel, target } => {
-            let choices = app.model_choices(target);
-            let inner = dialog(f, area, &format!("Models · {}", target_label(target)), 84, choices.len().min(20) as u16 + 10);
+        Overlay::Models { sel, target, filter } => {
+            let rows = app.model_rows_filtered(target, filter);
+            // display lines: a header per provider group, then its rows; headers carry no row index
+            let mut lines: Vec<(Option<usize>, String, usize)> = Vec::new();
+            for (provider, first, n) in super::row_groups(&rows) {
+                lines.push((None, provider, n));
+                for i in first..first + n { lines.push((Some(i), String::new(), 0)); }
+            }
+            let shown = 20usize;
+            let inner = dialog(f, area, &format!("Models · {}", target_label(target)), 84, lines.len().min(shown) as u16 + 10);
             let current = target_value(app, target)["model"].as_str().unwrap_or("?").to_string();
             let current_levels = app.model_efforts(target, &current);
             let current_effort = if current_levels.is_empty() { "no effort".to_string() }
@@ -847,24 +911,38 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
             if !app.model_source.is_empty() {
                 put(f, inner, inner.x, inner.y, &clip(&app.model_source, inner.width as usize), on(DIM, RAISED));
             }
-            let first = if choices.len() > 20 { sel.saturating_sub(19) } else { 0 };
-            for (i, name) in choices.iter().enumerate().skip(first).take(20) {
-                let y = inner.y + 2 + (i - first) as u16;
-                let chosen = i == (*sel).min(choices.len().saturating_sub(1));
-                let bg = if chosen { NIGHT } else { RAISED };
-                fill(f, Rect::new(inner.x.saturating_sub(1), y, inner.width + 2, 1), bg);
-                put(f, inner, inner.x, y, if *name == current { "●" } else { "○" }, on(if *name == current { SEA } else { DIM }, bg));
-                put(f, inner, inner.x + 2, y, &clip(name, 46), on(PAPER, bg));
-                let effort = app.model_efforts(target, name).join(" ");
-                put(f, inner, inner.x + 50, y, &clip(if effort.is_empty() { "no effort" } else { &effort }, 28), on(DIM, bg));
+            put(f, inner, inner.x, inner.y + 1, &clip(&format!("filter: {}▏", filter), inner.width as usize), on(if filter.is_empty() { DIM } else { PAPER }, RAISED));
+            let at = (*sel).min(rows.len().saturating_sub(1));
+            let disp_sel = lines.iter().position(|(i, _, _)| *i == Some(at)).unwrap_or(0);
+            let first = if lines.len() > shown { disp_sel.saturating_sub(shown - 1) } else { 0 };
+            if rows.is_empty() {
+                put(f, inner, inner.x, inner.y + 2, "no model matches the filter", on(ASH, RAISED));
             }
-            let selected = choices.get(*sel).cloned().unwrap_or_default();
-            let selected_label = app.model_cache.get(&provider).and_then(|list| list.iter().find(|m| m.id == selected)).map(|m| m.label.clone())
-                .or_else(|| crate::providers::models(&provider).iter().find(|m| m.id == selected).map(|m| m.label.to_string()))
+            for (d, (index, group, count)) in lines.iter().enumerate().skip(first).take(shown) {
+                let y = inner.y + 2 + (d - first) as u16;
+                let Some(i) = index else {
+                    fill(f, Rect::new(inner.x.saturating_sub(1), y, inner.width + 2, 1), RAISED);
+                    let head = format!("{} · {} models", super::provider_label(group), count);
+                    put(f, inner, inner.x, y, &clip(&head, inner.width as usize), bold(CLAY).bg(col(RAISED)));
+                    continue;
+                };
+                let (row_provider, name) = &rows[*i];
+                let chosen = *i == at;
+                let bg = if chosen { NIGHT } else { RAISED };
+                let is_current = *name == current && *row_provider == provider;
+                fill(f, Rect::new(inner.x.saturating_sub(1), y, inner.width + 2, 1), bg);
+                put(f, inner, inner.x + 1, y, if is_current { "●" } else { "○" }, on(if is_current { SEA } else { DIM }, bg));
+                put(f, inner, inner.x + 3, y, &clip(name, 34), on(PAPER, bg));
+                let effort = app.provider_efforts(row_provider, name).join(" ");
+                put(f, inner, inner.x + 59, y, &clip(if effort.is_empty() { "no effort" } else { &effort }, 24), on(DIM, bg));
+            }
+            let (selected_provider, selected) = rows.get(*sel).cloned().unwrap_or_default();
+            let selected_label = app.model_cache.get(&selected_provider).and_then(|list| list.iter().find(|m| m.id == selected)).map(|m| m.label.clone())
+                .or_else(|| crate::providers::models(&selected_provider).iter().find(|m| m.id == selected).map(|m| m.label.to_string()))
                 .unwrap_or_else(|| selected.clone());
             let note = format!("{} · current {} / effort {}", selected_label, current, current_effort);
             put(f, inner, inner.x, inner.bottom().saturating_sub(2), &clip(&note, inner.width as usize), on(CLAY, RAISED));
-            put(f, inner, inner.x, inner.bottom().saturating_sub(1), "↑↓ · tab main/weak · r roles · e effort · enter chooses · esc", on(DIM, RAISED));
+            put(f, inner, inner.x, inner.bottom().saturating_sub(1), "type filters · ↑↓ · ←→ provider · tab main/weak · ^r roles · ^e effort · esc", on(DIM, RAISED));
         }
         Overlay::Pager { title, lines, scroll } => {
             let widest = lines.iter().map(|l| width(l)).max().unwrap_or(20) as u16;
@@ -903,6 +981,7 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
             }
             put(f, inner, inner.x, y + 1, "enter or the number chooses · esc closes without an answer", on(DIM, RAISED));
         }
+        Overlay::Ask { dialog, .. } => super::ask::draw(f, area, dialog, crate::ask::now_secs()),
         Overlay::Sessions { sel } => {
             let all = crate::sessions::all(&app.ctx);
             let inner = dialog(f, area, "Sessions", 92, all.len().min(16) as u16 + 7);
@@ -929,6 +1008,7 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
                 put(f, inner, inner.x, inner.y + 2, "no session yet. A session is stored after its first answer.", on(DIM, RAISED));
             }
         }
+        Overlay::Graph(view) => super::graph::draw(f, area, view),
         Overlay::Brain { scroll } => {
             let body = crate::brain::ascii(&app.ctx);
             let lines: Vec<&str> = body.lines().collect();

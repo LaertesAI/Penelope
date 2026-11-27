@@ -1,0 +1,591 @@
+Rechnung
+
+Rechnungsnummer: RE-2026-1187
+Rechnungsdatum: 20.11.2026
+Kundennummer: KD-20481
+
+Nordlicht Gartenbau GmbH
+⟦address|Am Deich 8⟧
+⟦address|24103 Kiel⟧
+USt-IdNr.: DE 284 117 566
+Telefon: ⟦phone|0431 40822-0⟧
+
+Rechnungsempfängerin:
+Frau ⟦name|Gertrud Petersen⟧
+⟦address|Rosenweg 3⟧
+⟦address|24937 Flensburg⟧
+
+Pos. | Artikelnummer | Bezeichnung | Menge | Einzel | Gesamt
+1 | RH-4021 | Heckenrose Rosa rugosa 60–80 cm | 12 | 9,90 € | 118,80 €
+2 | ER-1180 | Pflanzerde 40 l | 4 | 6,50 € | 26,00 €
+3 | ST-0912 | Lohnstunde Gartengestaltung | 3 | 48,00 € | 144,00 €
+
+Zwischensumme netto: 288,80 €
+Umsatzsteuer 19 %: 54,87 €
+Rechnungsbetrag: 343,67 €
+
+Zahlbar bis 14.12.2026 auf IBAN ⟦iban⟧, BIC NOLADE21KIE.
+Es gelten die Allgemeinen Geschäftsbedingungen.
+
+=====
+Firmen-Messenger „Werkbank“ — Kanal #projekt-falke, Donnerstag, 19.11.2026
+
+[09:02] ⟦name|Emre Şahin⟧: Morgen zusammen. Hat jemand das Angebot vom Blechzulieferer gesehen?
+[09:04] ⟦name|Leon Brandt⟧: Ja, AN-2026-0812 liegt im Ordner. Netto 4.780,00 €, Lieferzeit drei Wochen.
+[09:05] ⟦name|Selin Arslan⟧: Passt preislich, aber die Rechnung RE-2026-0715 vom letzten Auftrag ist noch offen.
+[09:11] ⟦name|Hedwig Maier⟧: Ich kläre das bis 14 Uhr mit der Buchhaltung, Kontodaten liegen bereit.
+[09:12] ⟦name|Leon Brandt⟧: Super, danke. Dann gebe ich heute noch die Bestellung frei.
+[09:20] ⟦name|Emre Şahin⟧: Denkt an den Abnahmetermin am 02.12.2026, 09:30 Uhr, Halle 4.
+
+=====
+Angebot
+
+Angebotsnummer: AN-2026-0921
+Datum: 17.11.2026
+Gültig bis: 15.01.2027
+
+Glaswerk Donau GmbH
+⟦address|Bahnhofstraße 22⟧
+⟦address|85049 Ingolstadt⟧
+Geschäftsführer: ⟦name|Xaver Steinbrecher⟧
+USt-IdNr.: DE 276 334 809
+HRB 19482
+Telefon: ⟦phone|0841 93374-0⟧
+
+Angebotsempfängerin:
+⟦name|Katarzyna Nowak⟧
+⟦address|Münchener Straße 7⟧
+⟦address|85049 Ingolstadt⟧
+
+Pos. | Artikel | Bezeichnung | Menge | Einzel | Gesamt
+1 | FK-3300 | Fensterelement weiß 120×140 cm | 3 | 485,00 € | 1.455,00 €
+2 | BT-3312 | Balkontür Kunststoff | 1 | 920,00 € | 920,00 €
+3 | MO-0010 | Montage inkl. Entsorgung | pausch. | | 640,00 €
+
+Netto 3.015,00 €, zzgl. 19 % MwSt. 572,85 €, brutto 3.587,85 €.
+Material: Kunststoff, 3-fach-Verglasung, Uw 0,77 W/(m²K). Aufmaß-Termine täglich ab 07:30 Uhr.
+
+=====
+Arbeitsunfähigkeitsbescheinigung
+
+Ausgestellt am: 18.11.2026
+
+Patientin:
+⟦name|Lina Hartmann⟧
+geboren am ⟦birth_date|08.11.1999⟧
+⟦address|Gartenstraße 9⟧
+⟦address|99084 Erfurt⟧
+
+Arbeitsunfähig seit 18.11.2026, voraussichtlich bis 24.11.2026 (Erstbescheinigung).
+
+Ausstellende Praxis:
+Dr. ⟦name|Kunibert Albers⟧, Facharzt für Allgemeinmedizin
+⟦address|Anger 21⟧
+⟦address|99084 Erfurt⟧
+Telefon ⟦phone|0361 562 771⟧
+
+Arbeitgeber:
+Papier & Druckerei Eberswalde GmbH
+⟦address|Breite Straße 31⟧
+⟦address|16225 Eberswalde⟧
+
+=====
+Arbeitsvertrag
+
+Zwischen
+
+LogistikWerk Rhein-Ruhr GmbH
+⟦address|Emmericher Straße 118⟧
+⟦address|46446 Emmerich am Rhein⟧
+vertreten durch den Geschäftsführer ⟦name|Hakan Öztürk⟧
+
+– im Folgenden „Arbeitgeber“ –
+
+und
+
+Herrn ⟦name|Jakub Kowalski⟧
+geboren am ⟦birth_date|14.02.1988⟧
+wohnhaft ⟦address|Steinstraße 41⟧
+⟦address|47119 Duisburg⟧
+Steuer-Identifikationsnummer ⟦tax_id⟧
+
+– im Folgenden „Arbeitnehmer“ –
+
+wird folgender Vertrag geschlossen:
+
+§ 1 Beginn und Dauer: Das Arbeitsverhältnis beginnt am 01.02.2027 und ist unbefristet.
+§ 2 Tätigkeit: Der Arbeitnehmer wird als Berufskraftfahrer im Fernverkehr eingesetzt.
+§ 3 Arbeitszeit: 40 Stunden wöchentlich.
+§ 4 Vergütung: 3.150,00 € brutto monatlich, zahlbar zum Monatsende.
+§ 5 Urlaub: 28 Arbeitstage pro Kalenderjahr.
+§ 6 Kündigungsfristen: Es gelten die gesetzlichen Fristen.
+
+Emmerich am Rhein, 21.11.2026
+
+Arbeitgeber: ⟦name|Hakan Öztürk⟧
+Arbeitnehmer: ⟦name|Jakub Kowalski⟧
+Kontakt Arbeitnehmer: ⟦phone|0152 4408923⟧, ⟦email|jakub.kowalski@example.de⟧
+
+=====
+Von: ⟦name|Irina Petrova⟧ <⟦email|irina.petrova@example.de⟧>
+An: ⟦name|Sergei Volkov⟧ <⟦email|sergei.volkov@example.de⟧>
+Betreff: Mahnlauf November – Fristen
+Datum: Freitag, 20.11.2026, 08:41 Uhr
+
+Hallo ⟦name|Sergei⟧,
+
+der Mahnlauf für die offenen Posten aus Oktober startet am 01.12.2026 um 06:00 Uhr. Bitte prüf bis dahin die drei Rechnungen des Kunden ⟦name|Ibrahima Sow⟧ (Kundennummer KD-55120) – die offene Summe liegt bei 4.312,80 €.
+
+Die Mahngebühr beträgt 5,00 €, Verzugszinsen 9 Prozentpunkte über dem Basiszinssatz. Wer noch nicht erfasst ist, meldet sich bitte bis 27.11.2026 bei der Debitorenbuchhaltung.
+
+Viele Grüße
+⟦name|Irina Petrova⟧
+
+=====
+Kündigung des Arbeitsverhältnisses
+
+⟦name|Elena Sokolova⟧
+⟦address|Fichtenweg 18⟧
+⟦address|04315 Leipzig⟧
+Telefon: ⟦phone|0176 5582014⟧
+E-Mail: ⟦email|elena.sokolova@example.de⟧
+
+An
+Cleantech Solar GmbH
+Personalabteilung
+⟦address|Am Messegelände 7⟧
+⟦address|04103 Leipzig⟧
+
+Leipzig, 23.11.2026
+
+Sehr geehrte Damen und Herren,
+
+hiermit kündige ich mein seit dem 01.06.2021 bestehendes Arbeitsverhältnis fristgerecht zum 31.01.2027, hilfsweise zum nächstmöglichen Termin.
+
+Bitte bestätigen Sie mir den Erhalt der Kündigung schriftlich und stellen Sie ein qualifiziertes Arbeitszeugnis aus.
+
+Mit freundlichen Grüßen
+⟦name|Elena Sokolova⟧
+
+=====
+Mahnung
+
+Mahnstufe: 2
+Mahnungsnummer: MA-2026-0441
+Datum: 24.11.2026
+
+Möbelwerkstatt Rügen GmbH
+⟦address|Hafenstraße 14⟧
+⟦address|18546 Sassnitz⟧
+Telefon ⟦phone|038378 550-12⟧
+
+An
+Herrn ⟦name|Bruno Wessel⟧
+⟦address|Kiefernweg 9⟧
+⟦address|17419 Ahlbeck⟧
+Kundennummer: KD-10922
+
+Sehr geehrter Herr ⟦name|Wessel⟧,
+
+unsere Rechnung RE-2026-0942 vom 03.09.2026 über 1.284,50 € ist trotz Fälligkeit zum 17.09.2026 noch nicht beglichen.
+
+Wir fordern Sie auf, den Gesamtbetrag einschließlich einer Mahngebühr von 5,00 € bis spätestens 05.12.2026 zu überweisen. Bei fristgerechtem Zahlungseingang gilt die Angelegenheit als erledigt.
+
+IBAN: ⟦iban⟧
+BIC: GENODEF1STZ
+
+Mit freundlichen Grüßen
+⟦name|Otto Rickmers⟧, Debitorenbuchhaltung
+
+=====
+Datenexport Kundenstamm (CSV, Trennzeichen Semikolon)
+
+Kundennummer;Nachname;Vorname;Straße_Hausnr;PLZ_Ort;Telefon;E-Mail;Geburtsdatum
+KD-1001;⟦name|Yılmaz⟧;⟦name|Ayşe⟧;⟦address|Werkstraße 5⟧;⟦address|44137 Dortmund⟧;⟦phone|0231 912 884⟧;⟦email|ayse.yilmaz@example.de⟧;⟦birth_date|22.03.1985⟧
+KD-1002;⟦name|Diop⟧;⟦name|Fatou⟧;⟦address|Parkallee 12⟧;⟦address|60311 Frankfurt am Main⟧;⟦phone|069 7365 09⟧;⟦email|fatou.diop@example.de⟧;⟦birth_date|30.07.1992⟧
+KD-1003;⟦name|von Thurn⟧;⟦name|Fidelius⟧;⟦address|Schlossberg 1⟧;⟦address|83209 Prien am Chiemsee⟧;⟦phone|08051 41 88⟧;⟦email|fidelius.vonthurn@example.de⟧;⟦birth_date|05.01.1968⟧
+KD-1004;⟦name|Freytag⟧;⟦name|Conradin⟧;⟦address|Marktplatz 8⟧;⟦address|97070 Würzburg⟧;⟦phone|0931 2054 18⟧;⟦email|conradin.freytag@example.de⟧;⟦birth_date|11.12.1996⟧
+KD-1005;⟦name|Tran⟧;⟦name|Thi Lan⟧;⟦address|Rheinstraße 77⟧;⟦address|40210 Düsseldorf⟧;⟦phone|0211 884 731⟧;⟦email|lan.tran@example.de⟧;⟦birth_date|19.04.1990⟧
+
+=====
+Lieferschein
+
+Lieferscheinnummer: LS-2026-4471
+Datum: 18.11.2026
+Kundennummer: KD-77510
+Bestellnummer: BE-2026-7719
+
+Hanseatische Elektrogroßhandel KG
+⟦address|Große Elbstraße 145⟧
+⟦address|20457 Hamburg⟧
+
+Lieferadresse:
+⟦name|Mehmet Yılmaz⟧
+⟦address|Gewerbehof 3⟧
+⟦address|44309 Dortmund⟧
+
+Pos. | Artikelnummer | Bezeichnung | Menge
+1 | 88512 | Leitungsschutzschalter LS B16 | 40
+2 | 88577 | FI-Schutzschalter 40 A / 30 mA | 12
+3 | 92103 | Kabel NYM-J 3×1,5 mm², 100-m-Ring | 8
+4 | 71004 | Abzweigdose AP, IP65 | 20
+
+Anlieferung: 18.11.2026, 14:05 Uhr, Rampe 2. Ware in einwandfreiem Zustand übernommen.
+Empfangen: ____________________ (Unterschrift)
+Telefon für Rückfragen: ⟦phone|0231 387450⟧
+
+=====
+Mietvertrag über Wohnraum
+
+Zwischen
+
+Frau ⟦name|Roswitha von Falkenberg⟧
+⟦address|Schlossallee 5⟧
+⟦address|32756 Detmold⟧
+Telefon ⟦phone|05231 28741⟧
+
+– Vermieterin –
+
+und
+
+Frau ⟦name|Amara Diallo⟧
+geboren am ⟦birth_date|29.09.1995⟧
+⟦address|Hauptstraße 2⟧
+⟦address|32756 Detmold⟧
+
+– Mieterin –
+
+wird folgender Mietvertrag geschlossen:
+
+§ 1 Mietobjekt: Wohnung im 2. Obergeschoss, ⟦address|Blumenstraße 11⟧, ⟦address|32756 Detmold⟧, Wohnfläche 68 m².
+§ 2 Mietbeginn und Dauer: Das Mietverhältnis beginnt am 01.01.2027 und ist unbefristet.
+§ 3 Miete: Kaltmiete 640,00 €, Nebenkostenvorauszahlung 140,00 €, gesamt 780,00 € monatlich.
+§ 4 Kaution: 1.920,00 €, zahlbar in drei Raten.
+§ 5 Kündigung: Die Kündigungsfrist beträgt drei Monate.
+
+Zahlungen auf IBAN ⟦iban⟧, BIC DEUTDEDB450.
+
+Detmold, 25.11.2026
+
+Vermieterin: ⟦name|Roswitha von Falkenberg⟧
+Mieterin: ⟦name|Amara Diallo⟧
+
+=====
+Protokoll der Besprechung
+
+Projekt: „Werkzeugwechsel 2.0“
+Datum: 19.11.2026, 09:00–10:30 Uhr
+Ort: Konferenzraum 3, Gebäude B
+
+Teilnehmende:
+⟦name|El-Amin, Hassan⟧ (Projektleitung)
+⟦name|Schulz, Anna-Lena⟧ (Einkauf)
+⟦name|Wójcik, Marek⟧ (Produktion)
+⟦name|Okafor, Ngozi⟧ (Qualität)
+
+Entschuldigt:
+⟦name|Conti, Giulia⟧ (Controlling)
+
+TOP 1 Lieferantenauswahl: Das Angebot AN-2026-0874 wird angenommen, Auftragsvolumen 28.400,00 €.
+TOP 2 Zeitplan: Meilenstein 1 bis 15.12.2026, Meilenstein 2 bis 28.02.2027.
+TOP 3 Qualitätssicherung: ⟦name|Okafor⟧ legt bis 03.12.2026 einen Prüfplan vor.
+
+Nächster Termin: 03.12.2026, 10:00 Uhr.
+Protokoll geführt von: ⟦name|Schulz⟧
+
+=====
+Bewerbung
+
+⟦name|Nguyen Van Minh⟧
+⟦address|Seestraße 25⟧
+⟦address|01067 Dresden⟧
+Telefon ⟦phone|0157 3390182⟧
+E-Mail ⟦email|minh.nguyen@example.de⟧
+
+Nordstern IT Solutions GmbH
+Personalabteilung
+⟦address|Königsbrücker Straße 44⟧
+⟦address|01099 Dresden⟧
+
+Dresden, 20.11.2026
+
+Bewerbung als Fachinformatiker für Anwendungsentwicklung
+
+Sehr geehrte Damen und Herren,
+
+mit großem Interesse bewerbe ich mich auf die ausgeschriebene Stelle. Nach meiner Ausbildung zum Fachinformatiker bei der DataFlow AG habe ich drei Jahre Erfahrung in der Entwicklung von Backend-Systemen gesammelt.
+
+Gern überzeuge ich Sie in einem persönlichen Gespräch.
+
+Mit freundlichen Grüßen
+⟦name|Nguyen Van Minh⟧
+
+Anlagen: Lebenslauf, Zeugnisse, Zertifikate
+
+=====
+Handwerkerauftrag / Werkvertrag
+
+Auftraggeberin:
+⟦name|Agnieszka Zielińska⟧
+⟦address|Ringstraße 17⟧
+⟦address|39110 Magdeburg⟧
+Telefon ⟦phone|0391 611 394⟧
+
+Auftragnehmer:
+Malermeister ⟦name|Zephyr Brandtner⟧
+⟦address|Handwerksgasse 6⟧
+⟦address|39112 Magdeburg⟧
+Telefon ⟦phone|0159 887 2204⟧
+
+Auftrag: Malerarbeiten Wohnzimmer und Flur
+Umfang: Decken und Wände streichen, ca. 74 m², 2× Weiß, Material inklusive.
+
+Positionen:
+1. Decke glatt, 32 m² à 7,50 € = 240,00 €
+2. Wandflächen, 42 m² à 6,80 € = 285,60 €
+3. Abkleben und Abdecken, pauschal 60,00 €
+
+Netto 585,60 €, zzgl. 19 % MwSt. 111,26 €, brutto 696,86 €.
+
+Ausführung: 08.12.–09.12.2026, jeweils ab 07:30 Uhr.
+Zahlungsziel: 14 Tage nach Abnahme.
+IBAN: ⟦iban⟧
+
+Magdeburg, 26.11.2026
+
+Auftragnehmer: ⟦name|Zephyr Brandtner⟧
+
+=====
+Angebot
+
+Angebotsnummer: AN-2026-1330
+Angebotsdatum: 23.11.2026
+Gültig bis: 22.12.2026
+
+Agentur Südkreuz GbR
+⟦address|Columbiadamm 88⟧
+⟦address|10965 Berlin⟧
+USt-IdNr.: DE 312 984 175
+Telefon ⟦phone|030 285 44 91⟧
+
+An
+⟦name|Alessandro Ferrari⟧
+Restaurant „La Vela“
+⟦address|Uferweg 12⟧
+⟦address|78464 Konstanz⟧
+
+Angebot: Website-Relaunch inkl. Reservierungssystem
+
+1. Konzeption und Design, 3 Entwürfe — 2.400,00 €
+2. Umsetzung mit CMS — 4.800,00 €
+3. Reservierungsmodul mit Online-Zahlung — 1.900,00 €
+4. Schulung und Übergabe, 4 Stunden — 480,00 €
+
+Netto 9.580,00 €, zzgl. 19 % MwSt. 1.820,20 €, brutto 11.400,20 €.
+Laufzeit: ca. 8 Wochen ab Auftrag.
+
+=====
+Arbeitszeugnis
+
+Frau ⟦name|Chiara Esposito⟧, geboren am ⟦birth_date|17.05.1993⟧, war vom 01.08.2020 bis zum 31.10.2026 bei der Südwind Reisen GmbH, ⟦address|Hafenallee 30⟧, ⟦address|48151 Münster⟧, als Tourismuskauffrau beschäftigt.
+
+Zu ihrem Aufgabengebiet gehörten die Beratung und der Verkauf von Pauschalreisen, die Erstellung von Angeboten sowie die Abwicklung von Reklamationen.
+
+Frau ⟦name|Esposito⟧ erledigte ihre Aufgaben stets zu unserer vollsten Zufriedenheit. Sie zeichnete sich durch ausgeprägte Kundenorientierung und eine strukturierte Arbeitsweise aus. Ihr Verhalten gegenüber Vorgesetzten, Kolleginnen und Kunden war jederzeit vorbildlich.
+
+Sie verlässt unser Unternehmen auf eigenen Wunsch. Wir bedauern ihr Ausscheiden und danken ihr für die stets gute Zusammenarbeit.
+
+Münster, 03.11.2026
+
+Südwind Reisen GmbH
+⟦name|Marco Bianchi⟧
+Geschäftsführer
+
+=====
+Firmen-Messenger „TeamTalk“ — Kanal #buchhaltung, Mittwoch, 18.11.2026
+
+[13:12] ⟦name|Kwame Mensah⟧: Weiß jemand, ob die Rechnung RE-2026-1104 an ⟦name|Blumenhalle Mai⟧ schon raus ist?
+[13:14] ⟦name|Zofia Mazur⟧: Ja, gestern. 2.145,60 € brutto, fällig am 02.12.2026.
+[13:15] ⟦name|Meike⟧: Bei mir liegt noch die Gutschrift GS-2026-081 für den Kunden mit KD-60388 offen.
+[13:19] ⟦name|Yusuf Khalil⟧: Ich mache morgen früh um 08:00 Uhr den Zahlungslauf. Kontodaten sind hinterlegt.
+[13:22] ⟦name|Meike⟧: Perfekt, danke. Dann schließe ich den Monat heute um 17:30 Uhr ab.
+
+=====
+Kundenbeschwerde
+
+Eingegangen am: 24.11.2026, 10:17 Uhr
+Kundennummer: KD-58207
+Bestellnummer: BE-2026-8831
+
+Kundin:
+⟦name|Olga Ivanova⟧
+⟦address|Lange Reihe 63⟧
+⟦address|20099 Hamburg⟧
+Telefon ⟦phone|040 23 18 776⟧
+E-Mail ⟦email|olga.ivanova@example.de⟧
+
+Betreff: Beschwerde über beschädigte Lieferung
+
+Sehr geehrte Damen und Herren,
+
+am 21.11.2026 habe ich die Bestellung BE-2026-8831 (zwei Stehlampen, Artikelnr. SL-2270) erhalten. Eine Lampe ist zerbrochen angekommen, der Schirm ist eingerissen.
+
+Ich bitte um Ersatzlieferung oder Erstattung des Betrags von 139,90 € bis spätestens 08.12.2026.
+
+Mit freundlichen Grüßen
+⟦name|Olga Ivanova⟧
+
+=====
+Reisekostenabrechnung
+
+Antragsteller: ⟦name|Deniz Kaya⟧
+Kostenstelle: KS-4450
+Personalnummer: 77412
+Reisezeitraum: 10.11.2026 bis 12.11.2026
+Reiseziel: Hamburg (Kundentermin Hafenlogistik)
+
+Positionen:
+1. Bahnfahrt Berlin – Hamburg, 2. Klasse, Hin- und Rückfahrt: 156,00 €
+2. Übernachtung Hotel Hafenblick, 2 Nächte à 98,00 €: 196,00 €
+3. Verpflegungsmehraufwand, 3 Tage à 28,00 €: 84,00 €
+
+Gesamtbetrag: 436,00 €
+
+Erstattung auf IBAN ⟦iban⟧.
+
+Datum: 16.11.2026
+Unterschrift: ⟦name|Deniz Kaya⟧
+
+Genehmigt: ⟦name|Brunhild Wetzel⟧, Abteilungsleiterin
+Telefon für Rückfragen: ⟦phone|030 445 87 12⟧
+
+=====
+Schadenmeldung Kfz-Haftpflicht
+
+Versicherungsnummer: VN-884-2215
+Schadennummer: SCH-2026-4091
+Meldung am: 22.11.2026
+
+Versicherungsnehmerin:
+⟦name|Marie-Luise von Winterfeld⟧
+geboren am ⟦birth_date|09.06.1971⟧
+⟦address|Alte Dorfstraße 28⟧
+⟦address|21629 Neu Wulmstorf⟧
+Telefon ⟦phone|040 745 112⟧
+
+Fahrzeug: VW Passat, Baujahr 2019
+Schadenereignis: 21.11.2026, 16:40 Uhr, an einer innerstädtischen Kreuzung in Hamburg.
+
+Hergang: Beim Abbiegen streifte der Unfallgegner mein Fahrzeug im Bereich der vorderen linken Stoßstange.
+
+Unfallgegner:
+⟦name|Mehmet Demirci⟧
+⟦address|Friedrich-Ebert-Damm 140⟧
+⟦address|22047 Hamburg⟧
+Versicherung: Nordwind Versicherung AG
+
+Ich bitte um Regulierung des Schadens.
+
+⟦name|Marie-Luise von Winterfeld⟧
+
+=====
+Kündigung des Mietverhältnisses
+
+⟦name|Hans-Peter Lanzinger⟧
+⟦address|Niederrheinstraße 9⟧
+⟦address|41460 Neuss⟧
+
+An
+Herrn ⟦name|Bruno Steinbach⟧
+⟦address|Düsselstraße 16⟧
+⟦address|40219 Düsseldorf⟧
+
+Neuss, 24.11.2026
+
+Kündigung der Wohnung ⟦address|Niederrheinstraße 9⟧, ⟦address|41460 Neuss⟧
+
+Sehr geehrter Herr ⟦name|Steinbach⟧,
+
+hiermit kündige ich das mit Ihnen bestehende Mietverhältnis über die oben genannte Wohnung fristgerecht zum 28.02.2027, hilfsweise zum nächstmöglichen Termin.
+
+Bitte teilen Sie mir einen Termin für die Wohnungsübergabe mit.
+
+Mit freundlichen Grüßen
+⟦name|Hans-Peter Lanzinger⟧
+Telefon ⟦phone|02131 440 28⟧
+
+=====
+Vollmacht
+
+Ich, ⟦name|Walter Bergner⟧, geboren am ⟦birth_date|02.12.1954⟧, wohnhaft ⟦address|Lindenstraße 4⟧, ⟦address|52062 Aachen⟧, erteile hiermit Frau ⟦name|Gudrun Tischler⟧, wohnhaft ⟦address|Adalbertsteinweg 77⟧, ⟦address|52066 Aachen⟧, Vollmacht, mich in folgenden Angelegenheiten zu vertreten:
+
+1. Abholung und Entgegennahme von Dokumenten bei der Stadtverwaltung Aachen;
+2. Vertretung gegenüber meiner Bank, IBAN ⟦iban⟧;
+3. Unterzeichnung des Übergabeprotokolls für die Garage in ⟦address|Pontstraße 30⟧, ⟦address|52062 Aachen⟧.
+
+Die Vollmacht gilt bis zum 31.12.2027.
+
+Aachen, 25.11.2026
+
+⟦name|Walter Bergner⟧
+
+=====
+Von: ⟦name|Jonas Hesselbach⟧ <⟦email|jonas.hesselbach@example.de⟧>
+An: Team Operations
+Betreff: Umzug Lagerhalle – Terminverschiebung
+Datum: 23.11.2026, 15:34 Uhr
+
+Hallo zusammen,
+
+der Umzug der Lagerhalle 2 verschiebt sich vom 01.12.2026 auf den 05.12.2026, 07:00 Uhr. Grund ist die noch ausstehende Freigabe des Brandschutzes durch den Sachverständigen.
+
+Bitte informiert auch die Spedition Nordblick. ⟦name|Fatima Al-Sayed⟧ übernimmt die Koordination vor Ort und ist unter ⟦phone|0173 558 2910⟧ erreichbar.
+
+Danke und Gruß
+⟦name|Jonas Hesselbach⟧
+
+=====
+Abmahnung
+
+Eiskalte Logistik GmbH
+⟦address|Kälteweg 2⟧
+⟦address|28217 Bremen⟧
+vertreten durch ⟦name|Tunde Adeyemi⟧, Leitung Personal
+
+An
+Frau ⟦name|Fatma Demir⟧
+⟦address|Am Markt 13⟧
+⟦address|28215 Bremen⟧
+
+Bremen, 24.11.2026
+
+Sehr geehrte Frau ⟦name|Demir⟧,
+
+am 12.11.2026 und 13.11.2026 sind Sie ohne Entschuldigung nicht zur Arbeit erschienen. Eine Krankmeldung lag der Personalabteilung bis zum heutigen Tag nicht vor.
+
+Mit diesem Fehlen haben Sie Ihre arbeitsvertraglichen Pflichten verletzt. Wir fordern Sie auf, Ihr Verhalten künftig zuverlässig zu erfüllen. Bei erneutem Verstoß behalten wir uns arbeitsrechtliche Konsequenzen bis hin zur Kündigung vor.
+
+Sie erhalten Gelegenheit zur Stellungnahme bis zum 10.12.2026.
+
+Mit freundlichen Grüßen
+⟦name|Tunde Adeyemi⟧
+
+=====
+Protokoll der Besprechung
+
+Thema: Quartalsabschluss und Personalplanung
+Datum: 24.11.2026, 14:00–15:15 Uhr
+Ort: Besprechungsraum 1
+
+Anwesend:
+⟦name|Mechthild Zorn⟧ (Geschäftsführung)
+⟦name|Andrzej Kaczmarek⟧ (Personal)
+⟦name|Le Thanh⟧ (IT)
+⟦name|Annemarie Huberty⟧ (Buchhaltung)
+
+TOP 1 Quartalszahlen: Umsatz Q3 2026 beträgt 1,42 Mio. €, offene Forderungen 214.300,00 €.
+TOP 2 Einstellungen: Zwei neue Stellen im Support werden zum 01.02.2027 besetzt.
+TOP 3 Umsetzung: ⟦name|Kaczmarek⟧ und ⟦name|Le Thanh⟧ übernehmen die Umsetzung der Ausschreibungen.
+TOP 4 Termine: Jahresabschlussgespräch am 09.12.2026, 09:00 Uhr.
+
+Protokoll: ⟦name|Annemarie Huberty⟧
