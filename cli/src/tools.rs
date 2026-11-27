@@ -219,6 +219,21 @@ pub fn ask_user(question: &str, options: &serde_json::Value) -> String {
     }
 }
 
+/// The tool ask_user with all its arguments. A `questions` list is the dialog of `ask::`, 1 to 6 questions with
+/// headers, options, several answers and free text. Without it the old form (`question` and `options`) runs as before.
+pub fn ask_user_args(ctx: &Ctx, a: &serde_json::Value) -> String {
+    if a.get("questions").map(|q| !q.is_null()).unwrap_or(false) {
+        if crate::scout::inside() {
+            return "a scout cannot ask the user. Report what is unclear.".to_string();
+        }
+        return match crate::ask::parse_questions(&a["questions"]) {
+            Ok(qs) => crate::ask::reply_text(&qs, &crate::ask::ask_questions(&qs, crate::ask::timeout_secs(ctx))),
+            Err(e) => format!("NOT asked. {}", e),
+        };
+    }
+    ask_user(a["question"].as_str().unwrap_or(""), &a["options"])
+}
+
 /// One tool call of a turn: name, the argument shown to the person, whether it worked, the first line of its result.
 pub type Call = (String, String, bool, String);
 
@@ -1342,6 +1357,19 @@ mod tests {
         assert!(ask_user("Which?", &serde_json::json!(["a"])).starts_with("give a question"));
     }
 
+
+    #[test]
+    fn ask_user_keeps_the_old_form_and_validates_the_new_one() {
+        let ctx = Ctx { root: std::env::temp_dir(), cfg: serde_json::json!({}) };
+        // old form: one question, answers as texts
+        assert!(ask_user_args(&ctx, &serde_json::json!({"question": "Which?", "options": ["a"]})).starts_with("give a question"));
+        assert!(ask_user_args(&ctx, &serde_json::json!({"question": "", "options": ["a", "b"]})).starts_with("give a question"));
+        // new form: every fault is named and nothing is asked
+        let bad = ask_user_args(&ctx, &serde_json::json!({"questions": [{"question": "Which?", "options": ["only one"]}]}));
+        assert!(bad.starts_with("NOT asked") && bad.contains("question 1 needs 2 to 6 options"), "{}", bad);
+        assert!(ask_user_args(&ctx, &serde_json::json!({"questions": []})).contains("1 to 6 questions"));
+        assert!(ask_user_args(&ctx, &serde_json::json!({"questions": "Which?"})).starts_with("NOT asked"));
+    }
 
     #[test]
     fn the_sandbox_has_no_network_and_only_the_project_is_writable() {

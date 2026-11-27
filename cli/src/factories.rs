@@ -483,6 +483,14 @@ fn scheduler_disable(ctx: &Ctx, f: &Factory) -> Result<String, String> {
 /// `dry` renders the units and writes neither the profile nor the registry.
 pub fn new_factory(ctx: &Ctx, name: &str, base_name: &str, every: Option<&str>, at: Option<&str>, goal: &str,
                    dry: bool, yes: bool) -> Result<String, String> {
+    new_factory_spec(ctx, name, base_name, every, at, goal, dry, yes, None)
+}
+
+/// `new_factory` with the spec the person confirmed. The profile of the factory carries it under `spec`, and a euro
+/// budget of the spec becomes the `budget_eur` of the profile.
+#[allow(clippy::too_many_arguments)]
+pub fn new_factory_spec(ctx: &Ctx, name: &str, base_name: &str, every: Option<&str>, at: Option<&str>, goal: &str,
+                        dry: bool, yes: bool, spec: Option<&crate::clarify::Spec>) -> Result<String, String> {
     let name = name.trim();
     let base_name = base_name.trim();
     if name.is_empty() || !valid_name(name) {
@@ -541,6 +549,10 @@ pub fn new_factory(ctx: &Ctx, name: &str, base_name: &str, every: Option<&str>, 
     value["every"] = json!(every);
     value["at"] = json!(at);
     value["purpose"] = json!(goal);
+    if let Some(spec) = spec.filter(|s| s.confirmed) {
+        value["spec"] = spec.to_value();
+        if let Some(eur) = spec.budget_eur() { value["budget_eur"] = json!(eur); }
+    }
     crate::clusters::profile_upsert(ctx, name, &value)?;
     let mut all = load(ctx)?;
     all.push(f.clone());
@@ -751,6 +763,28 @@ pub fn cli(ctx: &Ctx, args: &[String]) -> Result<String, String> {
         }
         other => Err(format!("unknown factory command {}. The commands are new, list, install, run and stop.", other)),
     }
+}
+
+/// `/factory new` from the interface: asks for the missing fields first, then creates the factory with the confirmed
+/// spec. Every other verb, a dry run and a session nobody can answer in go straight to `slash`.
+pub fn slash_asked(ctx: &Ctx, rest: &str) -> Result<String, String> {
+    let args: Vec<String> = rest.split_whitespace().map(str::to_string).collect();
+    if args.first().map(String::as_str) != Some("new") || args.iter().any(|a| a == "--dry") || !crate::clarify::can_ask() {
+        return cli(ctx, &args);
+    }
+    let (name, profile, every, at, goal, dry, yes) = parse_new_args(&args[1..])?;
+    let mut preset = serde_json::Map::new();
+    if let Some(e) = &every { preset.insert("schedule".to_string(), json!(format!("every {}", normalize_every(e)?))); }
+    if let Some(a) = &at { preset.insert("schedule".to_string(), json!(format!("at {}", normalize_at(a)?))); }
+    preset.insert("models".to_string(), json!(format!("{} profile", profile)));
+    let request = if goal.trim().is_empty() { crate::clusters::profile(ctx, &profile).ok().and_then(|p| p.purpose).unwrap_or_default() } else { goal.clone() };
+    let done = crate::clarify::clarify(ctx, crate::clarify::Kind::Factory, &request, &preset)?;
+    let schedule = done.spec.get("schedule").unwrap_or("").to_string();
+    let (every, at) = match (every, at) {
+        (None, None) => (schedule.strip_prefix("every ").map(str::to_string), schedule.strip_prefix("at ").map(str::to_string)),
+        other => other,
+    };
+    new_factory_spec(ctx, &name, &profile, every.as_deref(), at.as_deref(), &goal, dry, yes, Some(&done.spec))
 }
 
 /// The slash form of the same parser: `/factory new NAME --profile P --every 3h`.

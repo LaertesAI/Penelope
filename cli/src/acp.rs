@@ -28,11 +28,14 @@ enum Framing {
 struct Protocol {
     out: Mutex<BufWriter<std::io::Stdout>>,
     headers: AtomicBool,
+    /// Requests this server sent to the editor and still waits for, by id.
+    pending: Mutex<HashMap<String, std::sync::mpsc::Sender<Value>>>,
+    next_request: AtomicU64,
 }
 
 impl Protocol {
     fn new() -> Protocol {
-        Protocol { out: Mutex::new(BufWriter::new(std::io::stdout())), headers: AtomicBool::new(false) }
+        Protocol { out: Mutex::new(BufWriter::new(std::io::stdout())), headers: AtomicBool::new(false), pending: Mutex::new(HashMap::new()), next_request: AtomicU64::new(1) }
     }
 
     fn send(&self, message: &Value) {
@@ -54,6 +57,30 @@ impl Protocol {
 
     fn error(&self, id: Value, code: i64, message: impl Into<String>) {
         self.send(&json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message.into()}}));
+    }
+
+    /// Sends a request to the editor and waits for its response. Err holds the JSON-RPC error text, or `timeout`.
+    fn request(&self, method: &str, params: Value, timeout: std::time::Duration) -> Result<Value, String> {
+        let id = format!("penelope-{}", self.next_request.fetch_add(1, Ordering::SeqCst));
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.pending.lock().unwrap_or_else(|e| e.into_inner()).insert(id.clone(), tx);
+        self.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
+        let got = rx.recv_timeout(timeout);
+        self.pending.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+        let response = got.map_err(|_| "timeout".to_string())?;
+        match response.get("error") {
+            Some(e) => Err(e["message"].as_str().unwrap_or("the editor refused the request").to_string()),
+            None => Ok(response["result"].clone()),
+        }
+    }
+
+    /// Hands a response of the editor to the request that waits for it. False if no request waits.
+    fn deliver(&self, id: &Value, response: Value) -> bool {
+        let key = id.as_str().map(String::from).unwrap_or_else(|| id.to_string());
+        match self.pending.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+            Some(tx) => tx.send(response).is_ok(),
+            None => false,
+        }
     }
 
     /// One `session/update` notification. The update object is the ACP union member (`agent_message_chunk`, ...).
@@ -83,6 +110,8 @@ struct Server {
 pub fn run(ctx: &Ctx) -> Result<(), String> {
     let protocol = Arc::new(Protocol::new());
     let server = Server { ctx: ctx.clone(), protocol: protocol.clone(), sessions: Mutex::new(HashMap::new()), seq: AtomicU64::new(1) };
+    let stop_asking = Arc::new(AtomicBool::new(false));
+    start_ask_poller(&protocol, &ctx.root, &stop_asking);
     let stdin = std::io::stdin();
     let mut input = std::io::BufReader::new(stdin.lock());
     let mut framing = Framing::Lines;
@@ -99,7 +128,101 @@ pub fn run(ctx: &Ctx) -> Result<(), String> {
         }
     }
     server.cancel_all();
+    stop_asking.store(true, Ordering::SeqCst);
     Ok(())
+}
+
+/// The session that runs a turn now. A question of the model goes to the editor as part of this session.
+static ASKING_SESSION: Mutex<String> = Mutex::new(String::new());
+
+/// The folder in which the question dialog of the model arrives as files, as in the full screen interface. The tool
+/// runs in this process or in an MCP child that inherits PENELOPE_ASK_DIR.
+fn start_ask_poller(protocol: &Arc<Protocol>, root: &std::path::Path, stop: &Arc<AtomicBool>) {
+    let dir = root.join(format!("ask-acp-{}", std::process::id()));
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    std::env::set_var("PENELOPE_ASK_DIR", &dir);
+    let (protocol, stop) = (protocol.clone(), stop.clone());
+    std::thread::spawn(move || {
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        while !stop.load(Ordering::SeqCst) {
+            if let Ok(entries) = std::fs::read_dir(&dir) {
+                for e in entries.flatten() {
+                    let name = e.file_name().to_string_lossy().to_string();
+                    let Some(id) = name.strip_suffix(".req").map(String::from) else { continue };
+                    if !seen.insert(id.clone()) {
+                        continue;
+                    }
+                    let body: Value = std::fs::read_to_string(e.path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+                    let (protocol, dir) = (protocol.clone(), dir.clone());
+                    std::thread::spawn(move || {
+                        let session = ASKING_SESSION.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                        let answer = answer_questions(&protocol, &session, &body);
+                        let tmp = dir.join(format!("{}.tmp", id));
+                        let _ = std::fs::write(&tmp, answer);
+                        let _ = std::fs::rename(&tmp, dir.join(format!("{}.ans", id)));
+                    });
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    });
+}
+
+/// Shows a question set to the editor with `session/request_permission`, one request per question. A question with
+/// several answers repeats the request until the person picks "Done". An editor without the method gets the questions
+/// as chat text and the model is told to wait for the reply.
+fn answer_questions(protocol: &Protocol, session: &str, body: &Value) -> String {
+    use crate::ask::{answers_file, Answer};
+    let Ok(qs) = crate::ask::parse_questions(&body["questions"]) else { return String::new() };
+    let wait = std::time::Duration::from_secs(body["timeout"].as_u64().unwrap_or(crate::ask::DEFAULT_TIMEOUT));
+    let mut answers: Vec<Answer> = Vec::new();
+    for (qi, q) in qs.iter().enumerate() {
+        let mut picked: Vec<String> = Vec::new();
+        loop {
+            let mut options: Vec<Value> = Vec::new();
+            for (k, o) in q.options.iter().enumerate().filter(|(_, o)| !picked.contains(&o.label)) {
+                let name = if o.description.is_empty() { o.label.clone() } else { format!("{}: {}", o.label, o.description) };
+                options.push(json!({"optionId": k.to_string(), "name": name, "kind": "allow_once"}));
+            }
+            let tail = if q.multi_select && !picked.is_empty() { "Done" } else if q.allow_text { "Other (answer in the chat)" } else { "Skip" };
+            options.push(json!({"optionId": "end", "name": tail, "kind": "reject_once"}));
+            let title = format!("{} ({}/{}): {}", q.header, qi + 1, qs.len(), q.question);
+            let call = json!({"toolCallId": format!("ask-{}-{}", body["deadline"], qi), "title": title, "kind": "other", "status": "pending"});
+            let reply = protocol.request("session/request_permission", json!({"sessionId": session, "toolCall": call, "options": options}), wait);
+            match reply {
+                Err(e) if e == "timeout" => return String::new(),
+                Err(_) => return fallback_text(protocol, session, &qs),
+                Ok(r) => match (r["outcome"]["outcome"].as_str(), r["outcome"]["optionId"].as_str()) {
+                    (Some("selected"), Some(id)) if id != "end" => {
+                        if let Some(o) = id.parse::<usize>().ok().and_then(|k| q.options.get(k)) {
+                            picked.push(o.label.clone());
+                        }
+                        if !q.multi_select || picked.len() == q.options.len() { break; }
+                    }
+                    (Some("selected"), _) => break,
+                    _ => return String::new(),                     // cancelled: the dialog is closed
+                },
+            }
+        }
+        answers.push(if picked.is_empty() { Answer::closed() } else { Answer { labels: picked, text: None, closed: false } });
+    }
+    answers_file(&answers)
+}
+
+/// The editor has no permission request. The questions go into the chat and the model ends its turn.
+fn fallback_text(protocol: &Protocol, session: &str, qs: &[crate::ask::Question]) -> String {
+    let mut text = String::from("Penelope has questions before it goes on. Answer them in your next message:\n");
+    for (i, q) in qs.iter().enumerate() {
+        text.push_str(&format!("\n{}. {}\n", i + 1, q.question));
+        for (k, o) in q.options.iter().enumerate() {
+            text.push_str(&format!("   {}) {}{}\n", (b'a' + k as u8) as char, o.label, if o.description.is_empty() { String::new() } else { format!(": {}", o.description) }));
+        }
+    }
+    protocol.update(session, json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}}));
+    json!({"text_fallback": "the questions were posted in the chat because the editor cannot show a dialog. End your turn now and wait for the answers in the next message."}).to_string()
 }
 
 /// Reads one message in the framing of the connection. A line that starts a JSON object or array is one message; a
@@ -152,8 +275,12 @@ impl Server {
         };
         let id = obj.get("id").cloned().filter(|v| !v.is_null());
         let Some(method) = obj.get("method").and_then(Value::as_str) else {
-            // A response to a request of this server. The server sends no requests of its own, so it is ignored.
-            if !obj.contains_key("result") && !obj.contains_key("error") {
+            // A response to a request of this server (the question dialog). Other responses are ignored.
+            if obj.contains_key("result") || obj.contains_key("error") {
+                if let Some(id) = &id {
+                    self.protocol.deliver(id, value.clone());
+                }
+            } else {
                 if let Some(id) = id {
                     self.protocol.error(id, -32600, "invalid request: no method");
                 }
@@ -231,6 +358,7 @@ impl Server {
         }
         let ctx = self.ctx.clone();
         let protocol = self.protocol.clone();
+        *ASKING_SESSION.lock().unwrap_or_else(|e| e.into_inner()) = session_id.clone();
         std::thread::spawn(move || {
             let outcome = run_turn(&ctx, &session, &session_id, &text, &protocol);
             session.busy.store(false, Ordering::SeqCst);
@@ -444,6 +572,23 @@ mod tests {
         assert!(text.contains("[image omitted"), "{}", text);
         assert_eq!(prompt_text(&json!({"prompt": []})), None);
         assert_eq!(prompt_text(&json!({"prompt": [{"type": "text", "text": "  "}]})), None);
+    }
+
+    #[test]
+    fn a_response_of_the_editor_reaches_the_waiting_request() {
+        let protocol = Arc::new(Protocol::new());
+        let p2 = protocol.clone();
+        let waiter = std::thread::spawn(move || p2.request("session/request_permission", json!({}), std::time::Duration::from_secs(5)));
+        for _ in 0..50 {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            if protocol.deliver(&json!("penelope-1"), json!({"jsonrpc": "2.0", "id": "penelope-1", "result": {"outcome": {"outcome": "selected", "optionId": "1"}}})) {
+                break;
+            }
+        }
+        assert_eq!(waiter.join().unwrap().unwrap()["outcome"]["optionId"], "1");
+        assert!(!protocol.deliver(&json!("penelope-9"), json!({})), "no request waits for this id");
+        let lone = Protocol::new();
+        assert_eq!(lone.request("x", json!({}), std::time::Duration::from_millis(30)), Err("timeout".to_string()));
     }
 
     #[test]
