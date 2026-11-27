@@ -710,7 +710,7 @@ impl App {
 
     /// The model and effort of the main role for the footer: `sonnet · high`, or `haiku · no effort`.
     pub fn model_label(&self) -> String {
-        if let Some(line) = crate::autoroute::label(&self.ctx) {
+        if let Some(line) = crate::autoroute::label(&self.ctx, self.route_chat().as_deref()) {
             return line;
         }
         let (model, levels, current) = self.main_effort();
@@ -727,7 +727,8 @@ impl App {
 
     /// `/route`: the roles and models, with the cost mode on top. `/route auto|fixed` sets the mode.
     fn route_command(&mut self, rest: &str) {
-        match crate::autoroute::command(&mut self.ctx, rest) {
+        let chat = self.route_chat();
+        match crate::autoroute::command(&mut self.ctx, rest, chat.as_deref()) {
             Ok((text, true)) => {
                 save_config(&self.ctx);
                 self.toast(text);
@@ -740,8 +741,13 @@ impl App {
         }
     }
 
+    /// The cost-mode id of the chat on screen. `None` while a turn holds the chat: the latest chat of the root is used.
+    fn route_chat(&self) -> Option<String> {
+        self.chat.as_ref().map(|c| c.route_id().to_string())
+    }
+
     fn escalate_command(&mut self) {
-        match crate::autoroute::escalate_now(&self.ctx) {
+        match crate::autoroute::escalate_now(&self.ctx, self.route_chat().as_deref()) {
             Ok(text) | Err(text) => self.toast(text),
         }
     }
