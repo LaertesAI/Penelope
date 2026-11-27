@@ -355,7 +355,10 @@ fn main() {
             let verb = args.get(1).map(String::as_str).unwrap_or("");
             match verb {
                 "list" | "" => print!("{}", clusters::status_text(&ctx, None)),
-                "status" => print!("{}", clusters::status_text(&ctx, args.get(2).map(String::as_str))),
+                "status" => match clusters::status_checked(&ctx, args.get(2).map(String::as_str)) {
+                    Ok(text) => print!("{}", text),
+                    Err(e) => { loom::warn(&e); std::process::exit(2); }
+                },
                 "dump" => {
                     let id = args.get(2).cloned().unwrap_or_default();
                     if id.is_empty() { loom::warn("usage: penelope cluster dump ID"); std::process::exit(2); }
@@ -430,6 +433,12 @@ fn main() {
                     }
                     let goal = words.join(" ");
                     if dry {
+                        if let Some(name) = shadow.as_deref().filter(|s| !s.trim().is_empty()) {
+                            if let Err(e) = clusters::profile(&ctx, name) {
+                                loom::warn(&format!("--shadow {}: {}", name, e));
+                                std::process::exit(2);
+                            }
+                        }
                         match clusters::dry_run(&ctx, &goal, profile.as_deref()) {
                             Ok(text) => {
                                 print!("{}", text);

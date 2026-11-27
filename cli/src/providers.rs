@@ -151,9 +151,16 @@ pub fn known_label(model: &str) -> Option<&'static str> {
 pub fn known_price(model: &str) -> Option<(f64, f64)> {
     let m = model.to_lowercase();
     let mut best: Option<(usize, f64, f64)> = None;
-    for (name, i, o) in [("claude-haiku-5-5", 0.1, 0.5), ("mimo-v2.6", 0.14, 0.28), ("deepseek-v4.1", 0.15, 0.6),
-                         ("glm-5.3", 0.2, 0.8), ("qwen3.8", 0.2, 0.6), ("kimi-k3", 0.6, 2.5), ("sonnet", 3.0, 15.0),
-                         ("opus", 15.0, 75.0), ("haiku", 0.8, 4.0)] {
+    // Anthropic list prices, read 2026-11-27: https://platform.claude.com/docs/en/about-claude/pricing
+    for (name, i, o) in [("claude-sonnet-5-5", 2.0, 10.0), ("claude-haiku-5-5", 0.1, 0.5),
+                         ("mimo-v2.6", 0.14, 0.28), ("deepseek-v4.1", 0.15, 0.6),
+                         ("glm-5.3", 0.2, 0.8), ("qwen3.8", 0.2, 0.6), ("kimi-k3", 0.6, 2.5), ("sonnet", 2.0, 10.0),
+                         // Older families keep their own list prices; the longest matching name wins.
+                         ("claude-opus-5-5", 4.0, 20.0), ("claude-opus-5", 5.0, 25.0), ("claude-opus-4-5", 5.0, 25.0),
+                         ("claude-opus-4-6", 5.0, 25.0), ("claude-opus-4-7", 5.0, 25.0), ("claude-opus-4-8", 5.0, 25.0),
+                         ("claude-opus-4", 15.0, 75.0),
+                         ("claude-sonnet-5", 2.0, 10.0), ("claude-sonnet-4", 3.0, 15.0), ("claude-haiku-4", 1.0, 5.0),
+                         ("opus", 4.0, 20.0), ("haiku", 0.1, 0.5)] {
         if m.contains(name) && best.map(|(l, _, _)| name.len() > l).unwrap_or(true) {
             best = Some((name.len(), i, o));
         }
@@ -638,7 +645,17 @@ mod tests {
         assert!(is_env_name("GROQ_API_KEY") && !is_env_name("sk-abc123") && !is_env_name("gsk_abc") && !is_env_name(""));
         assert_eq!(known_label("mimo-v2.6-flash"), Some("MiMo V2.6 Flash"));
         assert_eq!(known_price("claude-haiku-5-5"), Some((0.1, 0.5)));
+        assert_eq!(known_price("haiku"), Some((0.1, 0.5)));
+        assert_eq!(known_price("claude-sonnet-5-5"), Some((2.0, 10.0)));
         assert_eq!(known_price("a-model-without-a-price"), None);
+        // An older model is not priced as the newest one of its family.
+        assert_eq!(known_price("claude-haiku-4-5"), Some((1.0, 5.0)));
+        assert_eq!(known_price("claude-sonnet-4-6"), Some((3.0, 15.0)));
+        assert_eq!(known_price("claude-sonnet-5"), Some((2.0, 10.0)));
+        assert_eq!(known_price("claude-opus-4-8"), Some((5.0, 25.0)));
+        assert_eq!(known_price("claude-opus-4-1"), Some((15.0, 75.0)));
+        assert_eq!(known_price("claude-opus-5-5"), Some((4.0, 20.0)));
+        assert_eq!(known_price("claude-opus-5"), Some((5.0, 25.0)));
         assert!(supports_effort("claude-cli", "sonnet") && supports_effort("claude-cli", "claude-opus-5-5"));
         assert!(supports_effort("anthropic", "claude-sonnet-5-5") && default_effort("anthropic", "claude-sonnet-5-5") == "high");
         assert!(!supports_effort("anthropic", "claude-3-5-sonnet"));
