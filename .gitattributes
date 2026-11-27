@@ -7,3 +7,7 @@ cli/tests/data/privacy/*.txt -text
 core/tests/data/eval/*.jsonl -text
 core/tests/data/eval/repo/** -text
 core/tests/data/privacy/*.txt -text
+cli/tests/data/eval/hard_repo/** -text
+cli/tests/data/eval/hard_calib.jsonl -text
+cli/tests/data/eval/hard_holdout.jsonl -text
+cli/tests/data/eval/hard.sha256 -text

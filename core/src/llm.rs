@@ -302,9 +302,12 @@ pub fn chat_cancel(model: &Value, system: &str, history: &[Value], tools: &[Valu
             _ => json!({}),
         } }).collect();
     let mut text = message["content"].as_str().unwrap_or("").trim().to_string();
-    // A server without a tool-call parser hands Qwen's <tool_call> blocks back as text. They become calls here.
-    if calls.is_empty() && (text.contains("<tool_call>") || text.contains(DSML)) {
-        let (found, rest) = text_tool_calls(&text);
+    // A server without a tool-call parser hands Qwen's <tool_call> blocks back as text. They become calls here. The
+    // DSML and GLM templates count only in the text tool format: in native mode an answer that quotes such markup
+    // (from a README or a fetched page) stays text.
+    let templates = model["tool_format"].as_str() == Some("text");
+    if calls.is_empty() && (text.contains("<tool_call>") || (templates && text.contains(DSML))) {
+        let (found, rest) = text_tool_calls_with(&text, templates);
         calls = found;
         text = rest;
     }
@@ -316,7 +319,13 @@ pub fn chat_cancel(model: &Value, system: &str, history: &[Value], tools: &[Valu
 /// Tool calls written as text in the Qwen and Hermes format: one JSON object with `name` and `arguments` between
 /// `<tool_call>` and `</tool_call>`, any number per answer. A `<think>` block is dropped. Returns the calls and the text
 /// that is left, for example the reason after `none:` when no tool fits. A block that does not parse stays in the text.
+/// GLM's `<arg_key>` bodies and DeepSeek's DSML blocks count too.
 pub fn text_tool_calls(content: &str) -> (Vec<ToolCall>, String) {
+    text_tool_calls_with(content, true)
+}
+
+/// `text_tool_calls`; with `templates` false only the JSON block counts, the GLM and DSML templates stay text.
+pub fn text_tool_calls_with(content: &str, templates: bool) -> (Vec<ToolCall>, String) {
     let mut rest = content.to_string();
     if let (Some(start), Some(end)) = (rest.find("<think>"), rest.find("</think>")) {
         if end > start {
@@ -345,7 +354,7 @@ pub fn text_tool_calls(content: &str) -> (Vec<ToolCall>, String) {
                 };
                 calls.push(ToolCall { id: format!("text-call-{}", calls.len() + 1), name: v["name"].as_str().unwrap().to_string(), args });
             }
-            _ => match glm_call(body) {
+            _ => match glm_call(body).filter(|_| templates) {
                 Some((name, args)) => calls.push(ToolCall { id: format!("text-call-{}", calls.len() + 1), name, args }),
                 None => left.push_str(&cursor[open..open + "<tool_call>".len() + close + "</tool_call>".len()]),
             },
@@ -353,7 +362,7 @@ pub fn text_tool_calls(content: &str) -> (Vec<ToolCall>, String) {
         cursor = &after[close + "</tool_call>".len()..];
     }
     left.push_str(cursor);
-    if calls.is_empty() && left.contains(DSML) {
+    if templates && calls.is_empty() && left.contains(DSML) {
         let (found, rest) = dsml_tool_calls(&left);
         calls = found;
         left = rest;
@@ -364,8 +373,9 @@ pub fn text_tool_calls(content: &str) -> (Vec<ToolCall>, String) {
 }
 
 /// One call in GLM's own template, the body between `<tool_call>` and `</tool_call>`: the tool name, then pairs of
-/// `<arg_key>K</arg_key><arg_value>V</arg_value>`. A value that parses as JSON other than a string keeps its type.
-/// None when the body does not start with a tool name followed by a pair or nothing.
+/// `<arg_key>K</arg_key><arg_value>V</arg_value>`. Every value stays text, so `{"a": 1}` written as file content
+/// stays that text; `calibrate::typed_args` turns a value into a number, bool, array or object where the tool's schema
+/// asks for one. None when the body does not start with a tool name followed by a pair or nothing.
 pub fn glm_call(body: &str) -> Option<(String, Value)> {
     let pair = regex::Regex::new(r"(?s)<arg_key>(.*?)</arg_key>\s*<arg_value>(.*?)</arg_value>").unwrap();
     let name_end = body.find("<arg_key>").unwrap_or(body.len());
@@ -375,12 +385,7 @@ pub fn glm_call(body: &str) -> Option<(String, Value)> {
     }
     let mut args = serde_json::Map::new();
     for p in pair.captures_iter(&body[name_end..]) {
-        let raw = &p[2];
-        let value = match serde_json::from_str::<Value>(raw.trim()) {
-            Ok(v) if !v.is_string() => v,
-            _ => json!(raw),
-        };
-        args.insert(p[1].trim().to_string(), value);
+        args.insert(p[1].trim().to_string(), json!(&p[2]));
     }
     if name_end < body.len() && args.is_empty() {
         return None;
@@ -528,8 +533,16 @@ mod text_call_tests {
         let (calls, rest) = text_tool_calls(answer);
         assert_eq!(calls.len(), 2);
         assert_eq!((calls[0].name.as_str(), calls[0].args["path"].as_str()), ("read", Some("app/mathutil.py")));
-        assert_eq!((calls[1].args["command"].as_str(), &calls[1].args["timeout"]), (Some("python3 tests/test_median.py"), &json!(30)));
+        assert_eq!((calls[1].args["command"].as_str(), &calls[1].args["timeout"]), (Some("python3 tests/test_median.py"), &json!("30")));
         assert!(rest.is_empty());
+        // A string that looks like JSON stays the string: write gets the file content as written.
+        let (write, _) = text_tool_calls("<tool_call>write<arg_key>path</arg_key><arg_value>x.json</arg_value><arg_key>text</arg_key><arg_value>{\"a\": 1}</arg_value></tool_call>");
+        assert_eq!(write[0].args["text"], json!("{\"a\": 1}"));
+        let (edit, _) = text_tool_calls("<tool_call>edit<arg_key>old</arg_key><arg_value>30</arg_value><arg_key>new</arg_key><arg_value>true</arg_value></tool_call>");
+        assert_eq!((&edit[0].args["old"], &edit[0].args["new"]), (&json!("30"), &json!("true")));
+        // Without templates (native mode) the GLM body stays text.
+        let (none, _) = text_tool_calls_with("<tool_call>read<arg_key>path</arg_key><arg_value>a</arg_value></tool_call>", false);
+        assert!(none.is_empty());
         // A broken pair (seen in the same run) stays text.
         let (none, _) = text_tool_calls("<tool_call>read<arg_key>path\": \"config/settings.json\"</arg_value></tool_call>");
         assert!(none.is_empty());

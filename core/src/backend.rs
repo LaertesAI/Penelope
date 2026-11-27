@@ -84,8 +84,9 @@ fn first_line(text: &str) -> String {
 }
 
 /// The rules the main model works by. They depend on the setting "delegate": who does the searching.
-pub fn rules(ctx: &Ctx) -> String {
-    let look = match ctx.cfg["delegate"].as_str().unwrap_or("auto") {
+/// Rule 2 of `rules`: where lookups go under the `delegate` setting. The short prompt of a model profile reuses it.
+pub fn look_rule(ctx: &Ctx) -> &'static str {
+    match ctx.cfg["delegate"].as_str().unwrap_or("auto") {
         "off" => "2. Use web_search to find pages and fetch to read one. Use find, grep and read to look at files.",
         "offer" => "2. Hand every lookup that needs more than one step to scout: research on the web, the question where something is in the \
 project. scout runs on a weaker model with its own tools and returns a short report. For a single quick lookup use web_search, fetch, find, grep or read yourself.",
@@ -94,7 +95,11 @@ its own tools and returns a short report. You have no web tools of your own. For
         _ => "2. Every search goes to scout: research on the web, reading pages, finding files, the question where something is in the project. \
 Give scout the full question and say what you need back. scout runs on a weaker model with its own tools and returns a short report. \
 You have no search tools of your own, only tree and outline for a first look.",
-    };
+    }
+}
+
+pub fn rules(ctx: &Ctx) -> String {
+    let look = look_rule(ctx);
     let home = crate::platform::home_str();
     let cwd = std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_default();
     let cwd = match cwd.strip_prefix(&home) {
@@ -295,6 +300,11 @@ pub struct Chat {
 }
 
 impl Chat {
+    /// The messages of the session so far, in the wire format of `history_kind`.
+    pub fn history(&self) -> &[Value] {
+        &self.history
+    }
+
     pub fn new() -> Chat {
         Chat { session: None, history: Vec::new(), history_kind: String::new(), input_tokens: 0, output_tokens: 0, turns: 0,
                cancel: Arc::new(AtomicBool::new(false)), pid: Arc::new(AtomicU32::new(0)), trace: Vec::new(),
@@ -701,6 +711,9 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
         let rounds = m["max_rounds"].as_u64().filter(|r| (1..=64).contains(r)).unwrap_or(12) as usize;          // a model profile may raise the cap
         let out = crate::llm::run_loop(m, system, &mut history, &tools, rounds, Some(&*self.cancel), &mut usage,
             &mut |call| {
+                // A text tool call carries its values as text; the schema of the tool gives numbers and bools back their type.
+                let typed;
+                let call = if call.id.starts_with("text-call-") { typed = crate::calibrate::typed_call(&full, call); &typed } else { call };
                 (*events.borrow_mut())(Event::ToolStart { id: call.id.clone(), name: short_name(&call.name), detail: tool_detail(&call.args) });
                 let called = if call.name == crate::calibrate::DESCRIBE && m["tool_list"].as_str() == Some("index") {
                     crate::calibrate::describe(&full, &call.args)
