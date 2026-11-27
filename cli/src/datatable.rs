@@ -390,7 +390,7 @@ fn find_col(header: &[String], hint: &str) -> Option<usize> {
         let score = |c: &str| words.iter().filter(|w| c.contains(w.as_str())).count();
         header.iter().enumerate().filter(|(_, c)| { let n = norm(c); !n.contains("link") && !n.contains("url") && score(&n) > 0 }).max_by_key(|(i, c)| (score(&norm(c)), std::cmp::Reverse(*i))).map(|(i, _)| i)
     };
-    by(&|c| c == h).or_else(|| by(&|c| c.contains(&h) || (c.len() >= 4 && h.contains(c)))).or_else(|| if param_like(hint) { by(&|c| c.contains("param")) } else { None }).or_else(by_words)
+    by(&|c| c == h).or_else(|| by(&|c| c.contains(&h) || (c.len() >= 4 && h.contains(c)))).or_else(|| if param_like(hint) { by(&|c| c.starts_with("param") || c.contains("params") || c.contains("parameter") || c.contains("modelsize")) } else { None }).or_else(by_words)
 }
 
 fn name_col(header: &[String]) -> usize {
@@ -636,6 +636,16 @@ mod tests {
         assert!(s.rows[0][2].contains("from name") && s.header[2].contains("from the model name"));
         let md = s.markdown();
         assert!(md.contains("| Rank | Model |") && md.contains("| 1 | xLAM-2-1b-fc-r |") && md.contains("secondary source") && md.contains("not the rank the source prints"), "{}", md);
+    }
+
+    #[test]
+    fn a_column_that_only_contains_param_is_not_the_size_column() {
+        let t = Table { source: "u".into(), primary: true, header: vec!["Rank".into(), "Overall Acc".into(), "Model".into(), "Multi Turn Miss Param".into()],
+                        rows: vec![vec!["1".into(), "70".into(), "Big-70B".into(), "50%".into()], vec!["2".into(), "30".into(), "Tiny-1B".into(), "20%".into()], vec!["3".into(), "20".into(), "Other".into(), "10%".into()]] };
+        let s = select(&t, &spec()).unwrap();
+        assert_eq!(s.kept, 1, "{:?}", s);
+        assert_eq!(s.rows[0][1], "Tiny-1B");
+        assert!(s.header[2].contains("from the model name"));
     }
 
     #[test]
