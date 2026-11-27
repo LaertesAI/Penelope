@@ -20,7 +20,7 @@ pub(super) fn on(c: art::Rgb, bg: art::Rgb) -> Style {
     Style::default().fg(col(c)).bg(col(bg))
 }
 
-fn bold(c: art::Rgb) -> Style {
+pub(super) fn bold(c: art::Rgb) -> Style {
     fg(c).add_modifier(Modifier::BOLD)
 }
 
@@ -1008,6 +1008,7 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
                 put(f, inner, inner.x, inner.y + 2, "no session yet. A session is stored after its first answer.", on(DIM, RAISED));
             }
         }
+        Overlay::Graph(view) => super::graph::draw(f, area, view),
         Overlay::Brain { scroll } => {
             let body = crate::brain::ascii(&app.ctx);
             let lines: Vec<&str> = body.lines().collect();

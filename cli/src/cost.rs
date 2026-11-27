@@ -45,6 +45,20 @@ pub fn record(ctx: &Ctx, role: &str, model: &str, tokens_in: u64, tokens_out: u6
     let _ = fs::write(path, serde_json::to_string_pretty(&v).unwrap());
 }
 
+/// Reads `usage.json`, lets `f` change it and writes it back, under the same lock as `record`.
+pub fn update(ctx: &Ctx, f: impl FnOnce(&mut Value)) {
+    if !ctx.root.is_dir() {
+        return;
+    }
+    let _guard = USAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let path = ctx.root.join("usage.json");
+    let mut v: Value = fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_else(|| json!({"models": {}}));
+    f(&mut v);
+    if let Ok(text) = serde_json::to_string_pretty(&v) {
+        let _ = fs::write(path, text);
+    }
+}
+
 fn price(ctx: &Ctx, model: &str) -> Option<(f64, f64)> {
     let table = ctx.cfg["prices"].as_object()?;
     let lower = model.to_lowercase();
@@ -128,7 +142,7 @@ pub fn total_eur(ctx: &Ctx) -> f64 {
 }
 
 /// One line for the side panel.
-fn now() -> u64 {
+pub fn now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 

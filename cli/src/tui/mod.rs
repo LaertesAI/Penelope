@@ -5,6 +5,7 @@
 mod ask;
 pub(crate) mod art;
 pub(crate) mod picture;
+mod graph;
 mod paths;
 mod text;
 mod toolsearch;
@@ -76,6 +77,8 @@ pub enum Overlay {
     Ask { id: String, dialog: crate::ask::Dialog },
     /// The memory map as a graph, with the vault command.
     Brain { scroll: usize },
+    /// The knowledge graph: nodes, search, neighbours and a walk with Enter and Backspace. See `graph.rs`.
+    Graph(Box<graph::GraphView>),
     /// Registered plugins with commands, skills and MCP servers.
     Plugins { sel: usize, scroll: usize, filter: String, mode: u8 },
     /// The commands of one plugin.
@@ -128,13 +131,15 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd { name: "/clusters", help: "the cluster tree with reports and memory", key: "", takes_text: false },
     Cmd { name: "/factory", help: "factories: new NAME --profile P --every 3h|--at HH:MM, list, install, run, stop", key: "", takes_text: true },
     Cmd { name: "/app", help: "apps: install LINK|DIR|ZIP, update NAME, list, on NAME, off, remove NAME, show NAME", key: "f7", takes_text: false },
+    Cmd { name: "/graph", help: "the knowledge graph of the memory: search, neighbours, walk with enter and backspace", key: "", takes_text: false },
     Cmd { name: "/brain", help: "the memory map as a graph; /brain write makes an Obsidian vault", key: "", takes_text: false },
     Cmd { name: "/cost", help: "tokens and euro per role and model", key: "", takes_text: false },
     Cmd { name: "/context", help: "show what @ and the memory map would send", key: "", takes_text: true },
     Cmd { name: "/rewind", help: "restore files and transcript N turns back: /rewind 3", key: "", takes_text: true },
     Cmd { name: "/search", help: "search several engines and show the ranked results; /search fanout on|off", key: "", takes_text: true },
     Cmd { name: "/research", help: "search, read the best pages and show a cited report", key: "", takes_text: true },
-    Cmd { name: "/route", help: "the roles, their tools and their models", key: "", takes_text: false },
+    Cmd { name: "/route", help: "the roles and their models; /route auto|fixed sets the cost mode", key: "", takes_text: true },
+    Cmd { name: "/escalate", help: "cost mode: move this task to the main model", key: "", takes_text: false },
     Cmd { name: "/tools", help: "every tool, its arguments and its roles", key: "", takes_text: false },
     Cmd { name: "/consolidate", help: "keep the lasting rules of this session for every project", key: "", takes_text: false },
     Cmd { name: "/forge", help: "write a tool from the notes at a memory waypoint", key: "", takes_text: true },
@@ -715,6 +720,9 @@ impl App {
 
     /// The model and effort of the main role for the footer: `sonnet · high`, or `haiku · no effort`.
     pub fn model_label(&self) -> String {
+        if let Some(line) = crate::autoroute::label(&self.ctx, self.route_chat().as_deref()) {
+            return line;
+        }
         let (model, levels, current) = self.main_effort();
         if levels.is_empty() { format!("{} · no effort", model) } else { format!("{} · {}", model, current) }
     }
@@ -725,6 +733,33 @@ impl App {
         save_config(&self.ctx);
         let model = self.ctx.cfg["main"]["model"].as_str().unwrap_or("").to_string();
         self.toast(format!("{} · effort {} · applies to the next request", model, level));
+    }
+
+    /// `/route`: the roles and models, with the cost mode on top. `/route auto|fixed` sets the mode.
+    fn route_command(&mut self, rest: &str) {
+        let chat = self.route_chat();
+        match crate::autoroute::command(&mut self.ctx, rest, chat.as_deref()) {
+            Ok((text, true)) => {
+                save_config(&self.ctx);
+                self.toast(text);
+            }
+            Ok((text, false)) => {
+                let report = format!("{}\n\n{}", text, crate::route::report(&self.ctx));
+                self.pager("Roles and models", report);
+            }
+            Err(e) => self.toast(e),
+        }
+    }
+
+    /// The cost-mode id of the chat on screen. `None` while a turn holds the chat: the latest chat of the root is used.
+    fn route_chat(&self) -> Option<String> {
+        self.chat.as_ref().map(|c| c.route_id().to_string())
+    }
+
+    fn escalate_command(&mut self) {
+        match crate::autoroute::escalate_now(&self.ctx, self.route_chat().as_deref()) {
+            Ok(text) | Err(text) => self.toast(text),
+        }
     }
 
     /// Alt+E in the chat view: the next level of the main model, from the highest back to the lowest.
@@ -1709,8 +1744,10 @@ impl App {
                 }
             }
             "/brain" => self.overlay = Overlay::Brain { scroll: 0 },
+            "/graph" => self.overlay = Overlay::Graph(Box::new(graph::GraphView::open(&self.ctx))),
             "/cost" => self.pager("Cost in euro", crate::cost::report(&self.ctx)),
-            "/route" => self.pager("Roles and models", crate::route::report(&self.ctx)),
+            "/route" => self.route_command(rest),
+            "/escalate" => self.escalate_command(),
             "/tools" => self.pager("Tool contracts", crate::route::table(&self.ctx)),
             "/consolidate" => {
                 let users: Vec<String> = self.items.iter().filter_map(|i| if let Item::User(t) = i { Some(t.clone()) } else { None }).collect();
@@ -2241,6 +2278,7 @@ impl App {
                 }
                 _ => {}
             },
+            Overlay::Graph(view) => close = view.key(key),
             Overlay::Brain { scroll } => match key.code {
                 KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => close = true,
                 KeyCode::Up => *scroll = scroll.saturating_sub(1),
