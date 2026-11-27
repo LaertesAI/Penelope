@@ -1,3 +1,6 @@
 cli/tests/data/eval/holdout50.jsonl -text
 cli/tests/data/eval/holdout_repo/** -text
 cli/tests/data/privacy/*.txt -text
+core/tests/data/eval/*.jsonl -text
+core/tests/data/eval/repo/** -text
+core/tests/data/privacy/*.txt -text
