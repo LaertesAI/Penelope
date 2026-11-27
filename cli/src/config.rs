@@ -19,6 +19,7 @@ pub fn default_config() -> Value {
         "edit_policy": "ask",
         "test_command": "",
         "test_attempts": 3,
+        "eurykleia": "on",
         "delegate": "auto",
         "search": {"kind": "auto", "url": "", "api_key_env": "BRAVE_API_KEY", "tavily_api_key_env": "TAVILY_API_KEY",
                    "exa_api_key_env": "EXA_API_KEY", "firecrawl_api_key_env": "FIRECRAWL_API_KEY", "fanout": true,
@@ -57,20 +58,28 @@ pub fn find_root(explicit: Option<&str>) -> PathBuf {
     if let Some(p) = explicit {
         return PathBuf::from(p);
     }
-    let mut dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    root_from(&std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")), true)
+}
+
+/// The same search from a given folder. With `rename` false an old `.strix` or `.kate` folder is left alone, so a
+/// folder switch never changes files on disk.
+pub fn root_from(start: &Path, rename: bool) -> PathBuf {
+    let mut dir = start.to_path_buf();
     loop {
         if dir.join(".penelope").is_dir() {
             return dir.join(".penelope");
         }
-        if let Some(old) = adopt(&dir) {
-            return old;
+        if rename {
+            if let Some(old) = adopt(&dir) {
+                return old;
+            }
         }
         if !dir.pop() {
             break;
         }
     }
     let home = crate::platform::home();
-    if !home.join(".penelope").is_dir() {
+    if !home.join(".penelope").is_dir() && rename {
         if let Some(old) = adopt(&home) {
             return old;
         }

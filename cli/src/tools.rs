@@ -148,6 +148,7 @@ pub fn stats(ctx: &Ctx) -> String {
                           v["scout"]["tasks"].as_u64().unwrap_or(0), v["scout"]["steps"].as_u64().unwrap_or(0),
                           v["scout"]["tokens_in"].as_u64().unwrap_or(0), v["scout"]["tokens_out"].as_u64().unwrap_or(0)));
     out.push_str(&format!("privacy: {} items masked in requests, tool output and answers\n", v["privacy"]["masked"].as_u64().unwrap_or(0)));
+    out.push_str(&crate::eurykleia::stats_line(ctx));
     out.push_str(&format!("cost: {}\n", crate::cost::summary(ctx)));
     out
 }
@@ -385,6 +386,7 @@ thread_local! {
 pub fn begin_turn() {
     TEST_FAILURES.with(|n| n.set(0));
     TEST_STOPPED.with(|s| s.set(false));
+    crate::eurykleia::begin_turn();
 }
 
 /// True when a tool result stopped the test loop. The text may carry the result of the edit before the marker, so the
@@ -508,6 +510,9 @@ fn after_edit(ctx: &Ctx, role: &str, name: &str, args: &serde_json::Value, text:
 pub fn dispatch_retry(ctx: &Ctx, role: &str, name: &str, args: &serde_json::Value) -> (String, bool) {
     if TEST_STOPPED.with(|s| s.get()) {
         return (format!("{}: STOP. The test command already failed in this turn. No tool runs for the rest of this turn. Answer with the failure, what you changed and what remains open.", TEST_STOP), false);
+    }
+    if let Some(refusal) = crate::eurykleia::guard(ctx, name, args) {
+        return (refusal, false);
     }
     let (text, ok) = retry_loop(|| crate::route::dispatch_as(ctx, role, name, args), name, args);
     after_edit(ctx, role, name, args, text, ok)
