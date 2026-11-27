@@ -329,6 +329,7 @@ pub fn probe(ctx: &Ctx, server: &str) -> Result<Vec<ToolInfo>, String> {
     }
     let (entry, _) = crate::plugins::server_entry(ctx, server).ok_or_else(|| format!("no MCP server named {}", server))?;
     let tools = with_server(ctx, server, &entry, |live| live.tools(timeout_of(&entry, LIST_TIMEOUT)))?;
+    crate::toolscan::gate(ctx, server, &tools)?;
     Ok(tools.into_iter().map(|t| ToolInfo {
         name: t["name"].as_str().unwrap_or("").to_string(),
         description: t["description"].as_str().unwrap_or("").to_string(),
@@ -346,7 +347,7 @@ pub fn cached_tools_all(ctx: &Ctx) -> Vec<(String, ToolInfo)> {
     };
     let mut out = Vec::new();
     for (name, cell) in cells {
-        if !crate::agents::mcp_allowed(&name) { continue; }
+        if !crate::agents::mcp_allowed(&name) || crate::toolscan::blocked(ctx, &name) { continue; }
         let Ok(slot) = cell.try_lock() else { continue };
         let Some(server) = slot.as_ref().filter(|s| s.alive) else { continue };
         for t in server.tools.iter().flatten() {
@@ -376,8 +377,11 @@ pub fn describe(ctx: &Ctx, server: &str, tool: &str) -> Result<String, String> {
         return Err(format!("NOT described. This agent run may use the MCP servers: {}.", crate::agents::mcp_scope().unwrap_or_default().join(", ")));
     }
     let (entry, _) = crate::plugins::server_entry(ctx, server).ok_or_else(|| format!("no MCP server named {}", server))?;
-    let spec = with_server(ctx, server, &entry, |live| live.full_tool(tool, timeout_of(&entry, LIST_TIMEOUT)))?
-        .ok_or_else(|| format!("MCP server {} has no tool named {}", server, tool))?;
+    let spec = with_server(ctx, server, &entry, |live| {
+        crate::toolscan::gate(ctx, server, &live.tools(timeout_of(&entry, LIST_TIMEOUT))?)?;
+        live.full_tool(tool, timeout_of(&entry, LIST_TIMEOUT))
+    })?.ok_or_else(|| format!("MCP server {} has no tool named {}", server, tool))?;
+    crate::toolscan::check_one(ctx, server, &spec)?;
     let schema = if spec["inputSchema"].is_null() { &spec["input_schema"] } else { &spec["inputSchema"] };
     Ok(format!("{} · {}\n{}\narguments: {}", server, tool, spec["description"].as_str().unwrap_or(""),
                serde_json::to_string(schema).unwrap_or_default()))
@@ -407,7 +411,14 @@ pub fn call(ctx: &Ctx, server: &str, tool: &str, args: &Value) -> Result<String,
             format!("NOT called. The plugin that holds {} is denied, and {} has no allow rule. Allow the plugin with /plugins allow NAME, or this tool with {}.", server, tool, hint)
         });
     }
+    if crate::toolscan::blocked(ctx, server) {
+        return Err(format!("NOT called. The tool scan refused the tool list of MCP server {}. penelope mcp scan {} shows why.", server, server));
+    }
     let result = with_server(ctx, server, &entry, |live| {
+        // A list this process already read is scanned before the call; no new request is sent for it.
+        if let Some(listed) = live.tools.clone() {
+            crate::toolscan::gate(ctx, server, &listed)?;
+        }
         let mut arguments = args.clone();
         // Only a Laertes server that announced the extension and whose tool names `brief` gets the packed form.
         // Every other server, and every call without a brief, keeps exactly the old path.
