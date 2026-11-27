@@ -25,7 +25,7 @@ const UNSAFE_PARTS: &[&str] = &[" rm ", "sudo", ">", "|", ";", "&", "`", "$(", "
 /// True if a command may run under the policy "safe": a read-only or build command without shell operators.
 pub fn is_safe(command: &str) -> bool {
     let padded = format!(" {} ", command);
-    if UNSAFE_PARTS.iter().any(|p| padded.contains(p)) {
+    if UNSAFE_PARTS.iter().any(|p| padded.contains(p)) || crate::gates::hidden_effect(command) {
         return false;
     }
     let mut parts = command.split_whitespace();
@@ -219,6 +219,27 @@ pub fn ask_user(question: &str, options: &serde_json::Value) -> String {
     }
 }
 
+/// The tool ask_user with all its arguments. A `questions` list is the dialog of `ask::`, 1 to 6 questions with
+/// headers, options, several answers and free text. Without it the old form (`question` and `options`) runs as before.
+pub fn ask_user_args(ctx: &Ctx, a: &serde_json::Value) -> String {
+    ask_user_in(ctx, a, crate::ask::main_turn_here())
+}
+
+/// `ask_user_args` with the answer to "is this the interactive main turn". A scout, a part of a cluster and a subagent
+/// inherit the question folder but never put a dialog in front of the person.
+pub fn ask_user_in(ctx: &Ctx, a: &serde_json::Value, main_turn: bool) -> String {
+    if a.get("questions").map(|q| !q.is_null()).unwrap_or(false) {
+        if !main_turn {
+            return "NOT asked. Only the main turn can ask the user. Report what is unclear in your result.".to_string();
+        }
+        return match crate::ask::parse_questions(&a["questions"]) {
+            Ok(qs) => crate::ask::reply_text(&qs, &crate::ask::ask_questions(&qs, crate::ask::timeout_secs(ctx))),
+            Err(e) => format!("NOT asked. {}", e),
+        };
+    }
+    ask_user(a["question"].as_str().unwrap_or(""), &a["options"])
+}
+
 /// One tool call of a turn: name, the argument shown to the person, whether it worked, the first line of its result.
 pub type Call = (String, String, bool, String);
 
@@ -387,6 +408,8 @@ pub fn begin_turn() {
     TEST_FAILURES.with(|n| n.set(0));
     TEST_STOPPED.with(|s| s.set(false));
     crate::eurykleia::begin_turn();
+    crate::checker::begin_turn();
+    crate::gates::begin_turn();
 }
 
 /// True when a tool result stopped the test loop. The text may carry the result of the edit before the marker, so the
@@ -479,6 +502,7 @@ fn after_edit(ctx: &Ctx, role: &str, name: &str, args: &serde_json::Value, text:
     if !ok || !matches!(name, "write" | "edit") || !text.starts_with("done") {
         return (text, ok);
     }
+    crate::checker::note_edit(ctx, role, args);
     let Some((command, attempts)) = test_settings(ctx, role) else {
         return (text, ok);
     };
@@ -522,7 +546,13 @@ pub fn dispatch_retry_plain(ctx: &Ctx, role: &str, name: &str, args: &serde_json
     if let Some(refusal) = crate::eurykleia::guard(ctx, name, args) {
         return (refusal, false);
     }
+    if let Some(refusal) = crate::gates::check(ctx, name, args) {
+        return (refusal, false);
+    }
+    let tree = crate::gates::before_call(ctx, name, args);
     let (text, ok) = retry_loop(|| crate::route::dispatch_as(ctx, role, name, args), name, args);
+    crate::gates::after_call(ctx, tree);
+    crate::gates::observe(ctx, name, args);
     after_edit(ctx, role, name, args, text, ok)
 }
 
@@ -1169,7 +1199,8 @@ pub fn scouts(ctx: &Ctx, tasks: &serde_json::Value, cwd: &str) -> String {
         let ctx = ctx.clone();
         let cwd = cwd.to_string();
         let asked = task.clone();
-        handles.push((i, task, std::thread::spawn(move || crate::scout::run(&ctx, &asked, &cwd))));
+        let taint = crate::gates::snapshot();
+        handles.push((i, task, std::thread::spawn(move || { crate::gates::adopt(taint); crate::scout::run(&ctx, &asked, &cwd) })));
     }
     let mut out = format!("{} lookups side by side, each on the weaker model.\n", tasks.len());
     for (i, task, h) in handles {
@@ -1350,6 +1381,26 @@ mod tests {
         assert!(ask_user("Which?", &serde_json::json!(["a"])).starts_with("give a question"));
     }
 
+
+    #[test]
+    fn ask_user_keeps_the_old_form_and_validates_the_new_one() {
+        let ctx = Ctx { root: std::env::temp_dir(), cfg: serde_json::json!({}) };
+        // old form: one question, answers as texts
+        assert!(ask_user_args(&ctx, &serde_json::json!({"question": "Which?", "options": ["a"]})).starts_with("give a question"));
+        assert!(ask_user_args(&ctx, &serde_json::json!({"question": "", "options": ["a", "b"]})).starts_with("give a question"));
+        // new form: every fault is named and nothing is asked
+        let bad = ask_user_args(&ctx, &serde_json::json!({"questions": [{"question": "Which?", "options": ["only one"]}]}));
+        assert!(bad.starts_with("NOT asked") && bad.contains("question 1 needs 2 to 6 options"), "{}", bad);
+        assert!(ask_user_args(&ctx, &serde_json::json!({"questions": []})).contains("1 to 6 questions"));
+        assert!(ask_user_args(&ctx, &serde_json::json!({"questions": "Which?"})).starts_with("NOT asked"));
+        // a worker, a scout or a subagent never gets a dialog, even with a valid set
+        let valid = serde_json::json!({"questions": [{"question": "Which?", "options": ["a", "b"]}]});
+        assert!(ask_user_in(&ctx, &valid, false).contains("Only the main turn"));
+        assert!(!crate::ask::is_main_turn(true, None, ""));
+        assert!(!crate::ask::is_main_turn(false, Some("c-1"), ""));
+        assert!(!crate::ask::is_main_turn(false, None, "worker"));
+        assert!(crate::ask::is_main_turn(false, None, ""));
+    }
 
     #[test]
     fn the_sandbox_has_no_network_and_only_the_project_is_writable() {
