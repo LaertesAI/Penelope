@@ -9,12 +9,7 @@ impl App {
         match verb {
             "search" if !arg.is_empty() => {
                 let query = arg.to_string();
-                self.start_bg(move |ctx| {
-                    let report = toolsearch::search(&ctx, &query, 10);
-                    toolsearch::save_last(&ctx, &report.candidates);
-                    let hint = if report.candidates.is_empty() { "" } else { "\n/tools install N lists what would run; nothing installs before /tools yes." };
-                    Ok(format!("{}{}", toolsearch::render(&report), hint))
-                });
+                self.start_bg(move |ctx| Ok(toolsearch::tui_search(&ctx, &query)));
             }
             "install" if !arg.is_empty() => {
                 let mut parts = arg.split_whitespace();

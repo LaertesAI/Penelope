@@ -288,6 +288,9 @@ impl Drop for Server {
 /// Runs one operation on the process of a server, starting it on demand. A transport error drops the process so that
 /// the next call starts a clean one; a JSON-RPC error leaves it running.
 fn with_server<T>(ctx: &Ctx, name: &str, server: &Value, f: impl FnOnce(&mut Server) -> Result<T, String>) -> Result<T, String> {
+    if server["unvetted"].as_bool().unwrap_or(false) {
+        return Err(format!("NOT started. MCP server {} came from tool search and its package was not scanned. /mcp allow {} is the yes that lets it run.", name, name));
+    }
     let signature = signature_of(server);
     let cell = cell_for(ctx, name);
     let mut slot = cell.lock().unwrap_or_else(|e| e.into_inner());

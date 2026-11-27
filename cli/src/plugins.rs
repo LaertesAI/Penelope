@@ -1622,6 +1622,19 @@ pub fn mcp_add(ctx: &Ctx, name: &str, command: &str, args: &[String], allow: boo
     }
 }
 
+/// A server from tool search: registered as `unvetted`, so `mcpclient` starts it for no probe, describe or call
+/// until `/mcp allow NAME`. Its package code was not scanned.
+pub fn mcp_add_unvetted(ctx: &Ctx, name: &str, command: &str, args: &[String]) -> String {
+    let said = mcp_add(ctx, name, command, args, false);
+    if said.starts_with("NOT") { return said; }
+    let mut reg = mcp_load(ctx);
+    reg["servers"][name]["unvetted"] = json!(true);
+    match mcp_save(ctx, &reg) {
+        Ok(_) => format!("{} · unvetted: nothing starts it until /mcp allow {}", said, name),
+        Err(e) => format!("NOT added. {}", e),
+    }
+}
+
 pub fn mcp_remove(ctx: &Ctx, name: &str) -> String {
     let mut reg = mcp_load(ctx);
     let Some(servers) = reg["servers"].as_object_mut() else { return "no standalone MCP server registry".to_string() };
@@ -1640,6 +1653,10 @@ pub fn mcp_set_allow(ctx: &Ctx, name: &str, allow: bool) -> String {
         return format!("no standalone MCP server named {}. penelope mcp list shows the names.", name);
     };
     server["allow"] = json!(allow);
+    if allow {
+        // Allowing a server is the person's yes to run it, so a tool-search install is vetted by that yes.
+        if let Some(o) = server.as_object_mut() { o.remove("unvetted"); }
+    }
     match mcp_save(ctx, &reg) {
         Ok(_) => format!("MCP server {}: tools {}", name, if allow { "allowed" } else { "denied" }),
         Err(e) => format!("NOT changed. {}", e),
