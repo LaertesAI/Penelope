@@ -211,6 +211,9 @@ pub fn dispatch_as(ctx: &Ctx, role: &str, name: &str, args: &Value) -> Result<St
         return Err(format!("NOT called. A {} has no tool {}. Its tools: {}.", role, name,
                            if allowed.is_empty() { "none".to_string() } else { allowed.join(", ") }));
     }
+    if role == "lead" && !crate::modes::allows(ctx, name) {
+        return Err(crate::modes::refusal(ctx, name));
+    }
     validate(ctx, name, args)?;
     crate::mcp::call_raw(ctx, name, args)
 }
