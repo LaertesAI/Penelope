@@ -981,6 +981,7 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
             }
             put(f, inner, inner.x, y + 1, "enter or the number chooses · esc closes without an answer", on(DIM, RAISED));
         }
+        Overlay::Ask { dialog, .. } => super::ask::draw(f, area, dialog, crate::ask::now_secs()),
         Overlay::Sessions { sel } => {
             let all = crate::sessions::all(&app.ctx);
             let inner = dialog(f, area, "Sessions", 92, all.len().min(16) as u16 + 7);
