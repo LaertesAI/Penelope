@@ -9,18 +9,26 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::time::Duration;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{channel, Receiver};
+use std::sync::mpsc::{channel, Receiver, RecvTimeoutError};
 
 /// The variables that would bill an API key instead of the Claude subscription. They stay out of the child unless the
 /// person chose API-key mode (config `claude.api_key_mode`: true).
 const KEY_VARS: [&str; 2] = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"];
 
 static API_KEY_MODE: AtomicBool = AtomicBool::new(false);
+static USER_SETTINGS: AtomicBool = AtomicBool::new(false);
+static COMMAND: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
 
-/// Reads the switches of config `claude`. Called once after the config is loaded.
+/// Reads the switches of config `claude` into the process: callers that hold no config (the weaker model, a scout, an
+/// agent step) spawn the command with the same settings. Called after the config is loaded and before each claude turn.
 pub fn configure(cfg: &Value) {
     API_KEY_MODE.store(cfg["claude"]["api_key_mode"].as_bool().unwrap_or(false), Ordering::SeqCst);
+    USER_SETTINGS.store(cfg["claude"]["user_settings"].as_bool().unwrap_or(false), Ordering::SeqCst);
+    if let Ok(mut c) = COMMAND.write() {
+        *c = cfg["claude"]["command"].as_str().unwrap_or("").trim().to_string();
+    }
 }
 
 pub fn api_key_mode() -> bool {
@@ -37,7 +45,7 @@ pub fn streaming(cfg: &Value) -> bool {
 /// that run at the start and the end of every turn, enabled plugins) and the skills and commands of that setup, which
 /// Penelope offers by itself. Project and local settings still load. Config `claude.user_settings: true` loads all.
 pub fn isolation_flags(cfg: &Value) -> Vec<String> {
-    if cfg["claude"]["user_settings"].as_bool().unwrap_or(false) {
+    if cfg["claude"]["user_settings"].as_bool().unwrap_or_else(|| USER_SETTINGS.load(Ordering::SeqCst)) {
         return Vec::new();
     }
     vec!["--setting-sources".into(), "project,local".into(), "--disable-slash-commands".into()]
@@ -45,10 +53,32 @@ pub fn isolation_flags(cfg: &Value) -> Vec<String> {
 
 /// A command for the claude executable with the key variables removed (unless the person chose API-key mode).
 pub fn command(cfg: &Value) -> Command {
-    let program = cfg["claude"]["command"].as_str().filter(|c| !c.trim().is_empty()).unwrap_or("claude");
+    let program = match cfg["claude"]["command"].as_str().filter(|c| !c.trim().is_empty()) {
+        Some(c) => c.to_string(),
+        None => COMMAND.read().map(|c| c.clone()).ok().filter(|c| !c.is_empty()).unwrap_or_else(|| "claude".to_string()),
+    };
     let mut cmd = Command::new(program);
     scrub(&mut cmd);
     cmd
+}
+
+/// The one way to start `claude -p` for a turn, a scout, an agent step or the weaker model: the key variables removed
+/// and the isolation flags set. `cfg` may be `Value::Null`; the process-wide settings of `configure` apply then.
+pub fn print_command(cfg: &Value) -> Command {
+    let mut cmd = command(cfg);
+    cmd.args(isolation_flags(cfg));
+    cmd
+}
+
+/// 128 random bits as hex, from the keys the standard library seeds per process and the clock. For a secret that two
+/// processes of one Penelope share through their environment.
+pub fn nonce() -> String {
+    use std::hash::BuildHasher;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let part = |salt: u64| {
+        std::collections::hash_map::RandomState::new().hash_one((now, std::process::id(), salt))
+    };
+    format!("{:016x}{:016x}", part(1), part(2))
 }
 
 /// Removes the variables that would switch the child to API-key billing.
@@ -78,6 +108,8 @@ pub enum Next {
     Line(Value),
     /// The process closed its output: it ended or crashed.
     Closed,
+    /// Nothing came for the whole idle time.
+    TimedOut,
 }
 
 pub struct Stream {
@@ -87,14 +119,21 @@ pub struct Stream {
     pub key: u64,
     /// The file the MCP server reads the gates state from, removed with the process.
     pub live: Option<std::path::PathBuf>,
+    /// The secret that signs the live file. Only this process and its MCP server know it.
+    pub nonce: String,
 }
 
 impl Stream {
-    /// Starts the process. `args` come without the program name and must not hold `-p`.
-    pub fn spawn(cfg: &Value, args: &[String], key: u64, live: Option<std::path::PathBuf>) -> Result<Stream, String> {
-        let mut cmd = command(cfg);
+    /// Starts the process in its own process group. `args` come without the program name and must not hold `-p`.
+    pub fn spawn(cfg: &Value, args: &[String], key: u64, live: Option<std::path::PathBuf>, nonce: String) -> Result<Stream, String> {
+        let mut cmd = print_command(cfg);
         cmd.args(["--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages"]);
         cmd.args(args);
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);                 // the MCP servers of the process share the group and leave with it
+        }
         let mut child = cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()
             .map_err(|e| format!("cannot start the claude command: {}", e))?;
         let stdin = child.stdin.take();
@@ -109,7 +148,7 @@ impl Stream {
                 }
             }
         });
-        Ok(Stream { child, stdin, rx, key, live })
+        Ok(Stream { child, stdin, rx, key, live, nonce })
     }
 
     pub fn pid(&self) -> u32 {
@@ -123,10 +162,21 @@ impl Stream {
         writeln!(stdin, "{}", line).and_then(|_| stdin.flush()).map_err(|e| format!("cannot write to the claude command: {}", e))
     }
 
-    pub fn recv(&mut self) -> Next {
-        match self.rx.recv() {
+    /// Throws away every line the process wrote since the last turn ended (a late summary, a status line, a result of a
+    /// background task). A line that arrives after the next message was sent is told apart by the caller.
+    pub fn drain_stale(&mut self) -> usize {
+        let mut n = 0;
+        while self.rx.try_recv().is_ok() {
+            n += 1;
+        }
+        n
+    }
+
+    pub fn recv(&mut self, idle: Duration) -> Next {
+        match self.rx.recv_timeout(idle) {
             Ok(v) => Next::Line(v),
-            Err(_) => Next::Closed,
+            Err(RecvTimeoutError::Timeout) => Next::TimedOut,
+            Err(RecvTimeoutError::Disconnected) => Next::Closed,
         }
     }
 
@@ -136,9 +186,30 @@ impl Stream {
     }
 }
 
+/// Ends a whole process group: the claude command and the MCP servers it started.
+fn kill_group(pid: u32) {
+    #[cfg(unix)]
+    {
+        let _ = Command::new("kill").args(["-KILL", "--", &format!("-{}", pid)]).stdout(Stdio::null()).stderr(Stdio::null()).status();
+    }
+    #[cfg(not(unix))]
+    {
+        crate::platform::kill_tree(pid as u64);
+    }
+}
+
 impl Drop for Stream {
+    /// Closing the input lets the process and its servers leave on their own; after about 2 seconds the group is killed.
     fn drop(&mut self) {
-        drop(self.stdin.take());                // end of input lets the process leave by itself
+        drop(self.stdin.take());
+        let pid = self.child.id();
+        for _ in 0..20 {
+            if !matches!(self.child.try_wait(), Ok(None)) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        kill_group(pid);                            // also what an exited leader left behind
         let _ = self.child.kill();
         let _ = self.child.wait();
         if let Some(path) = &self.live {
@@ -170,5 +241,52 @@ mod tests {
         let a = fingerprint(&["--model".into(), "sonnet".into()]);
         assert_eq!(a, fingerprint(&["--model".into(), "sonnet".into()]));
         assert_ne!(a, fingerprint(&["--model".into(), "haiku".into()]));
+    }
+
+    #[test]
+    fn every_way_to_start_claude_removes_the_key_variables() {
+        // the helper that agents, scouts, the weaker model and the turns use
+        let cmd = print_command(&Value::Null);
+        let removed: Vec<String> = cmd.get_envs().filter(|(_, v)| v.is_none()).map(|(k, _)| k.to_string_lossy().to_string()).collect();
+        assert!(removed.contains(&"ANTHROPIC_API_KEY".to_string()) && removed.contains(&"ANTHROPIC_AUTH_TOKEN".to_string()));
+        assert!(cmd.get_args().any(|a| a == "--setting-sources"));
+        // no other file starts the command by hand (clusters.rs is outside this change)
+        for (name, text) in [("agents.rs", include_str!("agents.rs")), ("scout.rs", include_str!("scout.rs")), ("weak.rs", include_str!("weak.rs")), ("backend.rs", include_str!("backend.rs"))] {
+            let code = text.split("#[cfg(test)]").next().unwrap();
+            assert!(!code.contains("Command::new(\"claude\")"), "{} starts claude without the helper", name);
+        }
+    }
+
+    #[test]
+    fn a_nonce_differs_each_time() {
+        assert_ne!(nonce(), nonce());
+        assert_eq!(nonce().len(), 32);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn no_child_of_the_process_survives_the_stream() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("penelope-group-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("claude");
+        std::fs::write(&script, "#!/bin/sh\nsleep 300 &\necho $! > \"$(dirname \"$0\")/child.pid\"\nsleep 300\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let cfg = json!({"claude": {"command": script.to_string_lossy()}});
+        let stream = Stream::spawn(&cfg, &[], 1, None, nonce()).unwrap();
+        for _ in 0..50 {
+            if dir.join("child.pid").exists() { break; }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let child: u32 = std::fs::read_to_string(dir.join("child.pid")).unwrap().trim().parse().unwrap();
+        let alive = |pid: u32| Command::new("kill").args(["-0", &pid.to_string()]).stderr(Stdio::null()).status().map(|s| s.success()).unwrap_or(false);
+        assert!(alive(child));
+        let leader = stream.pid();
+        drop(stream);
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(!alive(child), "the sleep the process started is gone");
+        assert!(!alive(leader));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -42,6 +42,9 @@ pub struct Params {
     pub steps: usize,
     /// Reduced motion: nothing moves and nothing blinks. The cloth rows still show the progress.
     pub reduced: bool,
+    /// Plain ASCII instead of box drawing and block characters: for terminals that draw "ambiguous width" characters
+    /// two columns wide (East Asian locales) or cannot draw them.
+    pub ascii: bool,
 }
 
 /// The widest block, in warp threads.
@@ -59,9 +62,29 @@ pub fn reduced(cfg: &serde_json::Value) -> bool {
         .any(|v| std::env::var(v).map(|s| !s.is_empty() && s != "0").unwrap_or(false))
 }
 
+/// True for the ASCII look: config `tui.ascii`, the variable `PENELOPE_ASCII` (set and not 0), or a locale of an East
+/// Asian language, where the box drawing and block characters are drawn two columns wide.
+pub fn ascii(cfg: &serde_json::Value) -> bool {
+    if let Some(on) = cfg["tui"]["ascii"].as_bool() {
+        return on;
+    }
+    if std::env::var("PENELOPE_ASCII").map(|s| !s.is_empty() && s != "0").unwrap_or(false) {
+        return true;
+    }
+    ["LC_ALL", "LC_CTYPE", "LANG"].iter().filter_map(|v| std::env::var(v).ok()).find(|v| !v.is_empty())
+        .map(|l| ["ja", "zh", "ko"].iter().any(|p| l.starts_with(p))).unwrap_or(false)
+}
+
+fn plain(c: char) -> char {
+    match c {
+        '◆' => '@', '◇' => 'o', '✖' => 'X', '╳' => 'x', '╵' => '!', '╪' => '|', '━' => '=', '─' => '-', '│' | '┃' => '|', '╎' => ':',
+        '▓' => '#', '▒' => '+', '░' => '.', other => other,
+    }
+}
+
 fn threads(width: usize) -> usize {
-    // one thread takes two columns; the two posts and the indent take six
-    (width.saturating_sub(6) / 2).clamp(4, MAX_THREADS)
+    // one thread takes two columns; the two posts and the indent take six; a very narrow block keeps one thread
+    (width.saturating_sub(6) / 2).clamp(1, MAX_THREADS)
 }
 
 /// The shuttle positions (in half steps over the shed) for one tick. A shuttle goes right and comes back.
@@ -74,6 +97,22 @@ fn position(tick: u64, shed: usize, speed: u64) -> (usize, bool) {
 /// The frame as rows. The first row is the warp above the shed, the second the shed with the shuttle, then the cloth.
 /// A compact frame is the shed row alone.
 pub fn frame(p: &Params) -> Vec<Row> {
+    let mut rows = frame_unicode(p);
+    if p.ascii {
+        for row in rows.iter_mut() {
+            for cell in row.iter_mut() {
+                cell.0 = plain(cell.0);
+            }
+        }
+    }
+    rows
+}
+
+fn frame_unicode(p: &Params) -> Vec<Row> {
+    // under 5 columns there is room for the shuttle alone
+    if p.width < 5 {
+        return vec![if p.width == 0 { Vec::new() } else { vec![('◆', Tone::Shuttle)] }];
+    }
     let n = threads(p.width);
     let shed = 2 * n - 1;                       // columns between the posts: thread, gap, thread ...
     let tick = if p.reduced { 0 } else { p.tick };
@@ -150,7 +189,7 @@ mod tests {
     use super::*;
 
     fn p(look: Look, tick: u64, width: usize, steps: usize) -> Params {
-        Params { look, tick, width, steps, reduced: false }
+        Params { look, tick, width, steps, reduced: false, ascii: false }
     }
 
     fn text(row: &Row) -> String {
@@ -163,15 +202,15 @@ mod tests {
 
     #[test]
     fn every_row_fits_the_width_and_the_shed_row_holds_one_shuttle() {
-        for width in [12usize, 24, 36, 60, 120] {
+        for width in [0usize, 1, 4, 5, 8, 12, 24, 36, 60, 120] {
             for look in [Look::Thinking, Look::Tool, Look::Cluster(3), Look::Waiting, Look::Error] {
                 for tick in [0u64, 7, 23, 99] {
                     let rows = frame(&p(look, tick, width, 3));
                     assert!(!rows.is_empty());
                     for r in &rows {
-                        assert!(r.len() <= width.max(14), "{:?} at {} wide: {} columns", look, width, r.len());
+                        assert!(r.len() <= width.max(1), "{:?} at {} wide: {} columns", look, width, r.len());
                     }
-                    if look == Look::Thinking || look == Look::Tool {
+                    if (look == Look::Thinking || look == Look::Tool) && width > 0 {
                         assert_eq!(shuttle_at(&rows).len(), 1, "{:?}", look);
                     }
                 }
@@ -231,9 +270,20 @@ mod tests {
     #[test]
     fn reduced_motion_freezes_every_look() {
         for look in [Look::Thinking, Look::Tool, Look::Cluster(2), Look::Waiting] {
-            let at = |tick| frame(&Params { look, tick, width: 60, steps: 2, reduced: true });
+            let at = |tick| frame(&Params { look, tick, width: 60, steps: 2, reduced: true, ascii: false });
             assert_eq!(at(0), at(31), "{:?}", look);
         }
+    }
+
+    #[test]
+    fn ascii_mode_uses_only_ascii_and_keeps_the_shapes() {
+        for look in [Look::Thinking, Look::Tool, Look::Cluster(2), Look::Waiting, Look::Error] {
+            let rows = frame(&Params { look, tick: 9, width: 60, steps: 3, reduced: false, ascii: true });
+            assert!(rows.iter().flatten().all(|(c, _)| c.is_ascii()), "{:?}", look);
+            assert!(rows[1].iter().any(|(c, t)| *t == Tone::Shuttle || *t == Tone::Error && *c == 'X'));
+        }
+        assert!(ascii(&serde_json::json!({"tui": {"ascii": true}})));
+        assert!(!ascii(&serde_json::json!({"tui": {"ascii": false}})));
     }
 
     #[test]

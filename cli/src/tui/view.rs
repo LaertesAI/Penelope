@@ -369,7 +369,7 @@ fn transcript(app: &App, w: usize) -> Vec<Line<'static>> {
             Item::Error(text) => {
                 // the broken thread of a failed turn, once, under the last error
                 if idx + 1 == app.items.len() && app.busy.is_none() {
-                    let rows = weave::frame(&weave::Params { look: Look::Error, tick: 0, width: w.saturating_sub(2), steps: 0, reduced: true });
+                    let rows = weave::frame(&weave::Params { look: Look::Error, tick: 0, width: w.saturating_sub(2), steps: 0, reduced: true, ascii: weave::ascii(&app.ctx.cfg) });
                     if let Some(row) = rows.get(1).or_else(|| rows.first()) {
                         out.push(Line::from(weave_line(row)));
                     }
@@ -445,7 +445,7 @@ fn finished_steps(app: &App) -> usize {
 /// look different. Below it the tail of the model's thinking, when the provider streams it.
 pub fn loom(app: &App, w: usize, secs: u64) -> Vec<Line<'static>> {
     let look = look_of(app);
-    let params = weave::Params { look, tick: app.tick, width: w.saturating_sub(2), steps: finished_steps(app), reduced: weave::reduced(&app.ctx.cfg) };
+    let params = weave::Params { look, tick: app.tick, width: w.saturating_sub(2), steps: finished_steps(app), reduced: weave::reduced(&app.ctx.cfg), ascii: weave::ascii(&app.ctx.cfg) };
     let rows = weave::frame(&params);
     let phase = match look {
         Look::Waiting => "waiting for you".to_string(),
