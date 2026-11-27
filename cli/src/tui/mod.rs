@@ -1797,7 +1797,9 @@ impl App {
                         }
                     }
                 } else if rest.starts_with("remove ") {
-                    self.pager("MCP servers", crate::plugins::mcp_remove(&self.ctx, rest[7..].trim()));
+                    let said = crate::plugins::mcp_remove(&self.ctx, rest[7..].trim());
+                    if said.ends_with("removed") { crate::toolscan::forget(&self.ctx, rest[7..].trim()); }
+                    self.pager("MCP servers", said);
                 } else if rest.starts_with("allow ") {
                     let name = rest[6..].trim().to_string();
                     let said = crate::plugins::mcp_set_allow(&self.ctx, &name, true);

@@ -414,7 +414,7 @@ pub fn unzip(ctx: &Ctx, archive: &str, into: &str, cwd: &str) -> String {
 /// Creates a file or replaces its whole content.
 pub fn write(ctx: &Ctx, path: &str, text: &str, cwd: &str) -> String {
     let p = resolve(path, cwd);
-    if crate::autoroute::is_state_path(&p) {
+    if crate::autoroute::is_state_path(&p) || crate::toolscan::is_state_path(&real_target(&p)) {
         return format!("NOT written: {} is in the state folder of Penelope.", show(&p));
     }
     if p.is_dir() {
@@ -446,7 +446,7 @@ pub type Replacement = (String, String, bool);
 /// fails stops the call before the file changes. The person gets one question with one diff for the whole call.
 pub fn edit(ctx: &Ctx, path: &str, replacements: &[Replacement], cwd: &str) -> String {
     let p = resolve(path, cwd);
-    if crate::autoroute::is_state_path(&p) {
+    if crate::autoroute::is_state_path(&p) || crate::toolscan::is_state_path(&real_target(&p)) {
         return format!("NOT written: {} is in the state folder of Penelope.", show(&p));
     }
     let text = match fs::read_to_string(&p) {

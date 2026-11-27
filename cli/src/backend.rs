@@ -288,10 +288,10 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
         for t in crate::forge::specs(ctx) {          // a tool Penelope wrote is offered to the claude command too
             if let Some(name) = t["name"].as_str() { allowed.push(format!("mcp__penelope__{}", name)); }
         }
-        if let Some(obj) = crate::plugins::servers(ctx).as_object() {
-            for (k, s) in obj {
-                servers[k] = s.clone();        // the model sees the tools of every plugin server
-            }
+        // The claude command reads each server's tool descriptions itself, so only servers whose list passed the tool
+        // scan go in: no blocked, held, unvetted or unreadable server (toolscan::claude_servers).
+        for (k, s) in crate::toolscan::claude_servers(ctx) {
+            servers[k] = s;
         }
         allowed.extend(crate::plugins::allowed(ctx));        // a call works for plugins with "allow": true only
         let sc_cmd = ctx.cfg["screencodec"]["command"].as_str().filter(|c| !c.is_empty()).map(std::path::PathBuf::from).or_else(|| which("screencodec-mcp"));

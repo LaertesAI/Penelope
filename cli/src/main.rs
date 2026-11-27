@@ -191,7 +191,8 @@ penelope mcp add NAME COMMAND [ARGS...] [--allow]
 penelope mcp remove NAME      remove a standalone MCP server
 penelope mcp allow|deny NAME  put its tools on or off the allow list; allow reads and scans its tool list
 penelope mcp scan NAME        scan the tool names, descriptions and schemas of a server for hidden orders
-penelope mcp trust NAME       accept this exact tool list despite a scan finding
+penelope mcp trust NAME       accept this exact tool list despite a finding or after a change
+penelope mcp secrets          list secret values in MCP server configs by length, never the value
 penelope mcp allow-tool SERVER TOOL
                               allow one tool of a server while the server keeps its default
 penelope mcp deny-tool SERVER TOOL
@@ -629,7 +630,9 @@ fn main() {
             println!("{}", if allow { toolscan::after_allow(&ctx, &args[2], &said) } else { said });
         }
         "mcp" if args.get(1).map(String::as_str) == Some("remove") && args.len() >= 3 => {
-            println!("{}", plugins::mcp_remove(&ctx, &args[2]));
+            let said = plugins::mcp_remove(&ctx, &args[2]);
+            if said.ends_with("removed") { toolscan::forget(&ctx, &args[2]); }
+            println!("{}", said);
         }
         "mcp" if args.get(1).map(String::as_str) == Some("allow") && args.len() >= 3 => {
             println!("{}", toolscan::after_allow(&ctx, &args[2], &plugins::mcp_set_allow(&ctx, &args[2], true)));
@@ -639,6 +642,9 @@ fn main() {
         }
         "mcp" if args.get(1).map(String::as_str) == Some("trust") && args.len() >= 3 => {
             println!("{}", toolscan::trust(&ctx, &args[2]));
+        }
+        "mcp" if args.get(1).map(String::as_str) == Some("secrets") => {
+            println!("{}", toolscan::secrets_report(&ctx));
         }
         "mcp" if args.get(1).map(String::as_str) == Some("deny") && args.len() >= 3 => {
             println!("{}", plugins::mcp_set_allow(&ctx, &args[2], false));
