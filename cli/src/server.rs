@@ -557,13 +557,8 @@ fn redact_text(text: &str, level: &str) -> (String, Vec<Item>) {
         }
     }
     if level == "pii" {
-        let email = regex::Regex::new(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}").unwrap();
-        for m in email.find_iter(text) {
-            found.push(Item { start: m.start(), end: m.end(), kind: "email" });
-        }
-        let iban = regex::Regex::new(r"\b[A-Z]{2}\d{2}[A-Z0-9]{10,30}\b").unwrap();
-        for m in iban.find_iter(text) {
-            found.push(Item { start: m.start(), end: m.end(), kind: "iban" });
+        for span in crate::pii::spans(text) {
+            found.push(Item { start: span.start, end: span.end, kind: span.kind });
         }
     }
     found.sort_by(|a, b| a.start.cmp(&b.start).then(b.end.cmp(&a.end)));

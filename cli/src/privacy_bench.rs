@@ -735,55 +735,86 @@ pub fn document(seed: u64, i: usize) -> Doc {
 
 /// The spans a masker replaced, found from its output alone: (start, end, kind) in the input. The output must equal
 /// the input except for `[masked:KIND]` pieces. Returns the spans and whether the whole output lined up.
+///
+/// The output splits into literal pieces and masks. Each mask ends where its following literal piece starts in the
+/// input. A literal like "." can also occur inside the masked text ("a@b.de."), so the search tries the places in
+/// order and backtracks when a later piece does not fit. The last piece must end the input. A step budget keeps a
+/// pathological text from running long; past it the first fitting place wins.
 pub fn align(input: &str, output: &str) -> (Vec<(usize, usize, String)>, bool) {
     const OPEN: &str = "[masked:";
-    let mut spans = Vec::new();
-    let (mut i, mut j) = (0usize, 0usize);
-    while j < output.len() {
-        if output[j..].starts_with(OPEN) {
-            let Some(close) = output[j..].find(']') else { return (spans, false) };
-            let kind = output[j + OPEN.len()..j + close].to_string();
-            let after = j + close + 1;
-            let next = output[after..].find(OPEN).map(|k| after + k).unwrap_or(output.len());
-            let anchor = &output[after..next];
-            let end = if anchor.is_empty() {
-                if next == output.len() { input.len() } else {
-                    // two masks side by side: the first takes one word
-                    let rest = &input[i..];
-                    i + rest.char_indices().skip(1).find(|(_, c)| c.is_whitespace()).map(|(k, _)| k).unwrap_or(rest.len())
-                }
-            } else {
-                let mut from = i + input[i..].chars().next().map(|c| c.len_utf8()).unwrap_or(0);
-                loop {
-                    match input[from..].find(anchor) {
-                        Some(k) => {
-                            let at = from + k;
-                            // the rest after this mask must also line up up to the next mask
-                            break at;
-                        }
-                        None => {
-                            from = input.len();
-                            break from;
-                        }
-                    }
-                }
-            };
-            if end > input.len() || (end == input.len() && !anchor.is_empty()) {
-                return (spans, false);
+    // pieces: literal, (kind, literal), (kind, literal), ...
+    let mut kinds: Vec<String> = Vec::new();
+    let mut lits: Vec<&str> = Vec::new();
+    let mut j = 0;
+    loop {
+        let next = output[j..].find(OPEN).map(|k| j + k);
+        let Some(at) = next else {
+            lits.push(&output[j..]);
+            break;
+        };
+        let Some(close) = output[at..].find(']') else {
+            lits.push(&output[j..]);
+            break;
+        };
+        lits.push(&output[j..at]);
+        kinds.push(output[at + OPEN.len()..at + close].to_string());
+        j = at + close + 1;
+    }
+    if !input.starts_with(lits[0]) {
+        return (Vec::new(), false);
+    }
+    let n = kinds.len();
+    if n == 0 {
+        return (Vec::new(), input == output);
+    }
+    // candidates for the end of mask m, starting the search after `from`
+    let candidates = |m: usize, start: usize| -> Vec<usize> {
+        let lit = lits[m + 1];
+        let first = start + input[start..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+        if first > input.len() {
+            return Vec::new();
+        }
+        if m + 1 == n {
+            // the last literal ends the input
+            return if input.len() >= lit.len() && input.ends_with(lit) && input.len() - lit.len() >= first { vec![input.len() - lit.len()] } else { Vec::new() };
+        }
+        if lit.is_empty() {
+            // two masks side by side: break at a space or at the end of a word
+            return input[first..].char_indices().filter(|(_, c)| c.is_whitespace()).map(|(k, _)| first + k).take(8).collect();
+        }
+        input[first..].match_indices(lit).map(|(k, _)| first + k).take(64).collect()
+    };
+    // depth-first search: frame m holds the candidate ends of mask m and the next one to try
+    let mut stack: Vec<(Vec<usize>, usize)> = vec![(candidates(0, lits[0].len()), 0)];
+    let mut chosen: Vec<usize> = Vec::new();
+    let mut budget = 200_000usize;
+    while let Some((cands, pos)) = stack.last_mut() {
+        if *pos >= cands.len() || budget == 0 {
+            if budget == 0 {
+                break;
             }
-            spans.push((i, end, kind));
-            i = end;
-            j = after;
+            stack.pop();
             continue;
         }
-        let (Some(a), Some(b)) = (input[i..].chars().next(), output[j..].chars().next()) else { return (spans, false) };
-        if a != b {
-            return (spans, false);
+        budget -= 1;
+        let end = cands[*pos];
+        *pos += 1;
+        let m = stack.len() - 1;
+        chosen.truncate(m);
+        chosen.push(end);
+        if m + 1 == n {
+            let mut spans = Vec::new();
+            let mut s = lits[0].len();
+            for (k, &e) in chosen.iter().enumerate() {
+                spans.push((s, e, kinds[k].clone()));
+                s = e + lits[k + 1].len();
+            }
+            return (spans, true);
         }
-        i += a.len_utf8();
-        j += b.len_utf8();
+        let next_start = end + lits[m + 1].len();
+        stack.push((candidates(m + 1, next_start), 0));
     }
-    (spans, i == input.len())
+    (Vec::new(), false)
 }
 
 #[derive(Default, Clone)]
@@ -819,13 +850,13 @@ fn context(text: &str, s: usize, e: usize) -> String {
 
 /// Scores a detector on `count` documents of `seed`. A gold item counts as found when every letter and digit of it
 /// lies inside some mask. A mask counts as true when it overlaps any gold item.
-pub fn score(det: &dyn Detector, seed: u64, count: usize, keep: usize) -> Score {
+pub fn score(det: &dyn Detector, docs: impl Iterator<Item = Doc>, keep: usize) -> Score {
     let mut per: Vec<(String, Count)> = KINDS.iter().map(|k| (k.to_string(), Count::default())).collect();
     let (mut listed, mut unlisted) = ((0, 0), (0, 0));
     let (mut misaligned, mut misses, mut false_alarms) = (0usize, Vec::new(), Vec::new());
-    let mut micros = 0u128;
-    for i in 0..count {
-        let doc = document(seed, i);
+    let (mut micros, mut count) = (0u128, 0usize);
+    for (i, doc) in docs.enumerate() {
+        count += 1;
         let started = std::time::Instant::now();
         let out = det.mask(&doc.text);
         micros += started.elapsed().as_micros();
@@ -921,6 +952,61 @@ fn report_json(s: &Score, det: &str, seed: u64) -> String {
         "misaligned": s.misaligned, "detector_ms": s.micros as f64 / 1000.0})).unwrap()
 }
 
+// ---------------------------------------------------------------- documents written by others
+
+/// Documents in a text file, split by lines of `=====`, with personal items marked as `⟦kind|text⟧`. `⟦iban⟧` and
+/// `⟦tax_id⟧` stand for numbers that this function fills with valid random ones, because a writer rarely gets check
+/// digits right. Lets a second author, a person or another model, write test documents the rules never saw.
+pub fn load_marked(text: &str, seed: u64) -> Vec<Doc> {
+    let mark = regex::Regex::new(r"⟦(name|address|phone|email|birth_date)\|([^⟧]*)⟧|⟦(iban|tax_id)⟧").unwrap();
+    let mut rng = Rng::new(seed);
+    let mut docs = Vec::new();
+    for part in text.split("\n=====") {
+        let part = part.trim_start_matches(['=', '\n']).trim();
+        if part.is_empty() || !part.contains('⟦') {
+            continue;
+        }
+        let mut d = Doc::new("marked");
+        let mut last = 0;
+        for c in mark.captures_iter(part) {
+            let m = c.get(0).unwrap();
+            d.t(&part[last..m.start()]);
+            if let (Some(kind), Some(value)) = (c.get(1), c.get(2)) {
+                let kind = KINDS.iter().find(|k| **k == kind.as_str()).copied().unwrap_or("name");
+                let mut value = value.as_str().trim();
+                if kind == "name" {
+                    // titles belong outside a name mark; some writers put them inside
+                    loop {
+                        let v = value.trim_start();
+                        let Some(rest) = ["Herrn ", "Herr ", "Frau ", "Dr. ", "Prof. ", "Familie "].iter().find_map(|t| v.strip_prefix(t)) else { break };
+                        d.t(&v[..v.len() - rest.len()]);
+                        value = rest;
+                    }
+                }
+                let tag = if kind != "name" { "" }
+                    else if value.split([' ', ',', '-']).any(|w| listed_first_name(w) || listed_surname(w)) { "listed" } else { "unlisted" };
+                if value.is_empty() {
+                    // an empty mark is a writer's slip: keep the text and no gold
+                } else {
+                    d.p(kind, tag, value);
+                }
+            } else if let Some(kind) = c.get(3) {
+                if kind.as_str() == "iban" {
+                    let v = iban(&mut rng);
+                    d.p("iban", "", &v);
+                } else {
+                    let v = tax_id(&mut rng);
+                    d.p("tax_id", "", &v);
+                }
+            }
+            last = m.end();
+        }
+        d.t(&part[last..]);
+        docs.push(d);
+    }
+    docs
+}
+
 // ---------------------------------------------------------------- detectors for the bench
 
 /// What the level "pii" of the harness does without a model: the key rules, then the personal-data rules.
@@ -966,7 +1052,7 @@ fn number(args: &[String], flag: &str, default: u64) -> Result<u64, String> {
     }
 }
 
-const USAGE: &str = "usage: penelope privacy factory --out DIR [--seed N] [--count N]\n       penelope privacy bench [--seed N] [--count N] [--model] [--misses N] [--json]\n       penelope privacy scan FILE...";
+const USAGE: &str = "usage: penelope privacy factory --out DIR [--seed N] [--count N]\n       penelope privacy bench [--seed N] [--count N] [--file MARKED.txt] [--model] [--misses N] [--json]\n       penelope privacy scan FILE...";
 
 pub fn cli(ctx: &crate::config::Ctx, args: &[String]) -> Result<String, String> {
     let seed = number(args, "--seed", 42)?;
@@ -991,16 +1077,20 @@ pub fn cli(ctx: &crate::config::Ctx, args: &[String]) -> Result<String, String> 
         }
         "bench" => {
             let keep = number(args, "--misses", 0)? as usize;
+            let docs: Vec<Doc> = match value(args, "--file") {
+                Some(f) => load_marked(&std::fs::read_to_string(f).map_err(|e| format!("cannot read {}: {}", f, e))?, seed),
+                None => (0..count).map(|i| document(seed, i)).collect(),
+            };
             let s;
             let name;
             if args.iter().any(|a| a == "--model") {
                 let model = crate::route::model_for(ctx, "filter").cloned().ok_or("no model in roles.filter")?;
                 let det = WithModel { ctx, model };
                 name = det.name();
-                s = score(&det, seed, count, keep);
+                s = score(&det, docs.into_iter(), keep);
             } else {
                 name = Harness.name();
-                s = score(&Harness, seed, count, keep);
+                s = score(&Harness, docs.into_iter(), keep);
             }
             Ok(if args.iter().any(|a| a == "--json") { report_json(&s, &name, seed) + "\n" } else { report(&s, &name, seed) })
         }
@@ -1013,6 +1103,9 @@ pub fn cli(ctx: &crate::config::Ctx, args: &[String]) -> Result<String, String> 
                 let masked = Harness.mask(&text);
                 let (spans, _) = align(&text, &masked);
                 for (s, e, k) in spans {
+                    if !KINDS.contains(&k.as_str()) {
+                        continue; // keys and secrets belong to the older rules of privacy.rs
+                    }
                     *total.entry(k.clone()).or_default() += 1;
                     out.push_str(&format!("{}: {:<10} {}\n", f, k, context(&text, s, e)));
                 }
@@ -1068,5 +1161,42 @@ mod tests {
         assert_eq!(got, vec!["Anna", "Berg", "DE89 3704 0044 0532 0130 00"]);
         let (_, ok) = align(input, "Hallo [masked:name], something else");
         assert!(!ok);
+    }
+
+    #[test]
+    fn align_backtracks_when_the_literal_occurs_inside_the_mask() {
+        let (spans, ok) = align("Fragen an a@b.de.", "Fragen an [masked:email].");
+        assert!(ok);
+        assert_eq!(spans, vec![(10, 16, "email".to_string())]);
+    }
+
+    #[test]
+    fn the_rules_reach_the_gate_on_the_factory() {
+        let s = score(&Harness, (0..120).map(|i| document(7, i)), 0);
+        for (k, c) in &s.per_kind {
+            if k == "name" || k == "iban" {
+                assert!(c.found * 100 >= c.gold * 98, "{} found {} of {}", k, c.found, c.gold);
+            }
+        }
+        assert_eq!(s.misaligned, 0);
+    }
+
+    /// Documents written by three other models (DeepSeek, GLM, Kimi) with marked personal data. The rules were tuned
+    /// on rounds 1 and 2 and on the Kimi set of round 3; the GLM set of round 3 was measured once with frozen rules
+    /// (names 92.9 %). Together they are a regression floor now.
+    #[test]
+    fn the_rules_hold_on_documents_of_other_writers() {
+        let files = [include_str!("../tests/data/privacy/round1-deepseek.txt"), include_str!("../tests/data/privacy/round1-glm.txt"),
+                     include_str!("../tests/data/privacy/round2-kimi.txt"), include_str!("../tests/data/privacy/round2-deepseek.txt"),
+                     include_str!("../tests/data/privacy/round3-kimi.txt"), include_str!("../tests/data/privacy/round3-glm.txt")];
+        let docs: Vec<Doc> = files.iter().flat_map(|f| load_marked(f, 42)).collect();
+        assert!(docs.len() >= 140, "{}", docs.len());
+        let s = score(&Harness, docs.into_iter(), 0);
+        let get = |k: &str| s.per_kind.iter().find(|(n, _)| n == k).unwrap().1.clone();
+        let (name, iban) = (get("name"), get("iban"));
+        assert_eq!(iban.found, iban.gold);
+        assert!(name.found * 100 >= name.gold * 94, "names {} of {}", name.found, name.gold);
+        let all: (usize, usize) = s.per_kind.iter().fold((0, 0), |a, (_, c)| (a.0 + c.true_masks, a.1 + c.masks));
+        assert!(all.0 * 100 >= all.1 * 96, "precision {} of {}", all.0, all.1);
     }
 }
