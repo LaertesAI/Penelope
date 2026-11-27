@@ -350,6 +350,7 @@ pub fn guard(ctx: &Ctx, name: &str, args: &Value) -> Option<String> {
             let now = before + 1;
             STRIKES.with(|s| s.borrow_mut().insert(name.to_string(), now));
             if now >= MAX_STRIKES {
+                crate::autoroute::note_strikes(ctx);
                 return Some(strikes_text(name, Some(&f)));
             }
             Some(f.text)

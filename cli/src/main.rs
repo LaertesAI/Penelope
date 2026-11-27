@@ -7,6 +7,7 @@ mod agents;
 mod apps;
 mod audit;
 mod auth;
+mod autoroute;
 mod backend;
 mod brain;
 mod brief;
@@ -19,6 +20,7 @@ mod crew;
 mod cursor;
 mod forge;
 mod gates;
+mod graph;
 mod eurykleia;
 mod eval;
 mod factories;
@@ -32,6 +34,7 @@ mod mcpclient;
 mod mcpmem;
 mod mcpserv;
 mod mcpvet;
+mod attach;
 mod mitos;
 mod memory;
 #[allow(dead_code)]
@@ -129,6 +132,9 @@ penelope memory go QUERY      follow the map to a waypoint and print the notes o
 penelope memory note [--path a/b] TEXT
                               store a rule or fact at a waypoint (without --path: filed by language or topic)
 penelope memory unravel [N]   take back the last note, or the last N notes
+penelope memory find QUERY    pointers to the nodes that hold an answer: id, title, one line, path (the memory_find tool)
+penelope memory export --format json|obsidian [--include-person] PATH
+                              the knowledge graph as JSON or as an Obsidian vault; level 3 (person) nodes only with the flag
 penelope search [--engine E] [--fresh] WORDS
                               search several engines, cache, rank, print up to 8 results
 penelope search fanout on|off  ask every configured engine at once and merge the results
@@ -843,6 +849,11 @@ fn memory_cmd(ctx: &config::Ctx, args: &[String]) {
             println!("{}", tools::memory_note(ctx, &path, &rest.join(" ")));
         }
         Some("unravel") => println!("{}", tools::unravel(ctx, args.get(1).and_then(|n| n.parse().ok()).unwrap_or(1))),
+        Some("find") => println!("{}", graph::find_text(ctx, &args[1..].join(" "), 8)),
+        Some("export") => match graph::export_cmd(ctx, &args[1..]) {
+            Ok(report) => println!("{}", report),
+            Err(e) => loom::warn(&e),
+        },
         Some(other) => loom::warn(&format!("unknown memory command: {}", other)),
     }
 }

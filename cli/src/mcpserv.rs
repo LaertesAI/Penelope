@@ -137,7 +137,7 @@ pub fn handle(profile: &Profile, mitos_on: &mut bool, line: &str) -> Option<Valu
             *mitos_on = mitos::announced(&params);
             json!({
                 "protocolVersion": params["protocolVersion"].as_str().unwrap_or("2025-06-18"),
-                "capabilities": {"tools": {"listChanged": false}, "experimental": {mitos::EXTENSION_ID: mitos::manifest()}},
+                "capabilities": {"tools": {"listChanged": false}, "experimental": {mitos::EXTENSION_ID: mitos::manifest_v0()}},
                 "serverInfo": {"name": format!("penelope-{}", profile.name), "version": env!("CARGO_PKG_VERSION")},
                 "instructions": profile.instructions,
             })
@@ -207,7 +207,7 @@ pub mod testing {
 
     pub fn mitos_init() -> String {
         request(1, "initialize", json!({"protocolVersion": "2025-06-18",
-            "capabilities": {"experimental": {mitos::EXTENSION_ID: mitos::manifest()}}}))
+            "capabilities": {"experimental": {mitos::EXTENSION_ID: mitos::manifest_v0()}}}))
     }
 }
 
