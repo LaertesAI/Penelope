@@ -14,6 +14,8 @@ pub fn default_config() -> Value {
     json!({
         "main": {"kind": "claude-cli", "model": "sonnet", "effort": "high"},
         "weak": {"kind": "claude-cli", "model": "haiku", "effort": "high"},
+        "route": "fixed",
+        "route_context_limit": 100000,
         "run_policy": "safe",
         "sandbox": "off",
         "edit_policy": "ask",
@@ -51,7 +53,8 @@ pub fn default_config() -> Value {
         "apps": {"allow_install": false, "rights": {"files": false, "network": false, "shell": false}},
         "update": {"url": "", "channel": "stable", "public_key": ""},
         "global_memory": null,
-        "clipboard": {"read": "", "write": ""}
+        "clipboard": {"read": "", "write": ""},
+        "ask": {"timeout_secs": 900}
     })
 }
 

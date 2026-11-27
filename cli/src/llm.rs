@@ -36,6 +36,8 @@ pub struct Usage {
     pub tokens_in: u64,
     pub tokens_out: u64,
     pub steps: u64,
+    /// The largest input of one request in the loop: the context at its fullest.
+    pub max_in: u64,
 }
 
 pub fn is_api(kind: &str) -> bool {
@@ -365,6 +367,7 @@ pub fn run_loop_with(model: &Value, system: &str, history: &mut Vec<Value>, tool
         }
         let reply = chat_cancel(model, system, history, tools, cancel)?;
         usage.tokens_in += reply.tokens_in;
+        usage.max_in = usage.max_in.max(reply.tokens_in);
         usage.tokens_out += reply.tokens_out;
         if let Some(stop) = tick(usage) {
             return Err(stop);
