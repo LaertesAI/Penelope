@@ -56,7 +56,95 @@ pub fn mask(text: &str) -> (String, usize) {
 }
 
 /// All personal items in the text, sorted, without overlaps. A kind found earlier in this list wins an overlap.
+///
+/// Text from the read and grep tools carries a prefix per line (`    5  ` or `src/a.rs:5: `), and Windows files end
+/// lines with `\r\n`. Both break the rules that anchor at a line start or end. `spans` removes them first, runs the
+/// rules on the plain text, and maps each span back to the bytes of the input.
 pub fn spans(text: &str) -> Vec<Span> {
+    match Plain::of(text) {
+        None => plain_spans(text),
+        Some(p) => plain_spans(&p.text).into_iter().map(|s| Span { start: p.start(s.start), end: p.end(s.end), kind: s.kind }).collect(),
+    }
+}
+
+/// The text without line prefixes and without the `\r` of `\r\n`, with the map back to the input. `parts` holds
+/// (start in `text`, start in the input, length) of each kept piece, in order.
+struct Plain {
+    text: String,
+    parts: Vec<(usize, usize, usize)>,
+}
+
+/// The prefix of a line as the read tool writes it: the number right-aligned in five places, then two spaces. A line
+/// number never starts with 0, so a phone number such as `0171  2345678` never looks like one.
+fn read_prefix(line: &str) -> Option<usize> {
+    let digits_at = line.len() - line.trim_start_matches(' ').len();
+    let digits = line[digits_at..].bytes().take_while(u8::is_ascii_digit).count();
+    let width = digits_at + digits;
+    (digits > 0 && line.as_bytes()[digits_at] != b'0' && width == digits.max(5) && line[width..].starts_with("  ")).then_some(width + 2)
+}
+
+/// The prefix of a line as the grep tool writes it: `path:NUMBER: `.
+fn grep_prefix(line: &str) -> Option<usize> {
+    let mut from = 0;
+    while let Some(k) = line[from..].find(':') {
+        let at = from + k + 1;
+        let digits = line[at..].bytes().take_while(u8::is_ascii_digit).count();
+        if at > 1 && digits > 0 && line.as_bytes()[at] != b'0' && line[at + digits..].starts_with(": ") {
+            return Some(at + digits + 2);
+        }
+        from = at;
+    }
+    None
+}
+
+impl Plain {
+    fn of(text: &str) -> Option<Plain> {
+        let crlf = text.contains("\r\n");
+        let lines: Vec<&str> = text.split_inclusive('\n').collect();
+        let bodies: Vec<&str> = lines.iter().map(|l| l.trim_end_matches(['\n', '\r'])).collect();
+        let full: Vec<&&str> = bodies.iter().filter(|b| !b.is_empty()).collect();
+        let pick = |f: fn(&str) -> Option<usize>| !full.is_empty() && full.iter().all(|b| f(b).is_some());
+        let prefix: Option<fn(&str) -> Option<usize>> = if pick(read_prefix) { Some(read_prefix) } else if pick(grep_prefix) { Some(grep_prefix) } else { None };
+        if !crlf && prefix.is_none() {
+            return None;
+        }
+        let mut p = Plain { text: String::with_capacity(text.len()), parts: Vec::new() };
+        let mut at = 0usize;
+        for line in lines {
+            let cut = prefix.and_then(|f| f(line.trim_end_matches(['\n', '\r']))).unwrap_or(0);
+            let body_end = if line.ends_with("\r\n") { line.len() - 2 } else if line.ends_with('\n') { line.len() - 1 } else { line.len() };
+            p.keep(text, at + cut, at + body_end);
+            if line.ends_with('\n') {
+                p.keep(text, at + line.len() - 1, at + line.len());
+            }
+            at += line.len();
+        }
+        Some(p)
+    }
+    fn keep(&mut self, input: &str, from: usize, to: usize) {
+        if from >= to {
+            return;
+        }
+        match self.parts.last_mut() {
+            Some((ps, po, pl)) if *po + *pl == from && *ps + *pl == self.text.len() => *pl += to - from,
+            _ => self.parts.push((self.text.len(), from, to - from)),
+        }
+        self.text.push_str(&input[from..to]);
+    }
+    fn part(&self, pos: usize) -> &(usize, usize, usize) {
+        &self.parts[self.parts.partition_point(|p| p.0 <= pos).saturating_sub(1)]
+    }
+    fn start(&self, pos: usize) -> usize {
+        let (ps, po, _) = self.part(pos);
+        po + (pos - ps)
+    }
+    fn end(&self, pos: usize) -> usize {
+        let (ps, po, _) = self.part(pos - 1);
+        po + (pos - 1 - ps) + 1
+    }
+}
+
+fn plain_spans(text: &str) -> Vec<Span> {
     let mut taken = Taken::default();
     emails(text, &mut taken);
     ibans(text, &mut taken);
@@ -85,6 +173,26 @@ impl Taken {
         self.0.insert(start, (end, kind));
         true
     }
+    /// Is exactly this range already one span of this kind?
+    fn is(&self, start: usize, end: usize, kind: &str) -> bool {
+        self.0.get(&start).map(|(e, k)| *e == end && *k == kind).unwrap_or(false)
+    }
+    /// Adds a span that may cover spans of the same kind inside it: "O. Rehberg" over the "Rehberg" a rule found first.
+    fn grow(&mut self, start: usize, end: usize, kind: &'static str) -> bool {
+        let inner: Vec<usize> = self.0.range(start..end).filter(|(_, (e, k))| *e <= end && *k == kind).map(|(s, _)| *s).collect();
+        let removed: Vec<(usize, (usize, &'static str))> = inner.iter().map(|s| (*s, self.0.remove(s).unwrap())).collect();
+        if self.add(start, end, kind) {
+            return true;
+        }
+        self.0.extend(removed);
+        false
+    }
+}
+
+/// The token that holds byte `pos`, found by binary search: tokens are sorted and do not overlap.
+fn tok_at(toks: &[Tok], pos: usize) -> Option<usize> {
+    let k = toks.partition_point(|t| t.s <= pos).checked_sub(1)?;
+    (pos < toks[k].e).then_some(k)
 }
 
 fn re(cell: &'static OnceLock<Regex>, pattern: &str) -> &'static Regex {
@@ -329,7 +437,9 @@ fn birth_dates(text: &str, taken: &mut Taken) {
     let date = re(&DATE, r"\b(?:\d{1,2}\. ?\d{1,2}\. ?(?:19|20)\d{2}|\d{1,2}\. ?(?:Januar|Februar|März|Maerz|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember|Jan\.|Feb\.|Mär\.|Apr\.|Jun\.|Jul\.|Aug\.|Sep\.|Sept\.|Okt\.|Nov\.|Dez\.) (?:19|20)\d{2}|(?:19|20)\d{2}-\d{2}-\d{2})\b");
     let context = re(&CONTEXT, r"(?i)(?:(?:geb\.|geboren|geburtsdatum|geburtstag|geb\.-datum|\bgeb\b)[^\n]{0,14}|(?:^|[\s(,;])\* ?)$");
     for m in date.find_iter(text) {
-        if context.is_match(line_before(text, m.start(), 40)) {
+        // "Ich bin am 02.02.1998 geboren": the word may also follow the date
+        let after = text[m.end()..].trim_start_matches([' ', '\t']);
+        if context.is_match(line_before(text, m.start(), 40)) || after.starts_with("geboren") {
             taken.add(m.start(), m.end(), "birth_date");
         }
     }
@@ -368,6 +478,9 @@ fn column_kind(header: &str) -> Option<&'static str> {
 /// table; it ends at a blank line or a row with another number of cells.
 fn tables(text: &str, taken: &mut Taken) {
     let mut kinds: Vec<Option<&'static str>> = Vec::new();
+    // a plain "Name" as the only personal column also heads tables of tools and providers (`| Name | Kind |`): then a
+    // cell counts only when its words look like a person's name, so `claude-cli` and `parser` stay
+    let mut strict = false;
     let mut sep = ';';
     let mut at = 0usize;
     for line in text.split_inclusive('\n') {
@@ -387,7 +500,11 @@ fn tables(text: &str, taken: &mut Taken) {
                         let lead = cell.len() - cell.trim_start().len();
                         let core = cell.trim().trim_matches('"');
                         let s = off + cell.find(core).unwrap_or(lead);
-                        if core.chars().any(|c| c.is_alphanumeric()) {
+                        let person = !strict || *kind != "name" || {
+                            let words: Vec<&str> = core.split_whitespace().collect();
+                            words.iter().any(|w| name_shape(w)) && words.iter().all(|w| name_shape(w.trim_end_matches(',')) || PARTICLES.contains(w))
+                        };
+                        if person && core.chars().any(|c| c.is_alphanumeric()) {
                             taken.add(s, s + core.len(), kind);
                         }
                     }
@@ -400,6 +517,9 @@ fn tables(text: &str, taken: &mut Taken) {
             continue; // a line of code, not a table header
         }
         for candidate in [';', '\t', '|', ','] {
+            if !body.contains(candidate) {
+                continue;
+            }
             let cells: Vec<&str> = body.split(candidate).collect();
             if cells.len() < 3 {
                 continue;
@@ -408,6 +528,7 @@ fn tables(text: &str, taken: &mut Taken) {
             let short = cells.iter().all(|c| c.trim().chars().count() <= 30);
             let mapped = found.iter().filter(|k| k.is_some()).count();
             if mapped >= 2 || (mapped == 1 && short && found.contains(&Some("name"))) {
+                strict = mapped == 1 && cells.iter().zip(&found).any(|(c, k)| *k == Some("name") && c.trim().trim_matches(['"', '*', '\'']).eq_ignore_ascii_case("name"));
                 kinds = found;
                 sep = candidate;
                 break;
@@ -426,7 +547,7 @@ fn addresses(text: &str, taken: &mut Taken) {
     const NO: &str = r"\d{1,3} ?[a-zA-Z]?(?: ?[-/] ?\d{1,3} ?[a-zA-Z]?)?";
     let suffix = re(&SUFFIX, &format!(r"\b(?:[A-ZÄÖÜ][a-zäöüß]+[ -]){{0,2}}[A-ZÄÖÜ][a-zäöüß]*(?:straße|strasse|str\.|weg|gasse|platz|allee|ring|damm|ufer|chaussee|steig|pfad|markt|wall|graben|stieg|twiete|kamp|hof|park|garten|feld|berg|tor|brücke|grund|anger|winkel|höhe) {}", NO));
     let words = re(&WORDS, &format!(r"\b(?:[A-ZÄÖÜ][a-zäöüß]+[ -]){{1,3}}(?:Straße|Strasse|Str\.|Weg|Gasse|Platz|Allee|Ring|Damm|Ufer|Chaussee|Markt|Steig|Pfad|Wall|Graben) {}", NO));
-    let prefix = re(&PREFIX, &format!(r"\b(?:Am|An der|An den|An dem|Im|In der|In den|Zum|Zur|Auf der|Auf dem|Auf den|Unter den|Hinter der|Hinter dem|Vor dem|Bei der|Alte|Alter|Altes|Neue|Neuer|Neues|Großer|Kleiner|Obere|Untere) (?:[a-zäöüß]+ )?(?:[A-ZÄÖÜ][a-zäöüß]+ ){{0,2}}[A-ZÄÖÜ][a-zäöüß]+ {}", NO));
+    let prefix = re(&PREFIX, &format!(r"\b(?:Am|An der|An den|An dem|Im|In der|In den|Zum|Zur|Auf der|Auf dem|Auf den|Unter den|Unter der|Unter dem|Hinter der|Hinter dem|Hinter den|Vor dem|Vor der|Vor den|Bei der|Alte|Alter|Altes|Neue|Neuer|Neues|Großer|Kleiner|Obere|Untere) (?:[a-zäöüß]+ )?(?:[A-ZÄÖÜ][a-zäöüß]+ ){{0,2}}[A-ZÄÖÜ][a-zäöüß]+ {}", NO));
     let mut found: Vec<(usize, usize)> = Vec::new();
     for (pattern, strict) in [(suffix, false), (words, false), (prefix, true)] {
         for m in pattern.find_iter(text) {
@@ -593,7 +714,7 @@ Sachbearbeiter(?:in)?|Assistenz|Assistent(?:in)?|Sekretariat|Kundenservice|Kunde
 Personal|Personalabteilung|Personalwesen|Empfang|Lager|Logistik|Verwaltung|Hausverwaltung|Technik|Service|Support|Recht|Datenschutz|\
 [A-ZÄÖÜ][a-zäöüß]*(?:leitung|leiter|leiterin|abteilung|logistik|management|manager|managerin|referent|referentin|beauftragte[r]?|berater|beraterin|assistent|assistentin|technik|planung|entwicklung|wesen)|\
 Rechtsanwalt|Rechtsanwältin|Steuerberater(?:in)?|Notar(?:in)?|Arzt|Ärztin|Meister(?:in)?|Ehemann|Ehefrau|Mutter|Vater|Sohn|Tochter|\
-Fahrer(?:in)?|Monteur(?:in)?|Techniker(?:in)?|Geselle|Gesellin|Auszubildende[r]?|Praktikant(?:in)?|Werkstudent(?:in)?|Aushilfe|\
+Fahrer(?:in)?|Disponent(?:in)?|Monteur(?:in)?|Techniker(?:in)?|Geselle|Gesellin|Auszubildende[r]?|Praktikant(?:in)?|Werkstudent(?:in)?|Aushilfe|\
 [A-ZÄÖÜ][a-zäöüß]*(?:geber|geberin|nehmer|nehmerin|ärztin|arzt|medizin|dienst|therapeut|therapeutin|pfleger|pflegerin|kauffrau|kaufmann)";
 
 /// After one of these a capitalised word is a noun: "der Vorgesetzte Ilka Schröder".
@@ -655,6 +776,8 @@ struct Tok<'a> {
     stop_after: bool,
     /// An opening bracket or quote stands right before the core.
     open_before: bool,
+    /// One capital letter and a full stop: the "F." of "Jan F. Rehberg".
+    initial: bool,
 }
 
 fn tokens(text: &str) -> Vec<Tok<'_>> {
@@ -673,7 +796,7 @@ fn tokens(text: &str) -> Vec<Tok<'_>> {
         let tail = &w[lead + core.len()..];
         out.push(Tok { s: m.start() + lead, e: m.start() + lead + core.len(), w: core, line,
                        stop_after: tail.contains([',', ';', ':', '!', '?', '.', ')', ']', '>', '"', '“', '”']),
-                       open_before: lead > 0 });
+                       open_before: lead > 0, initial: core.chars().count() == 1 && core.chars().all(char::is_uppercase) && tail.starts_with('.') });
     }
     out
 }
@@ -724,6 +847,11 @@ fn group(toks: &[Tok], i: usize, max: usize, taken: &Taken) -> Vec<usize> {
                 continue;
             }
             break;
+        }
+        if t.initial && words > 0 && toks.get(j + 1).map(|n| n.line == t.line && nameish(n.w)).unwrap_or(false) {
+            out.push(j);
+            j += 1;
+            continue;
         }
         if !nameish(t.w) || noun_like(t.w) {
             break;
@@ -797,8 +925,8 @@ fn names(text: &str, taken: &mut Taken) {
     let academic = r"(?:Dr\.|Prof\.|Dipl\.-[A-Za-zäöü]+\.?|Dr\. ?med\.|Dr\.-Ing\.|Mag\.|M\.\s?Sc\.|B\.\s?Sc\.)";
     let title = re(&TITLE, &format!(r"(?:\b(?:[Hh]errn?|[Ff]rau|Hr\.|Fr\.|Familie|Fam\.)(?: {a})*|\b{a}(?: {a})*)(?: (?:von|van|zu|de|vom)(?: der| dem| den)?)? $", a = academic));
     // labels are capitalised in German forms; a lower-case "name:" is a field in source code
-    let label = re(&LABEL, &format!(r"(?:\b(?:Name|Vorname|Nachname|Ansprechpartner(?:in)?|Kontoinhaber(?:in)?|Mitarbeiter(?:in)?|Arbeitnehmer(?:in)?|Mieter(?:in)?|Vermieter(?:in)?|Bearbeiter(?:in)?|Sachbearbeiter(?:in)?|Empfänger(?:in)?|Absender(?:in)?|[Vv]on|[Aa]n|Cc|CC|Bcc|BCC|Kopie|Kontakt|Inhaber(?:in)?|Geschäftsführer(?:in)?|Geschäftsführung|Vorstand|Unterschrift|Antragsteller(?:in)?|Bewerber(?:in)?|Teilnehmer(?:in)?|Kunde|Kundin|Annahme|Verfasser(?:in)?|Zuständig|Ansprechperson|Vertreter(?:in)?|Beschäftigte[r]?|Auszubildende[r]?|Praktikant(?:in)?|Vorgesetzte[r]?|Unterzeichner(?:in)?|Gesprächspartner(?:in)?|Auftragnehmer(?:in)?|Auftraggeber(?:in)?|Notfallkontakt|Kontaktperson|Ehepartner(?:in)?|Erstellt von|Geprüft von|Freigegeben von|Teamleitung|Leitung|Projektleitung|Verantwortlich|Für|Anwesend|Abwesend|Entschuldigt|Verteiler|Gäste|Teilnehmende|Teilnehmer(?:in|innen)?|Protokoll|Protokollführer(?:in)?|Genehmigt|Lieferadresse|Rechnungsadresse|Rechnungsempfänger(?:in)?|Anrufer(?:in)?|Patient(?:in)?|Versicherte[r]?|Fahrer(?:in)?|Mitglied|Schuldner(?:in)?|Gläubiger(?:in)?|Zeuge|Zeugin|Bürge|Bürgin|Erbe|Erbin|Melder(?:in)?|Gast|Gäste|Bearbeitet von|Erfasst von|Aufgenommen von|Unterschrieben von|Bevollmächtigte[r]?|Vollmachtgeber(?:in)?|Referent(?:in)?|Moderation|Gesprächsführung|Dozent(?:in)?|Trainer(?:in)?|Lehrer(?:in)?|Mentor(?:in)?|Betreuer(?:in)?|Berater(?:in)?|Pate|Patin|Monteur(?:in)?|Techniker(?:in)?|Handwerker(?:in)?|Geselle|Gesellin|Fahrer(?:in)?|Kurier|Disponent(?:in)?|Disposition|[A-ZÄÖÜ][a-zäöüß]*(?:nehmer|nehmerin|empfänger|empfängerin|beauftragte[r]?|leiter|leiterin|leitung|führung|führer|führerin|partner|partnerin|steller|stellerin|halter|halterin|inhaber|inhaberin|annahme|kontakt|person|vertretung|verantwortliche[r]?|zuständige[r]?))\s*:|\b(?:Genehmigt|Geprüft|Bearbeitet|Erstellt|Aufgenommen|Unterschrieben|Freigegeben|Erfasst|Dokumentiert|Angenommen|Ausgestellt|Abgezeichnet) (?:durch|von)|\bInh\.|\bi\. ?[AV]\.|\bz\. ?Hd\.?|\bgez\.|\b[Vv]ertreten durch(?: den| die| ihre[n]?| seine[n]?)?(?: Geschäftsführer(?:in)?| Vorstand| Prokuristen| Prokuristin| Inhaber(?:in)?)?|\bper Adresse|\bc/o|\b(?:{r})\s*:|\b(?:[Gg]eprüft|[Ff]reigegeben|[Gg]enehmigt|[Ee]rstellt|[Bb]earbeitet|[Uu]nterschrieben|[Ee]rfasst|[Vv]ermerkt|[Aa]ufgenommen)(?: am [\d.]+)?(?: (?:durch|von))?\s*:?|\bUnterschriften\s*:) *(?:(?:von|van|zu|de)(?: der| dem| den)? )?$", r = ROLE_WORDS));
-    let role = re(&ROLE, r"(?:\b(?:Mitarbeiter(?:in)?|Kollege|Kollegin|Geschäftsführer(?:in)?|Sachbearbeiter(?:in)?|Ansprechpartner(?:in)?|Teamleiter(?:in)?|Abteilungsleiter(?:in)?|Personalleiter(?:in)?|Vorgesetzte[rn]?|Bewerber(?:in)?|Arbeitnehmer(?:in)?|Mieter(?:in)?|Vermieter(?:in)?|Kunde|Kunden|Kundin|Prokurist(?:in)?|Inhaber(?:in)?|Auszubildende[rn]?|Praktikant(?:in)?|Nachfolger(?:in)?|Vertretung|Kontoinhaber(?:in)?|Kontaktperson|Rechtsanwalt|Rechtsanwältin|Notar(?:in)?|Steuerberater(?:in)?|Referent(?:in)?|Dozent(?:in)?|Trainer(?:in)?|Berater(?:in)?|Betreuer(?:in)?|Hausmeister(?:in)?|Monteur(?:in)?|Techniker(?:in)?|Fahrer(?:in)?|Arzt|Ärztin|Patient(?:in)?|Student(?:in)?|Werkstudent(?:in)?|Chef(?:in)?|Leiter(?:in)?|Ehemann|Ehefrau|Sohn|Tochter|Nachbar(?:in)?|[A-ZÄÖÜ][a-zäöüß]*(?:beauftragte[nr]?|leiter(?:in)?|referent(?:in)?|berater(?:in)?|meister(?:in)?|assistent(?:in)?|manager(?:in)?))(?: ist| sind| war| wird)?) $");
+    let label = re(&LABEL, &format!(r"(?:\b(?:Name(?: (?:des|der) [A-ZÄÖÜ][a-zäöüß]+)?|Vorname|Nachname|Ansprechpartner(?:in)?|Kontoinhaber(?:in)?|Mitarbeiter(?:in)?|Arbeitnehmer(?:in)?|Mieter(?:in)?|Vermieter(?:in)?|Bearbeiter(?:in)?|Sachbearbeiter(?:in)?|Empfänger(?:in)?|Absender(?:in)?|[Vv]on|[Aa]n|Cc|CC|Bcc|BCC|Kopie|Kontakt|Inhaber(?:in)?|Geschäftsführer(?:in)?|Geschäftsführung|Vorstand|Unterschrift|Antragsteller(?:in)?|Bewerber(?:in)?|Teilnehmer(?:in)?|Kunde|Kundin|Annahme|Verfasser(?:in)?|Zuständig|Ansprechperson|Vertreter(?:in)?|Beschäftigte[r]?|Auszubildende[r]?|Praktikant(?:in)?|Vorgesetzte[r]?|Unterzeichner(?:in)?|Gesprächspartner(?:in)?|Auftragnehmer(?:in)?|Auftraggeber(?:in)?|Notfallkontakt|Kontaktperson|Ehepartner(?:in)?|Erstellt von|Geprüft von|Freigegeben von|Teamleitung|Leitung|Projektleitung|Verantwortlich|Für|Anwesend|Abwesend|Entschuldigt|Verteiler|Gäste|Teilnehmende|Teilnehmer(?:in|innen)?|Protokoll|Protokollführer(?:in)?|Genehmigt|Lieferadresse|Rechnungsadresse|Rechnungsempfänger(?:in)?|Anrufer(?:in)?|Patient(?:in)?|Versicherte[r]?|Fahrer(?:in)?|Mitglied|Schuldner(?:in)?|Gläubiger(?:in)?|Zeuge|Zeugin|Bürge|Bürgin|Erbe|Erbin|Melder(?:in)?|Gast|Gäste|Bearbeitet von|Erfasst von|Aufgenommen von|Unterschrieben von|Bevollmächtigte[r]?|Vollmachtgeber(?:in)?|Referent(?:in)?|Moderation|Gesprächsführung|Dozent(?:in)?|Trainer(?:in)?|Lehrer(?:in)?|Mentor(?:in)?|Betreuer(?:in)?|Berater(?:in)?|Pate|Patin|Monteur(?:in)?|Techniker(?:in)?|Handwerker(?:in)?|Geselle|Gesellin|Fahrer(?:in)?|Kurier|Disponent(?:in)?|Disposition|[A-ZÄÖÜ][a-zäöüß]*(?:nehmer|nehmerin|empfänger|empfängerin|beauftragte[r]?|leiter|leiterin|leitung|führung|führer|führerin|partner|partnerin|steller|stellerin|halter|halterin|inhaber|inhaberin|annahme|kontakt|person|vertretung|verantwortliche[r]?|zuständige[r]?))\s*:|\b(?:Genehmigt|Geprüft|Bearbeitet|Erstellt|Aufgenommen|Unterschrieben|Freigegeben|Erfasst|Dokumentiert|Angenommen|Ausgestellt|Abgezeichnet) (?:durch|von)|\bInh\.|\bi\. ?[AV]\.|\bz\. ?Hd\.?|\bgez\.|\b[Vv]ertreten durch(?: den| die| ihre[n]?| seine[n]?)?(?: Geschäftsführer(?:in)?| Vorstand| Prokuristen| Prokuristin| Inhaber(?:in)?)?|\bper Adresse|\bc/o|\b(?:{r})\s*:|\b(?:[Gg]eprüft|[Ff]reigegeben|[Gg]enehmigt|[Ee]rstellt|[Bb]earbeitet|[Uu]nterschrieben|[Ee]rfasst|[Vv]ermerkt|[Aa]ufgenommen)(?: am [\d.]+)?(?: (?:durch|von))?\s*:?|\bUnterschriften\s*:) *(?:(?:von|van|zu|de)(?: der| dem| den)? )?$", r = ROLE_WORDS));
+    let role = re(&ROLE, r"(?:\b(?:Mitarbeiter(?:in)?|Kollege|Kollegin|Geschäftsführer(?:in)?|Sachbearbeiter(?:in)?|Ansprechpartner(?:in)?|Teamleiter(?:in)?|Abteilungsleiter(?:in)?|Personalleiter(?:in)?|Vorgesetzte[rn]?|Bewerber(?:in)?|Arbeitnehmer(?:in)?|Mieter(?:in)?|Vermieter(?:in)?|Kunde|Kunden|Kundin|Prokurist(?:in)?|Inhaber(?:in)?|Auszubildende[rn]?|Praktikant(?:in)?|Nachfolger(?:in)?|Vertretung|Kontoinhaber(?:in)?|Kontaktperson|Rechtsanwalt|Rechtsanwältin|Notar(?:in)?|Steuerberater(?:in)?|Referent(?:in)?|Dozent(?:in)?|Trainer(?:in)?|Berater(?:in)?|Betreuer(?:in)?|Hausmeister(?:in)?|Monteur(?:in)?|Techniker(?:in)?|Fahrer(?:in)?|Arzt|Ärztin|Patient(?:in)?|Student(?:in)?|Werkstudent(?:in)?|Chef(?:in)?|Leiter(?:in)?|Ehemann|Ehefrau|Sohn|Tochter|Nachbar(?:in)?|[A-ZÄÖÜ][a-zäöüß]*(?:beauftragte[nr]?|leiter(?:in)?|referent(?:in)?|berater(?:in)?|meister(?:in)?|assistent(?:in)?|manager(?:in)?))(?: ist| sind| war| wird|,)?) $");
     let greeting = re(&GREETING, r"(?:^|[\s,])(?:Hallo|Hi|Hey|Moin|Liebe|Lieber|Servus|Guten Tag|Guten Morgen|Sehr geehrte|Sehr geehrter|Danke|Danke,|Dank an|Grüße an|Gruß an|Dank gilt|bedanken uns bei|danken) $");
     let closing = re(&CLOSING, r"(?i)^\s*(?:mit )?(?:freundlichen|besten|vielen|herzlichen|lieben|schönen|freundliche|beste|viele|herzliche|liebe|schöne|sonnige|kollegiale|kollegialen)? ?(?:grüßen|grüße|gruß|gruss|grüssen)\b[^\n]*$|^\s*(?:i\. ?[AV]\.|gez\.|ppa\.|Ihr|Ihre|Dein|Deine|Euer|Eure)\s*$|^\s*_{5,}[\s_]*$");
     let lone_title = re(&LONE_TITLE, &format!(r"^\s*(?:Herrn?|Frau)(?: {a})*\s*$", a = academic));
@@ -841,7 +969,10 @@ fn names(text: &str, taken: &mut Taken) {
     let prev_line = |n: usize| -> Option<&str> {
         last_full[n].map(|k| { let t = line_text(k); &t[floor(t, t.len().saturating_sub(200))..] })
     };
+    let line_end = |n: usize| -> usize { line_starts.get(n + 1).map(|x| x - 1).unwrap_or(text.len()) };
     let mut hits: Vec<usize> = Vec::new();
+    // per line: the line before holds no name; computed once per line so a line of many tokens stays linear
+    let mut middle_memo: Vec<Option<bool>> = vec![None; line_starts.len()];
     let mut i = 0;
     while i < toks.len() {
         let t = &toks[i];
@@ -852,15 +983,18 @@ fn names(text: &str, taken: &mut Taken) {
         let before = line_before(text, t.s, 120);
         let first_on_line = (0..i).rev().take_while(|&k| toks[k].line == t.line).all(|k| PARTICLES.contains(&toks[k].w));
         let mut found: Vec<usize> = Vec::new();
-        let label_here = label.is_match(before);
-        if title.is_match(before) || label_here {
+        // no rule on the text before a token matches an empty text: skipping them keeps a line of one word cheap
+        let blank = before.trim().is_empty();
+        let label_here = !blank && label.is_match(before);
+        if !blank && (label_here || title.is_match(before)) {
             found = group(&toks, i, 4, taken);
         } else if first_on_line && t.line > 0 && prev_line(t.line).map(|p| lone_title.is_match(p)).unwrap_or(false) {
             found = group(&toks, i, 4, taken);
         } else if first_on_line && t.line > 0 && prev_line(t.line).map(|p| p.trim_end().ends_with(':') && label.is_match(p.trim_end())).unwrap_or(false)
-            && !text[t.s..].lines().next().unwrap_or("").chars().any(|c| c.is_ascii_digit()) {
+            && !text[t.s..line_end(t.line).max(t.s)].chars().any(|c| c.is_ascii_digit()) {
             // "Lieferadresse:" on its own line, the name on the next
             found = group(&toks, i, 4, taken);
+        } else if blank {
         } else if chat.is_match(before) {
             // "08:45 Silvia Conti: Ich hab ..."
             let g = group(&toks, i, 3, taken);
@@ -871,7 +1005,13 @@ fn names(text: &str, taken: &mut Taken) {
             }
         } else if role.is_match(before) {
             let g = group(&toks, i, 3, taken);
-            if g.iter().filter(|&&k| !PARTICLES.contains(&toks[k].w)).count() >= 2 || g.iter().any(|&k| first_name(toks[k].w)) {
+            // after "Fahrer, " the name must close with a comma or start with a listed first name: "Ihr Fahrer,
+            // Branimir Iliev, hat" holds a name, "Fahrer, Fuhrpark Lübeck" a department
+            let comma = before.ends_with(", ");
+            let closed = g.last().map(|&k| text[toks[k].e..].starts_with(',')).unwrap_or(false);
+            let starts_first = g.first().map(|&k| first_name(toks[k].w)).unwrap_or(false);
+            if (!comma || closed || starts_first)
+                && (g.iter().filter(|&&k| !PARTICLES.contains(&toks[k].w)).count() >= 2 || g.iter().any(|&k| first_name(toks[k].w))) {
                 found = g;
             }
         } else if greeting.is_match(before) {
@@ -885,26 +1025,30 @@ fn names(text: &str, taken: &mut Taken) {
         }
         // a signature starts on the line after the closing, or one line later when that line holds no name
         // ("Mit freundlichen Grüßen\nPersonalabteilung\nGundula Franke", but not "...\nSwantje Ruge\nAußendienst")
-        let middle_free = last_full[t.line].map(|k| {
-            let s = line_starts[k];
-            let e = s + line_text(k).len();
-            taken.0.range(s..e).all(|(_, (_, kind))| *kind != "name")
-        }).unwrap_or(true);
-        let after_closing = t.line > 0 && (prev_line(t.line).map(|p| closing.is_match(p)).unwrap_or(false)
-            || (middle_free && last_full[t.line].and_then(|k| prev_line(k)).map(|p| closing.is_match(p)).unwrap_or(false)));
-        let next_is_role = next_line(t.line).map(|n| role_line.is_match(n)).unwrap_or(false);
-        let before_address = next_full[t.line].map(|n| {
-            let s = line_starts[n];
-            let s = s + (line_text(n).len() - line_text(n).trim_start().len());
-            taken.0.get(&s).map(|(_, k)| *k == "address").unwrap_or(false)
-        }).unwrap_or(false);
-        if found.is_empty() && first_on_line && (after_closing || next_is_role || before_address) && !role_line.is_match(line_text(t.line))
-            && !role_word.is_match(t.w) {
+        // the line checks of a signature run only for the first name word of a line that no rule took yet
+        let (mut before_address, mut signature) = (false, false);
+        if found.is_empty() && first_on_line && !role_word.is_match(t.w) {
+            let middle_free = *middle_memo[t.line].get_or_insert_with(|| last_full[t.line].map(|k| {
+                let s = line_starts[k];
+                let e = s + line_text(k).len();
+                taken.0.range(s..e).all(|(_, (_, kind))| *kind != "name")
+            }).unwrap_or(true));
+            let after_closing = t.line > 0 && (prev_line(t.line).map(|p| closing.is_match(p)).unwrap_or(false)
+                || (middle_free && last_full[t.line].and_then(|k| prev_line(k)).map(|p| closing.is_match(p)).unwrap_or(false)));
+            before_address = next_full[t.line].map(|n| {
+                let s = line_starts[n];
+                let s = s + (line_text(n).len() - line_text(n).trim_start().len());
+                taken.0.get(&s).map(|(_, k)| *k == "address").unwrap_or(false)
+            }).unwrap_or(false);
+            let next_is_role = || next_line(t.line).map(|n| role_line.is_match(n)).unwrap_or(false);
+            signature = (after_closing || before_address || next_is_role()) && !role_line.is_match(line_text(t.line));
+        }
+        if signature {
             // a signature or the name above a street: the line starts with name words and ends after them or at a
             // comma; side-by-side signatures ("Gotthilf Renner   Ngozi Adaeze Eze") continue across the line
             let g = group(&toks, i, 4, taken);
             if let Some(&last) = g.last() {
-                let rest = text[toks[last].e..].split('\n').next().unwrap_or("");
+                let rest = &text[toks[last].e..line_end(t.line).max(toks[last].e)];
                 let rest_names = rest.split_whitespace().all(|w| {
                     let w = w.trim_matches(|c: char| !c.is_alphanumeric() && c != '-');
                     w.is_empty() || matches!(w, "und") || PARTICLES.contains(&w) || (nameish(w) && !noun_like(w) && !role_word.is_match(w))
@@ -985,7 +1129,7 @@ fn names(text: &str, taken: &mut Taken) {
                 let mut last = last;
                 if rest.starts_with(" (") {
                     // "Omar Haddad (Lagerlogistik), Henrike Voss-Kirsch": skip the bracket
-                    let Some(close) = rest.find(')') else { break };
+                    let Some(close) = rest[..floor(rest, rest.len().min(60))].find(')') else { break };
                     if rest[..close].contains('\n') {
                         break;
                     }
@@ -1028,6 +1172,8 @@ fn names(text: &str, taken: &mut Taken) {
         i = found.last().unwrap() + 1;
     }
     // one person per line in a list: "Wójcik, Marek (Produktion)", "- Omar Haddad (Lagerlogistik)"
+    // surnames under 3 letters ("Vo, Duc") spread only when a list line showed them in the form "Surname, First"
+    let mut short: HashSet<&str> = HashSet::new();
     static LIST_LINE: OnceLock<Regex> = OnceLock::new();
     let list_line = re(&LIST_LINE, r"(?m)^[ \t]*(?:[-–•*][ \t]*)?(\p{Lu}[\p{L}'’-]+)(, | )(\p{Lu}[\p{L}'’-]+)( \([^)\n]{1,40}\))?[ \t]*$");
     for c in list_line.captures_iter(text) {
@@ -1038,13 +1184,19 @@ fn names(text: &str, taken: &mut Taken) {
         if sep == " " && paren.is_none() {
             continue; // two capitalised words alone on a line are often a heading
         }
-        if taken.free(a.start(), a.end()) && taken.free(b.start(), b.end()) {
+        // a word an earlier rule already masked as a name by exactly its own span does not block the line:
+        // "Amrani, Omar (Vertrieb)" where "Omar" was found alone as a listed first name
+        let open = |g: &regex::Match| taken.free(g.start(), g.end()) || taken.is(g.start(), g.end(), "name");
+        if open(&a) && open(&b) {
             taken.add(a.start(), a.end(), "name");
             taken.add(b.start(), b.end(), "name");
             for g in [a, b] {
-                if let Some(k) = toks.iter().position(|t| t.s == g.start()) {
+                if let Some(k) = tok_at(&toks, g.start()).filter(|&k| toks[k].s == g.start()) {
                     hits.push(k);
                 }
+            }
+            if sep == ", " && a.as_str().chars().count() < 3 {
+                short.insert(a.as_str());
             }
         }
     }
@@ -1054,17 +1206,22 @@ fn names(text: &str, taken: &mut Taken) {
         let (all, surname) = (c.get(1).unwrap(), c.get(2).unwrap());
         let after = &text[all.end()..];
         let lead = line_before(text, all.start(), 120);
+        if lead.ends_with("i. ") || lead.ends_with("i.") {
+            continue; // "i. A. Martin Keller": the "A." of "im Auftrag" is no initial
+        }
         let ok = listed_surname_part(surname.as_str()) || after_birth.is_match(after) || title.is_match(lead) || label.is_match(lead);
-        if ok && nameish(surname.as_str()) && !noun_like(surname.as_str()) && taken.add(all.start(), all.end(), "name") {
-            if let Some(k) = toks.iter().position(|t| t.s <= surname.start() && surname.start() < t.e) {
+        // an earlier rule may have masked the surname alone ("Rehberg (Vollmachtgeberin)"): the initials join it
+        if ok && nameish(surname.as_str()) && !noun_like(surname.as_str()) && taken.grow(all.start(), all.end(), "name") {
+            if let Some(k) = tok_at(&toks, surname.start()) {
                 hits.push(k);
             }
         }
     }
     // names found by the table rule spread like the others
+    let mut in_hits: HashSet<usize> = hits.iter().copied().collect();
     for (k, t) in toks.iter().enumerate() {
         if let Some((_, (end, kind))) = taken.0.range(..=t.s).next_back() {
-            if *kind == "name" && *end >= t.e && name_shape(t.w) && !hits.contains(&k) {
+            if *kind == "name" && *end >= t.e && name_shape(t.w) && in_hits.insert(k) {
                 hits.push(k);
             }
         }
@@ -1073,7 +1230,7 @@ fn names(text: &str, taken: &mut Taken) {
     static SPEAKER: OnceLock<Regex> = OnceLock::new();
     // "[08:01] hakan.sahin: ...", "ayse.yilmaz (09:12): ...", "Lena Hartmann [08:02]: ..."
     let speaker = re(&SPEAKER, r"(?m)^[ \t]*\**(?:\[?\d{1,2}:\d{2}(?::\d{2})?\]?[ \t]*[-–—]?[ \t]*(\p{L}[\p{L}\d._-]{1,30}(?: \p{L}[\p{L}.'’-]{0,30}){0,2})(?: \([^)\n]{1,20}\))?:|(\p{L}[\p{L}\d._-]{1,30}(?: \p{L}[\p{L}.'’-]{0,30}){0,2}) [(\[]\d{1,2}:\d{2}(?::\d{2})?[)\]]:?)(?:\*\*)?(?:[ \t]|$)");
-    let mut seeds: Vec<String> = Vec::new();
+    let mut seeds: HashSet<String> = HashSet::new();
     for c in speaker.captures_iter(text) {
         let Some(g) = c.get(1).or_else(|| c.get(2)) else { continue };
         let first = g.as_str().split(' ').next().unwrap_or("");
@@ -1092,6 +1249,8 @@ fn names(text: &str, taken: &mut Taken) {
             }
         }
     }
+    // each distinct seed word once, then one pass over the tokens: a text of 80,000 addresses stays linear
+    let mut seed_words: HashSet<String> = HashSet::new();
     for part in seeds {
         let letters: String = part.chars().filter(|c| c.is_alphabetic()).collect();
         if letters.chars().count() < 3 || letters.len() != part.len() {
@@ -1102,8 +1261,11 @@ fn names(text: &str, taken: &mut Taken) {
         if !nameish(&word) || noun_like(&word) || PARTICLES.contains(&word.to_lowercase().as_str()) {
             continue;
         }
+        seed_words.insert(word);
+    }
+    if !seed_words.is_empty() {
         for (k, t) in toks.iter().enumerate() {
-            if t.w == word && !in_company(&toks, k) && taken.add(t.s, t.e, "name") {
+            if seed_words.contains(t.w) && !in_company(&toks, k) && taken.add(t.s, t.e, "name") {
                 hits.push(k);
             }
         }
@@ -1126,13 +1288,13 @@ fn names(text: &str, taken: &mut Taken) {
             continue;
         }
         if taken.add(first.start(), first.end(), "name") {
-            if let Some(k) = toks.iter().position(|t| t.s == first.start()) {
+            if let Some(k) = tok_at(&toks, first.start()).filter(|&k| toks[k].s == first.start()) {
                 hits.push(k);
             }
         }
         if let Some(second) = c.get(2) {
             if nameish(second.as_str()) && !noun_like(second.as_str()) && taken.add(second.start(), second.end(), "name") {
-                if let Some(k) = toks.iter().position(|t| t.s == second.start()) {
+                if let Some(k) = tok_at(&toks, second.start()).filter(|&k| toks[k].s == second.start()) {
                     hits.push(k);
                 }
             }
@@ -1144,7 +1306,8 @@ fn names(text: &str, taken: &mut Taken) {
     let mut fresh = hits;
     let mut known: HashSet<&str> = HashSet::new();
     for _ in 0..3 {
-        let words: Vec<&str> = fresh.iter().map(|&k| toks[k].w).filter(|w| w.chars().count() >= 3 && !PARTICLES.contains(w) && !known.contains(w)).collect();
+        let words: Vec<&str> = fresh.iter().map(|&k| toks[k].w)
+            .filter(|w| (w.chars().count() >= 3 || short.contains(w)) && !PARTICLES.contains(w) && !known.contains(w)).collect();
         if words.is_empty() && fresh.is_empty() {
             break;
         }
@@ -1211,6 +1374,64 @@ Steuer-ID: 86 095 742 719, geboren am 03.07.1990.\nTel. 040 1234567-12, jonas.we
                     ("040 1234567-12", "phone"), ("jonas.weber@example.org", "email"), ("Yara", "name"), ("Lindqvist", "name")];
         let want: Vec<(String, &str)> = want.iter().map(|(a, b)| (a.to_string(), *b)).collect();
         assert_eq!(got, want);
+    }
+
+    #[test]
+    fn line_prefixes_and_windows_line_ends_give_the_same_items() {
+        let text = "Teilnehmende:\nAmrani, Omar (Vertrieb Messen)\nVo, Duc (Lizenzen)\n\nVo berichtet. Ihr Fahrer, Branimir Iliev, hat notiert.\n\
+Kontakt: Lindenweg 4\n20457 Hamburg\n\nMit freundlichen Grüßen\nYara Lindqvist\n[08:01] hakan.sahin: verstanden\n";
+        let want = kinds(text);
+        assert!(want.contains(&("Amrani".to_string(), "name")) && want.contains(&("Yara".to_string(), "name")), "{:?}", want);
+        assert_eq!(kinds(&text.replace('\n', "\r\n")), want);
+        let read: Vec<String> = text.lines().enumerate().map(|(i, l)| format!("{:>5}  {}", i + 1, l)).collect();
+        assert_eq!(kinds(&read.join("\n")), want);
+        assert_eq!(kinds(&read.join("\r\n")), want);
+        let grep: Vec<String> = text.lines().enumerate().map(|(i, l)| format!("C:\\notes\\a.txt:{}: {}", i + 1, l)).collect();
+        assert_eq!(kinds(&grep.join("\n")), want);
+        // a phone number at a line start is no line number: it never starts with 0
+        assert_eq!(kinds("0171  2345678 ist meine Nummer"), vec![("0171  2345678".to_string(), "phone")]);
+    }
+
+    #[test]
+    fn list_lines_short_surnames_roles_with_a_comma_and_initials() {
+        let text = "Teilnehmende (alphabetisch):\nAmrani, Omar (Vertrieb Messen)\nHinrichs, Fentje (Sekretariat)\nVo, Duc (Lizenzen)\n\n\
+Amrani koordiniert. Vo berichtet. Ihr Fahrer, Branimir Iliev, hat den Mangel notiert.\n\ngez. O. Rehberg (Vollmachtgeberin)\n\
+gez. Jan F. Rehberg\nName des Empfängers: T. Fleischer-Zorn.\n";
+        let names: Vec<String> = kinds(text).into_iter().filter(|(_, k)| *k == "name").map(|(t, _)| t).collect();
+        for want in ["Amrani", "Omar", "Hinrichs", "Fentje", "Vo", "Duc", "Branimir", "Iliev", "O. Rehberg", "F", "T. Fleischer-Zorn"] {
+            assert!(names.iter().any(|n| n == want), "{} not in {:?}", want, names);
+        }
+        assert_eq!(names.iter().filter(|n| *n == "Amrani").count(), 2);
+        assert_eq!(names.iter().filter(|n| *n == "Vo").count(), 2);
+        // "Fahrer, Fuhrpark Lübeck" is a department, "i. A." no initial
+        assert!(kinds("Viele Grüße\nGerhard Wuttke\nFahrer, Fuhrpark Lübeck\n").iter().all(|(t, _)| t != "Fuhrpark" && t != "Lübeck"));
+        assert!(kinds("Freundliche Grüße\ni. A. Martin Keller\n").iter().all(|(t, _)| !t.contains("A.")));
+    }
+
+    #[test]
+    fn a_table_of_tools_under_a_plain_name_header_stays() {
+        let doc = "| Name | Kind | Base address |\n|------|------|------|\n| claude-cli | cli | - |\n| parser | lib | - |\n";
+        assert_eq!(kinds(doc), Vec::<(String, &str)>::new());
+        let people = "| Name | Abteilung | Raum |\n|---|---|---|\n| Anna Berg | Einkauf | 2.14 |\n";
+        assert_eq!(kinds(people), vec![("Anna Berg".to_string(), "name")]);
+    }
+
+    /// Crafted worst cases: e-mail locals, initials, list lines, mentions and titles, each repeated. They used to
+    /// cost quadratic time (6 s for 1 MB of e-mail locals in release). Four times the text may cost at most 7 times
+    /// the time; linear gives 4, quadratic 16. A ratio holds on slow and fast CI machines alike.
+    #[test]
+    fn crafted_inputs_stay_linear() {
+        for unit in ["kaj.ole@x.de ", "A. Müller\n", "Vo, Duc (Lizenzen)\n", "@Silvia Conti ok\n", "Herr Otto Berg und Frau Anna Berg. "] {
+            let time = |kb: usize| {
+                let text = unit.repeat(kb * 1024 / unit.len());
+                let started = std::time::Instant::now();
+                assert!(!spans(&text).is_empty(), "{}", unit);
+                started.elapsed().as_secs_f64()
+            };
+            let small = time(32).min(time(32));
+            let large = time(128);
+            assert!(large < 7.0 * small + 0.05, "{:?}: 32 KB {:.3} s, 128 KB {:.3} s", unit, small, large);
+        }
     }
 
     #[test]

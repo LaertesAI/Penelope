@@ -823,6 +823,9 @@ pub struct Count {
     pub found: usize,
     pub masks: usize,
     pub true_masks: usize,
+    /// Bytes under masks of this kind, and those of them inside a gold item of the same kind.
+    pub mask_bytes: usize,
+    pub true_bytes: usize,
 }
 
 pub struct Score {
@@ -849,7 +852,9 @@ fn context(text: &str, s: usize, e: usize) -> String {
 }
 
 /// Scores a detector on `count` documents of `seed`. A gold item counts as found when every letter and digit of it
-/// lies inside some mask. A mask counts as true when it overlaps any gold item.
+/// lies inside some mask. A mask counts as true when it overlaps any gold item. The byte precision is stricter: the
+/// bytes of a mask count only where a gold item of the same kind lies under them, so a mask that runs past a name into
+/// a role word loses those bytes.
 pub fn score(det: &dyn Detector, docs: impl Iterator<Item = Doc>, keep: usize) -> Score {
     let mut per: Vec<(String, Count)> = KINDS.iter().map(|k| (k.to_string(), Count::default())).collect();
     let (mut listed, mut unlisted) = ((0, 0), (0, 0));
@@ -863,6 +868,12 @@ pub fn score(det: &dyn Detector, docs: impl Iterator<Item = Doc>, keep: usize) -
         let (masks, ok) = align(&doc.text, &out);
         if !ok {
             misaligned += 1;
+        }
+        let mut gold_kind: Vec<Option<&str>> = vec![None; doc.text.len()];
+        for g in &doc.gold {
+            for c in gold_kind.iter_mut().take(g.end).skip(g.start) {
+                *c = Some(g.kind);
+            }
         }
         let mut covered = vec![false; doc.text.len()];
         for (s, e, _) in &masks {
@@ -895,6 +906,8 @@ pub fn score(det: &dyn Detector, docs: impl Iterator<Item = Doc>, keep: usize) -
             }
             let slot = per.iter_mut().find(|(k, _)| *k == name).unwrap();
             slot.1.masks += 1;
+            slot.1.mask_bytes += e - s;
+            slot.1.true_bytes += gold_kind[*s..*e].iter().filter(|k| **k == Some(kind.as_str())).count();
             if hit {
                 slot.1.true_masks += 1;
             } else if false_alarms.len() < keep {
@@ -911,18 +924,22 @@ fn pct(a: usize, b: usize) -> String {
 
 pub fn report(s: &Score, det: &str, seed: u64) -> String {
     let mut out = format!("privacy bench: {} documents, seed {}, detector {}, {:.1} ms in the detector\n\n", s.docs, seed, det, s.micros as f64 / 1000.0);
-    out.push_str(&format!("{:<11} {:>6} {:>6} {:>9} {:>6} {:>6} {:>10}\n", "kind", "gold", "found", "recall", "masks", "true", "precision"));
+    out.push_str(&format!("{:<11} {:>6} {:>6} {:>9} {:>6} {:>6} {:>10} {:>10}\n", "kind", "gold", "found", "recall", "masks", "true", "precision",
+                          "bytes"));
     let mut all = Count::default();
     for (k, c) in &s.per_kind {
-        out.push_str(&format!("{:<11} {:>6} {:>6} {:>9} {:>6} {:>6} {:>10}\n", k, c.gold, c.found, pct(c.found, c.gold), c.masks, c.true_masks,
-                              pct(c.true_masks, c.masks)));
+        out.push_str(&format!("{:<11} {:>6} {:>6} {:>9} {:>6} {:>6} {:>10} {:>10}\n", k, c.gold, c.found, pct(c.found, c.gold), c.masks, c.true_masks,
+                              pct(c.true_masks, c.masks), pct(c.true_bytes, c.mask_bytes)));
         all.gold += c.gold;
         all.found += c.found;
         all.masks += c.masks;
         all.true_masks += c.true_masks;
+        all.mask_bytes += c.mask_bytes;
+        all.true_bytes += c.true_bytes;
     }
-    out.push_str(&format!("{:<11} {:>6} {:>6} {:>9} {:>6} {:>6} {:>10}\n", "all", all.gold, all.found, pct(all.found, all.gold), all.masks,
-                          all.true_masks, pct(all.true_masks, all.masks)));
+    out.push_str(&format!("{:<11} {:>6} {:>6} {:>9} {:>6} {:>6} {:>10} {:>10}\n", "all", all.gold, all.found, pct(all.found, all.gold), all.masks,
+                          all.true_masks, pct(all.true_masks, all.masks), pct(all.true_bytes, all.mask_bytes)));
+    out.push_str("(precision: masks that overlap any gold item; bytes: masked bytes inside a gold item of the same kind)\n");
     out.push_str(&format!("\nnames with a listed first name or surname: {} of {} ({})\nnames without:                             {} of {} ({})\n",
                           s.names_listed.1, s.names_listed.0, pct(s.names_listed.1, s.names_listed.0),
                           s.names_unlisted.1, s.names_unlisted.0, pct(s.names_unlisted.1, s.names_unlisted.0)));
@@ -944,10 +961,11 @@ pub fn report(s: &Score, det: &str, seed: u64) -> String {
     out
 }
 
-fn report_json(s: &Score, det: &str, seed: u64) -> String {
+fn report_json(s: &Score, det: &str, seed: u64, view: View) -> String {
     let kinds: serde_json::Map<String, serde_json::Value> = s.per_kind.iter().map(|(k, c)| (k.clone(), json!({
-        "gold": c.gold, "found": c.found, "masks": c.masks, "true_masks": c.true_masks}))).collect();
-    serde_json::to_string_pretty(&json!({"detector": det, "seed": seed, "documents": s.docs, "kinds": kinds,
+        "gold": c.gold, "found": c.found, "masks": c.masks, "true_masks": c.true_masks, "mask_bytes": c.mask_bytes,
+        "true_bytes": c.true_bytes}))).collect();
+    serde_json::to_string_pretty(&json!({"detector": det, "seed": seed, "view": view.label(), "documents": s.docs, "kinds": kinds,
         "names_listed": [s.names_listed.1, s.names_listed.0], "names_unlisted": [s.names_unlisted.1, s.names_unlisted.0],
         "misaligned": s.misaligned, "detector_ms": s.micros as f64 / 1000.0})).unwrap()
 }
@@ -1009,6 +1027,111 @@ pub fn load_marked(text: &str, seed: u64) -> Vec<Doc> {
 
 // ---------------------------------------------------------------- detectors for the bench
 
+/// How a tool hands a document to the detector. `raw` is the file. `read` is what the read tool shows: the line
+/// number right-aligned in five places and two spaces before each line. `grep` is what grep shows: `doc.txt:5: ` and
+/// the trimmed line. `crlf` is the file with Windows line ends.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum View {
+    Raw,
+    Read,
+    Grep,
+    Crlf,
+}
+
+impl View {
+    pub fn parse(s: &str) -> Option<View> {
+        Some(match s {
+            "raw" => View::Raw,
+            "read" => View::Read,
+            "grep" => View::Grep,
+            "crlf" => View::Crlf,
+            _ => return None,
+        })
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            View::Raw => "raw",
+            View::Read => "read",
+            View::Grep => "grep",
+            View::Crlf => "crlf",
+        }
+    }
+    /// The text as the tool shows it, and each piece of the input in it: (start shown, start in the input, length).
+    pub fn show(self, text: &str) -> (String, Vec<(usize, usize, usize)>) {
+        let (mut out, mut parts) = (String::with_capacity(text.len() + text.len() / 4), Vec::new());
+        let mut at = 0usize;
+        let lines: Vec<&str> = text.split('\n').collect();
+        for (i, line) in lines.iter().enumerate() {
+            let (lead, body) = match self {
+                View::Raw | View::Crlf => (0, *line),
+                View::Read => { out.push_str(&format!("{:>5}  ", i + 1)); (0, *line) }
+                View::Grep => {
+                    out.push_str(&format!("doc.txt:{}: ", i + 1));
+                    (line.len() - line.trim_start().len(), line.trim())
+                }
+            };
+            parts.push((out.len(), at + lead, body.len()));
+            out.push_str(body);
+            if i + 1 < lines.len() {
+                if self == View::Crlf {
+                    out.push('\r');
+                }
+                parts.push((out.len(), at + line.len(), 1));
+                out.push('\n');
+            }
+            at += line.len() + 1;
+        }
+        (out, parts)
+    }
+}
+
+/// A detector that sees each document through a view and is scored on the input bytes.
+struct Viewed<'a> {
+    inner: &'a dyn Detector,
+    view: View,
+}
+
+impl Detector for Viewed<'_> {
+    fn name(&self) -> String {
+        self.inner.name()
+    }
+    fn mask(&self, text: &str) -> String {
+        if self.view == View::Raw {
+            return self.inner.mask(text);
+        }
+        let (shown, parts) = self.view.show(text);
+        let masked = self.inner.mask(&shown);
+        let (spans, ok) = align(&shown, &masked);
+        if !ok {
+            return masked; // does not line up with the input either: the bench counts the document as misaligned
+        }
+        // a position inside a prefix or an added `\r` moves to the nearest input byte inside the span
+        let start = |pos: usize| -> usize {
+            let k = parts.partition_point(|p| p.0 <= pos).saturating_sub(1);
+            let (ps, po, pl) = parts[k];
+            if pos < ps + pl { po + (pos - ps) } else { parts.get(k + 1).map(|p| p.1).unwrap_or(text.len()) }
+        };
+        let end = |pos: usize| -> usize {
+            let k = parts.partition_point(|p| p.0 < pos).saturating_sub(1);
+            let (ps, po, pl) = parts[k];
+            if pos <= ps + pl { po + (pos - ps) } else { po + pl }
+        };
+        let mut out = String::with_capacity(text.len());
+        let mut last = 0usize;
+        for (s, e, kind) in spans {
+            let (s, e) = (start(s).max(last), end(e));
+            if s >= e {
+                continue;
+            }
+            out.push_str(&text[last..s]);
+            out.push_str(&format!("[masked:{}]", kind));
+            last = e;
+        }
+        out.push_str(&text[last..]);
+        out
+    }
+}
+
 /// What the level "pii" of the harness does without a model: the key rules, then the personal-data rules.
 struct Harness;
 
@@ -1052,7 +1175,15 @@ fn number(args: &[String], flag: &str, default: u64) -> Result<u64, String> {
     }
 }
 
-const USAGE: &str = "usage: penelope privacy factory --out DIR [--seed N] [--count N]\n       penelope privacy bench [--seed N] [--count N] [--file MARKED.txt] [--model] [--misses N] [--json]\n       penelope privacy scan FILE...";
+const USAGE: &str = "usage: penelope privacy factory --out DIR [--seed N] [--count N]\n       penelope privacy bench [--seed N] [--count N] [--file MARKED.txt] [--view raw|read|grep|crlf] [--model [--cloud]] [--misses N] [--json]\n       penelope privacy scan FILE...";
+
+/// Is the model served on this machine? Only then may `bench --model` send documents to it without `--cloud`.
+fn local_model(model: &serde_json::Value) -> bool {
+    let base = model["base_url"].as_str().unwrap_or("");
+    ["http://localhost", "http://127.0.0.1", "http://[::1]", "https://localhost", "https://127.0.0.1", "https://[::1]"].iter().any(|h| {
+        base.strip_prefix(h).map(|rest| rest.is_empty() || rest.starts_with(':') || rest.starts_with('/')).unwrap_or(false)
+    })
+}
 
 pub fn cli(ctx: &crate::config::Ctx, args: &[String]) -> Result<String, String> {
     let seed = number(args, "--seed", 42)?;
@@ -1081,18 +1212,27 @@ pub fn cli(ctx: &crate::config::Ctx, args: &[String]) -> Result<String, String> 
                 Some(f) => load_marked(&std::fs::read_to_string(f).map_err(|e| format!("cannot read {}: {}", f, e))?, seed),
                 None => (0..count).map(|i| document(seed, i)).collect(),
             };
+            let view = match value(args, "--view") {
+                Some(v) => View::parse(v).ok_or_else(|| format!("--view takes raw, read, grep or crlf, not {}", v))?,
+                None => View::Raw,
+            };
             let s;
             let name;
             if args.iter().any(|a| a == "--model") {
                 let model = crate::route::model_for(ctx, "filter").cloned().ok_or("no model in roles.filter")?;
+                if !local_model(&model) && !args.iter().any(|a| a == "--cloud") {
+                    return Err(format!("roles.filter runs at {}, not on this machine. The bench would send every document to it. Use a local \
+filter model, or add --cloud to send them anyway.", model["base_url"].as_str().unwrap_or("an unknown address")));
+                }
                 let det = WithModel { ctx, model };
                 name = det.name();
-                s = score(&det, docs.into_iter(), keep);
+                s = score(&Viewed { inner: &det, view }, docs.into_iter(), keep);
             } else {
                 name = Harness.name();
-                s = score(&Harness, docs.into_iter(), keep);
+                s = score(&Viewed { inner: &Harness, view }, docs.into_iter(), keep);
             }
-            Ok(if args.iter().any(|a| a == "--json") { report_json(&s, &name, seed) + "\n" } else { report(&s, &name, seed) })
+            Ok(if args.iter().any(|a| a == "--json") { report_json(&s, &name, seed, view) + "\n" }
+               else { format!("view {}\n{}", view.label(), report(&s, &name, seed)) })
         }
         "scan" => {
             let mut out = String::new();
@@ -1181,22 +1321,77 @@ mod tests {
         assert_eq!(s.misaligned, 0);
     }
 
-    /// Documents written by three other models (DeepSeek, GLM, Kimi) with marked personal data. The rules were tuned
-    /// on rounds 1 and 2 and on the Kimi set of round 3; the GLM set of round 3 was measured once with frozen rules
-    /// (names 92.9 %). Together they are a regression floor now.
+    const SETS: [(&str, &str); 6] = [
+        ("round1-deepseek", include_str!("../tests/data/privacy/round1-deepseek.txt")),
+        ("round1-glm", include_str!("../tests/data/privacy/round1-glm.txt")),
+        ("round2-kimi", include_str!("../tests/data/privacy/round2-kimi.txt")),
+        ("round2-deepseek", include_str!("../tests/data/privacy/round2-deepseek.txt")),
+        ("round3-kimi", include_str!("../tests/data/privacy/round3-kimi.txt")),
+        ("round3-glm", include_str!("../tests/data/privacy/round3-glm.txt")),
+    ];
+
+    fn kind(s: &Score, k: &str) -> Count {
+        s.per_kind.iter().find(|(n, _)| n == k).unwrap().1.clone()
+    }
+
+    /// Documents written by three other models (DeepSeek, GLM, Kimi) with marked personal data. All six sets have been
+    /// used to tune the rules now (the GLM set of round 3 last, after its frozen measurement of 92.9 % names), so this
+    /// is a regression floor, not a measurement on unseen text. Pooled names 752 of 773 (97.3 %), each set at least
+    /// 92.7 % (round 3, Kimi).
     #[test]
     fn the_rules_hold_on_documents_of_other_writers() {
-        let files = [include_str!("../tests/data/privacy/round1-deepseek.txt"), include_str!("../tests/data/privacy/round1-glm.txt"),
-                     include_str!("../tests/data/privacy/round2-kimi.txt"), include_str!("../tests/data/privacy/round2-deepseek.txt"),
-                     include_str!("../tests/data/privacy/round3-kimi.txt"), include_str!("../tests/data/privacy/round3-glm.txt")];
-        let docs: Vec<Doc> = files.iter().flat_map(|f| load_marked(f, 42)).collect();
-        assert!(docs.len() >= 140, "{}", docs.len());
-        let s = score(&Harness, docs.into_iter(), 0);
-        let get = |k: &str| s.per_kind.iter().find(|(n, _)| n == k).unwrap().1.clone();
-        let (name, iban) = (get("name"), get("iban"));
-        assert_eq!(iban.found, iban.gold);
-        assert!(name.found * 100 >= name.gold * 94, "names {} of {}", name.found, name.gold);
-        let all: (usize, usize) = s.per_kind.iter().fold((0, 0), |a, (_, c)| (a.0 + c.true_masks, a.1 + c.masks));
-        assert!(all.0 * 100 >= all.1 * 96, "precision {} of {}", all.0, all.1);
+        let mut pooled = (0usize, 0usize, 0usize, 0usize);
+        for (set, file) in SETS {
+            let s = score(&Harness, load_marked(file, 42).into_iter(), 0);
+            let (name, iban) = (kind(&s, "name"), kind(&s, "iban"));
+            assert_eq!(iban.found, iban.gold, "{}", set);
+            assert!(name.found * 100 >= name.gold * 92, "{}: names {} of {}", set, name.found, name.gold);
+            pooled.0 += name.found;
+            pooled.1 += name.gold;
+            for (_, c) in &s.per_kind {
+                pooled.2 += c.true_masks;
+                pooled.3 += c.masks;
+            }
+        }
+        assert!(pooled.1 >= 770 && pooled.0 * 1000 >= pooled.1 * 965, "pooled names {} of {}", pooled.0, pooled.1);
+        assert!(pooled.2 * 100 >= pooled.3 * 98, "precision {} of {}", pooled.2, pooled.3);
+    }
+
+    /// The read tool puts a line number before each line, grep puts `path:line: ` and trims, Windows files end lines
+    /// with `\r\n`. On each set the names found through each view stay within 1 point of the raw file, and IBANs,
+    /// phone numbers and e-mail addresses are all found. Before the rules ran on plain text, the read view lost 8.3
+    /// points of pooled names (95.6 to 87.3 %).
+    #[test]
+    fn the_views_of_the_tools_find_the_same_items() {
+        for (set, file) in SETS {
+            let raw = score(&Harness, load_marked(file, 42).into_iter(), 0);
+            for view in [View::Read, View::Grep, View::Crlf] {
+                let s = score(&Viewed { inner: &Harness, view }, load_marked(file, 42).into_iter(), 0);
+                assert_eq!(s.misaligned, raw.misaligned, "{} {:?}", set, view);
+                let (a, b) = (kind(&raw, "name"), kind(&s, "name"));
+                assert!(b.found * 100 + a.gold >= a.found * 100, "{} {:?}: names {} against {} of {}", set, view, b.found, a.found, a.gold);
+                for k in ["iban", "phone", "email"] {
+                    let c = kind(&s, k);
+                    assert_eq!(c.found, c.gold, "{} {:?} {}", set, view, k);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_view_maps_masks_back_to_the_input() {
+        let text = "Hallo Anna Berg,\n  bitte an anna.berg@example.org.\n";
+        for view in [View::Read, View::Grep, View::Crlf] {
+            let out = Viewed { inner: &Harness, view }.mask(text);
+            assert_eq!(out, "Hallo [masked:name] [masked:name],\n  bitte an [masked:email].\n", "{:?}", view);
+        }
+    }
+
+    #[test]
+    fn the_bench_sends_documents_only_to_a_local_model() {
+        assert!(local_model(&json!({"base_url": "http://localhost:11434/v1"})) && local_model(&json!({"base_url": "http://127.0.0.1:8000"})));
+        for cloud in [json!({"base_url": "https://api.example.com/v1"}), json!({"base_url": "http://localhost.example.com/v1"}), json!({"kind": "claude-cli"})] {
+            assert!(!local_model(&cloud), "{}", cloud);
+        }
     }
 }

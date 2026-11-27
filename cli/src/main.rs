@@ -180,8 +180,9 @@ penelope route                the roles, their tools and their models
 penelope mode [NAME]          auto, manual, safe, review, privacy or power
 penelope privacy factory --out DIR [--seed N] [--count N]
                               write synthetic German business documents with known personal data
-penelope privacy bench [--seed N] [--count N] [--model] [--misses N]
+penelope privacy bench [--seed N] [--count N] [--file MARKED.txt] [--view raw|read|grep|crlf] [--model [--cloud]] [--misses N] [--json]
                               recall and precision of the privacy filter per kind of personal data
+penelope privacy scan FILE... masks the privacy filter would set in any file, per 1,000 lines
 penelope agents               the agents written with $name(...)
 penelope skills               the skills Penelope wrote for this project
 penelope run-agent NAME --goal TEXT
