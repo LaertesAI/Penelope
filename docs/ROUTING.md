@@ -9,8 +9,8 @@ every task on the weak model with effort low and moves it to the main model with
   and the number of escalations in this session.
 - In `.penelope/config.json`: `"route": "auto"`. `"route_context_limit": 100000` sets the context trigger.
 - The weak model is the `weak` setting (default `claude-cli` `haiku`), the main model is the `main` setting (default
-  `sonnet`). Both must use the same kind (`claude-cli`, `openai` or `anthropic`). With different kinds the mode stays
-  inactive and `/route` says so.
+  `sonnet`). Both must use the same kind, provider and base URL. With different hosts the mode stays inactive and
+  `/route` says so, so an escalation never sends the weak history to another host.
 - The test trigger needs `test_command` in the config. Without it Penelope does not run tests, so no test result exists.
 
 The footer shows `auto · haiku low`, and after an escalation `auto · sonnet high (escalated: tests failed 2x)`.
@@ -18,7 +18,8 @@ The footer shows `auto · haiku low`, and after an escalation `auto · sonnet hi
 ## What a task is
 
 A task is one chat: a new session, `/new` or one eval task. A task starts on the weak model. After an escalation it
-stays on the main model until the next task starts.
+stays on the main model until the next task starts. `/escalate` before the first turn applies to the coming task and is
+counted once. Two chats on one folder keep separate state.
 
 ## Triggers
 
@@ -71,7 +72,9 @@ Caveats:
 
 ## Limits
 
-- Tool results from a `claude-cli` main model reach the chat through the file `.penelope/route-events`, written by the
-  MCP server process. A run that cannot write there never sees the test and strike triggers.
-- The context size of an API turn is the mean input per round of the turn. For the claude command it is the input,
-  cache creation and cache read tokens of the turn.
+- Test results and strikes reach the chat as small signed files in Penelope's state folder (`PENELOPE_STATE_DIR`, default
+  `penelope-state` in the temp folder), one folder per chat, outside the workspace. The chat takes each file by
+  renaming it. A file with a wrong signature is ignored, and `write` and `edit` refuse that folder. A command run
+  through `run` is not blocked from writing there; the signature key is the only guard against that.
+- The context size of a turn is its fullest single step: input, cache creation and cache read tokens. For an API turn
+  it is the largest input of one request.
