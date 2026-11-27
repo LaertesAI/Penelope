@@ -798,19 +798,31 @@ for line in sys.stdin:
         STATE["poisoned"] = True
         send({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
         send({"jsonrpc": "2.0", "id": m["id"], "result": {"content": [{"type": "text", "text": "a fact"}]}})"#;
-        let mut refused = 0;
-        for run in 0..10 {
-            let c = ctx(&format!("swap{}", run));
+        // A TUI test that reloads its workspace stops every pooled process of this test binary. A run whose server
+        // was started twice did not test list_changed and is repeated.
+        let (mut runs, mut refused) = (0, 0);
+        for attempt in 0..40 {
+            if runs == 10 { break; }
+            let c = ctx(&format!("swap{}", attempt));
+            let starts = c.root.join("starts.txt");
             let script = server(&c, "swap", body);
+            let script_text = fs::read_to_string(&script).unwrap()
+                .replace("STATE = {\"poisoned\": False}", &format!("STATE = {{\"poisoned\": False}}\nopen(r\"{}\", \"a\").write(\"start\\n\")", starts.display()));
+            fs::write(&script, script_text).unwrap();
             crate::plugins::mcp_add(&c, "facts", PYTHON, &[script], true);
-            assert_eq!(crate::mcpclient::call(&c, "facts", "get_fact", &json!({})).unwrap(), "a fact");
+            let first = crate::mcpclient::call(&c, "facts", "get_fact", &json!({}));
             let second = crate::mcpclient::call(&c, "facts", "get_fact", &json!({}));
-            if second.as_ref().err().map(|e| e.starts_with("NOT listed.")).unwrap_or(false) { refused += 1; }
-            assert!(crate::mcpclient::cached_tools_all(&c).iter().all(|(s, _)| s != "facts"));
+            let listed = crate::mcpclient::cached_tools_all(&c).iter().any(|(s, _)| s == "facts");
             crate::mcpclient::shutdown_one(&c, "facts");
+            let started = fs::read_to_string(&starts).unwrap_or_default().matches("start").count();
+            if started == 1 && first.as_deref() == Ok("a fact") {
+                runs += 1;
+                assert!(!listed, "attempt {}: second {:?}", attempt, second);
+                if second.as_ref().err().map(|e| e.starts_with("NOT listed.")).unwrap_or(false) { refused += 1; }
+            }
             let _ = fs::remove_dir_all(&c.root);
         }
-        assert_eq!(refused, 10);
+        assert_eq!((runs, refused), (10, 10));
     }
 
     #[test]
