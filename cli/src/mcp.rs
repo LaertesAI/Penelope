@@ -104,6 +104,7 @@ fn call_raw_inner(ctx: &Ctx, name: &str, a: &Value) -> Result<String, String> {
         }
         "research" => Ok(crate::research::run(ctx, &s("question"), a["depth"].as_str().unwrap_or("standard"),
                                                a["max_pages"].as_u64().unwrap_or(4) as usize, a["recency"].as_str().unwrap_or(""))),
+        "deep_research" => Ok(crate::deepresearch::run_tool(ctx, &s("question"), a["max_rounds"].as_u64())),
         "read" => Ok(crate::files::read(ctx, &s("path"), n("offset"), n("limit"), &s("cwd"))),
         "write" => Ok(crate::files::write(ctx, &s("path"), &s("text"), &s("cwd"))),
         "edit" => {
@@ -143,6 +144,7 @@ fn call_raw_inner(ctx: &Ctx, name: &str, a: &Value) -> Result<String, String> {
         "git_commit" => Ok(tools::git_commit(ctx, &a["files"], &s("message"), &s("cwd"))),
         "pr_create" => Ok(tools::pr_create(ctx, &s("title"), &s("body"), &s("base"), &s("cwd"))),
         "check" => Ok(tools::check(ctx, &s("claim"), &s("evidence"))),
+        "verify_fix" => Ok(crate::checker::verify(ctx, a)),
         "scouts" => Ok(tools::scouts(ctx, &a["tasks"], &s("cwd"))),
         "tool_new" => crate::forge::create(ctx, &s("name"), &s("description"), &s("command"), &a["schema"]),
         "tool_list" => Ok(crate::forge::list(ctx)),

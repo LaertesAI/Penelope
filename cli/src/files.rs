@@ -412,6 +412,19 @@ pub fn unzip(ctx: &Ctx, archive: &str, into: &str, cwd: &str) -> String {
     }
 }
 
+/// A refusal when the new file text holds more `[masked:` placeholders than the old one. The read and grep tools show
+/// personal data and secrets masked, so a model that copies a line it read would write the placeholder into the
+/// file in place of the name or key. With the privacy level "off" nothing is masked and nothing is refused.
+fn masks_added(ctx: &Ctx, old: &str, new: &str, p: &Path) -> Option<String> {
+    if ctx.cfg["privacy"].as_str() == Some("off") {
+        return None;
+    }
+    let (was, now) = (old.matches("[masked:").count(), new.matches("[masked:").count());
+    (now > was).then(|| format!("NOT written: the new text of {} holds {} [masked:...] placeholders that the file does not hold. Read and grep \
+show personal data and secrets masked; a placeholder in the file would replace the real text. Change only lines without a placeholder, \
+or ask the person to write that line.", show(p), now - was))
+}
+
 /// Creates a file or replaces its whole content.
 pub fn write(ctx: &Ctx, path: &str, text: &str, cwd: &str) -> String {
     let p = resolve(path, cwd);
@@ -422,6 +435,9 @@ pub fn write(ctx: &Ctx, path: &str, text: &str, cwd: &str) -> String {
         return format!("{} is a folder", show(&p));
     }
     let before = fs::read_to_string(&p);
+    if let Some(refusal) = masks_added(ctx, before.as_deref().unwrap_or(""), text, &p) {
+        return refusal;
+    }
     let what = match &before {
         Ok(old) => format!("overwrite {} ({} lines become {})", show(&p), old.lines().count(), text.lines().count()),
         Err(_) => format!("create {} ({} lines)", show(&p), text.lines().count()),
@@ -476,6 +492,9 @@ pub fn edit(ctx: &Ctx, path: &str, replacements: &[Replacement], cwd: &str) -> S
         places += count;
         lines = (lines.0 + old.lines().count() * count, lines.1 + new.lines().count() * count);
         after = after.replace(old.as_str(), new);
+    }
+    if let Some(refusal) = masks_added(ctx, &text, &after, &p) {
+        return refusal;
     }
     let what = format!("edit {} at line {} ({} {}, {} lines become {})", show(&p), first_line, places, if places == 1 { "place" } else { "places" },
                        lines.0, lines.1);
@@ -688,6 +707,27 @@ mod tests {
 
     fn one(old: &str, new: &str) -> Vec<Replacement> {
         vec![(old.to_string(), new.to_string(), false)]
+    }
+
+    #[test]
+    fn a_masked_line_is_never_written_back() {
+        let (mut ctx, dir) = ctx("masks", "all");
+        ctx.cfg["privacy"] = serde_json::json!("pii");
+        let cwd = dir.to_string_lossy().to_string();
+        let _ = fs::create_dir_all(&dir);
+        let original = "Betreff: Umzug\nHerr Otto Berg zieht um.\nTermin: Montag\n";
+        fs::write(dir.join("n.txt"), original).unwrap();
+        let shown = read(&ctx, "n.txt", 0, 0, &cwd);
+        assert!(shown.contains("Herr [masked:name] [masked:name] zieht um.") && !shown.contains("Otto"), "{}", shown);
+        // the neighbouring line changes, the masked one stays as it is in the file
+        assert!(edit(&ctx, "n.txt", &one("Termin: Montag", "Termin: Dienstag"), &cwd).starts_with("done: edit"));
+        assert_eq!(fs::read_to_string(dir.join("n.txt")).unwrap(), original.replace("Montag", "Dienstag"));
+        // a model that copies the masked line it read is refused, and the file keeps its bytes
+        let copied = edit(&ctx, "n.txt", &one("Termin: Dienstag", "Herr [masked:name] [masked:name] zieht um.\nTermin: Dienstag"), &cwd);
+        assert!(copied.starts_with("NOT written") && copied.contains("2 [masked:...]"), "{}", copied);
+        assert!(write(&ctx, "n.txt", "Herr [masked:name] Berg\n", &cwd).starts_with("NOT written"));
+        assert_eq!(fs::read_to_string(dir.join("n.txt")).unwrap(), original.replace("Montag", "Dienstag"));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -1874,6 +1874,41 @@ Open:
 - `route::validate` still runs after the watcher and says `NOT called.` for the cases the watcher misses, such as an
   empty required string inside a nested object.
 
+## Executable checker for code tasks (branch `feat/exec-checker`)
+
+`checker.rs` runs the code that Eurykleia only shapes. The tool `verify_fix` takes a reproduction test, runs it in a
+detached git worktree at HEAD (it must fail), applies the working-tree change (it must pass) and runs the module tests
+(they must pass, or must already fail on HEAD). Best-of-N asks the candidate models for SEARCH/REPLACE fixes; the
+working tree goes first and wins when it passes, the model candidates follow smallest diff first. `check.mode` `gate`
+sends one reminder when the lead model answers after a code edit without a check; every code turn ends with a verdict
+line, and unverified turns are counted in `.penelope/check/log.jsonl`. Hypotheses with numbers in `docs/CHECKER.md`.
+
+Review round 1 fixed:
+- The commands of a check now pass the gate of `run`: safe list, allow list or a yes, and bubblewrap with
+  `sandbox: bwrap`. The default interpreter run of a model-written test needs one yes per session.
+- Candidates may change only the listed files and never `sitecustomize.py`, `conftest.py`, `*.pth` or a test config.
+  A one-line `sitecustomize.py` had turned exit 1 into exit 0 for every Python test.
+- Ignored build output (`node_modules`, `.venv`, `venv`, `*.so`, `*.pyd`, `*.dylib`) comes into the worktree.
+  Import, syntax and collection errors before and after give `env_error`, no longer `still_fails`.
+- The record is keyed per repository and session (`check/KEY/last.json`), so parallel eval tasks do not share a pass.
+- Long files go to the candidates as the lead's hunks with 80 lines of context, with the cut ranges named.
+- CRLF files keep CRLF. A second block without a path keeps the previous path. An empty SEARCH never appends.
+- Hooks are off for the worktree (`core.hooksPath` points at an empty folder), and `check.budget` (1200 s) caps one call.
+- The reminder in the API loop is skipped on the last round. The judge role no longer has `verify_fix`.
+- Test output passes the privacy guard.
+
+Tests: `checker.rs` has 23 tests, 14 with a git fixture repository and 9 without. `cargo test` in the binary: 526
+passed, 1 failed, 1 ignored. The failure is the known clusters test
+`a_tool_call_without_cwd_from_an_api_part_writes_in_its_worktree` under the custom TMPDIR; it passes without it. The 7
+CLI test files pass (29 tests). The first version of this entry said 476 passed; the count was 475 passed, 1 failed,
+1 ignored.
+
+Open:
+- No live run yet. H1 needs one eval run with `gate` and `run_policy` `all` or a safe-list run command.
+- The winner of best-of-N is written to `winner.diff`, not applied.
+- Module tests are the configured command; there is no test selection as in Agentless.
+- Folder links for `node_modules` need developer mode on Windows; without it the worktree lacks them.
+
 ## Tool description scan (branch `feat/tool-description-scan`, 2026-11-27)
 
 Closes the open point of the vet entry: tool names, descriptions and input schemas from `tools/list` and from
@@ -1888,8 +1923,7 @@ after; paraphrases without trigger words 1 of 12; 442 offline tools of 15 server
 per tool in a release build.
 
 Found on the way: the TUI arm `"/tools" =>` for the contracts table caught `/tools search`, `install`, `yes` and `no`,
-so the TUI install flow never ran. rustc warns "unreachable pattern" for a duplicate literal arm (checked on a minimal
-copy, not on main). Bare `/tools` keeps the table.
+so the TUI install flow never ran (the compiler warned "unreachable pattern"). Bare `/tools` keeps the table.
 
 Review round, same branch:
 

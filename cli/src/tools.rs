@@ -53,7 +53,7 @@ pub(crate) fn count(ctx: &Ctx, tool: &str, raw: usize, sent: usize) {
 }
 
 /// Text on its way to a model: secrets are masked unless the config says "privacy": "off". The level "pii" also masks
-/// e-mail addresses and IBANs. Returns the text and the number of masked items. The count goes to stats.json.
+/// names, addresses, phone numbers, e-mail addresses, IBANs, tax ids and birth dates. Returns the text and the number of masked items. The count goes to stats.json.
 pub fn guard_count(ctx: &Ctx, text: &str) -> (String, usize) {
     let level = ctx.cfg["privacy"].as_str().unwrap_or("rules");
     if level == "off" {
@@ -408,6 +408,7 @@ pub fn begin_turn() {
     TEST_FAILURES.with(|n| n.set(0));
     TEST_STOPPED.with(|s| s.set(false));
     crate::eurykleia::begin_turn();
+    crate::checker::begin_turn();
     crate::gates::begin_turn();
 }
 
@@ -501,6 +502,7 @@ fn after_edit(ctx: &Ctx, role: &str, name: &str, args: &serde_json::Value, text:
     if !ok || !matches!(name, "write" | "edit") || !text.starts_with("done") {
         return (text, ok);
     }
+    crate::checker::note_edit(ctx, role, args);
     let Some((command, attempts)) = test_settings(ctx, role) else {
         return (text, ok);
     };

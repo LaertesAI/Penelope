@@ -112,6 +112,7 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd { name: "/auth", help: "the login status of Claude and the providers", key: "", takes_text: false },
     Cmd { name: "/update", help: "check for a newer Penelope", key: "", takes_text: false },
     Cmd { name: "/audit", help: "look for key and plain-http leaks in .penelope", key: "", takes_text: false },
+    Cmd { name: "/check", help: "code checker: /check TEST, /check best TEST [N] -- ISSUE, /check gate|report|off", key: "", takes_text: true },
     Cmd { name: "/input", help: "native pointer helper: status, install, enable", key: "", takes_text: false },
     Cmd { name: "/providers", help: "connect a provider: login or API key", key: "", takes_text: false },
     Cmd { name: "/undo", help: "take back the last change to a file", key: "", takes_text: false },
@@ -137,7 +138,7 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd { name: "/context", help: "show what @ and the memory map would send", key: "", takes_text: true },
     Cmd { name: "/rewind", help: "restore files and transcript N turns back: /rewind 3", key: "", takes_text: true },
     Cmd { name: "/search", help: "search several engines and show the ranked results; /search fanout on|off", key: "", takes_text: true },
-    Cmd { name: "/research", help: "search, read the best pages and show a cited report", key: "", takes_text: true },
+    Cmd { name: "/research", help: "search, read the best pages and show a cited report; /research deep QUESTION runs the multi-round method", key: "", takes_text: true },
     Cmd { name: "/route", help: "the roles and their models; /route auto|fixed sets the cost mode", key: "", takes_text: true },
     Cmd { name: "/escalate", help: "cost mode: move this task to the main model", key: "", takes_text: false },
     Cmd { name: "/tools", help: "every tool, its arguments and its roles; /tools search QUERY, install N, yes, no", key: "", takes_text: false },
@@ -1486,6 +1487,18 @@ impl App {
             "/auth" => self.pager("Login and keys", crate::auth::status(&self.ctx)),
             "/update" => self.start_bg(|ctx| crate::update::check(&ctx)),
             "/audit" => self.pager("Leak audit", crate::audit::run(&self.ctx)),
+            "/check" => match rest {
+                "" => self.pager("Checker", crate::checker::status(&self.ctx)),
+                "gate" | "report" | "off" | "on" => {
+                    self.ctx.cfg["check"]["mode"] = serde_json::json!(if rest == "on" { "gate" } else { rest });
+                    save_config(&self.ctx);
+                    self.pager("Checker", crate::checker::status(&self.ctx));
+                }
+                _ => {
+                    let line = rest.to_string();
+                    self.start_bg(move |ctx| Ok(crate::checker::command(&ctx, &line)));
+                }
+            },
             "/input" => match rest {
                 "install" => self.start_bg(|_| crate::input::install()),
                 "enable" => match crate::input::enable(&mut self.ctx) {
@@ -1780,6 +1793,15 @@ impl App {
                 });
             }
             "/search" => self.toast("/search WORDS".to_string()),
+            "/research" if rest == "deep" || rest.starts_with("deep ") => {
+                let words: Vec<String> = rest[4..].split_whitespace().map(String::from).collect();
+                let params = crate::deepresearch::parse_args(&words);
+                if params.question.trim().is_empty() {
+                    self.toast("/research deep [--max-rounds N] [--budget EUR] QUESTION".to_string());
+                } else {
+                    self.start_bg(move |ctx| Ok(crate::deepresearch::run(&ctx, &params)));
+                }
+            }
             "/research" if !rest.is_empty() => {
                 let q = rest.to_string();
                 self.start_bg(move |ctx| Ok(crate::research::run(&ctx, &q, "standard", 4, "")));

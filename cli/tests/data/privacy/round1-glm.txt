@@ -1,0 +1,681 @@
+RECHNUNG
+Rechnungsnummer RG-2026-1187 · Kundennummer K-44217
+Rechnungsdatum: 14.04.2026 · Leistungszeitraum: 01.03.2026 – 31.03.2026
+
+Technotrust Systempflege GmbH
+⟦address|Kupferstraße 11⟧
+⟦address|30159 Hannover⟧
+USt-IdNr. DE 812 345 678 · Amtsgericht Hannover, HRB 20456
+
+Rechnungsempfänger:
+Bürobedarf Priem GmbH & Co. KG
+z. Hd. Frau ⟦name|Jutta Priem⟧
+⟦address|Zur alten Ziegelei 8⟧
+⟦address|33102 Paderborn⟧
+
+Sehr geehrte Frau ⟦name|Priem⟧,
+
+für die im März erbrachten Wartungs- und Serviceleistungen stellen wir Ihnen wie folgt in Rechnung:
+
+Pos. 1 – Monatspauschale "Care Basic", Art.-Nr. CB-100: 249,00 €
+Pos. 2 – Vor-Ort-Einsatz am 14.03.2026, 08:30 bis 12:30 Uhr, 4 Stunden à 85,00 €: 340,00 €
+Pos. 3 – Backup-Festplatte 4 TB, Art.-Nr. HD-4412, 2 Stück à 119,00 €: 238,00 €
+
+Zwischensumme netto: 827,00 €
+zzgl. 19 % USt: 157,13 €
+Rechnungsbetrag: 984,13 €
+
+Der Betrag ist ohne Abzug spätestens bis zum 28.04.2026 fällig. Bitte überweisen Sie den Gesamtbetrag auf unser Geschäftskonto, IBAN ⟦iban⟧, BIC: GENODEF1M07.
+
+Bei Rückfragen erreichen Sie Herrn ⟦name|Tjark Ehlers⟧ unter ⟦phone|0511 9876 4455⟧ (Fax: ⟦phone|0511 9876 99 44⟧) oder per E-Mail an ⟦email|t.ehlers@technotrust-beispiel.de⟧.
+
+Mit freundlichen Grüßen
+
+Technotrust Systempflege GmbH
+
+⟦name|Lorenz Haverkamp⟧
+Prokurist
+
+=====
+
+WOHNRAUMMIETVERTRAG
+
+zwischen
+
+Vermieterin: ⟦name|Wiltrud Kienzle⟧, ⟦address|Seestraße 18⟧, ⟦address|83209 Prien am Chiemsee⟧
+
+und
+
+Mieter: Herr ⟦name|Quang Tran⟧, Beruf Koch, geboren am ⟦birth_date|02.03.1989⟧, Telefon: ⟦phone|0151-22 84 630⟧
+
+Mietobjekt: 3-Zimmer-Wohnung im 2. Obergeschoss, ⟦address|Am Weiher 3⟧, ⟦address|83278 Traunstein⟧, Wohnfläche ca. 74 m², Balkon, Kellerabteil 7, Stellplatz Nr. 14 im Innenhof (kein Anspruch auf einen bestimmten Platz).
+
+Mietbeginn ist der 01.08.2026. Die Kaltmiete beträgt 780,00 € monatlich, zahlbar jeweils am dritten Werktag im Voraus auf das Vermieterkonto (IBAN ⟦iban⟧). Betriebskostenpauschale: 160,00 €. Kaution: 1.960,00 € (zwei Monatskaltmieten), bis zum 25.07.2026 zu leisten auf das Treuhandkonto der Hausverwaltung Immobilia am See, z. Hd. Frau ⟦name|Beatrix Wendl⟧, Telefon ⟦phone|0861 / 20 55 88⟧.
+
+Schönheitsreparaturen obliegen dem Mieter nach drei Jahren Mietdauer gemäß Anlage 1. Die Hausordnung ist Anlage 2. Tierhaltung: eine Katze ist gestattet, weitere Tiere nur mit schriftlicher Zustimmung der Vermieterin. Untervermietung ist ausgeschlossen. Rauchmelder sind vorhanden und dürfen nicht entfernt werden.
+
+Kündigungsfrist für beide Seiten: drei Monate zum Monatsende. Das Sonderkündigungsrecht des Mieters bei Anzeige von Eigenbedarf bleibt unberührt.
+
+Übergabe mit Protokoll am 31.07.2026, 14:00 Uhr; die Zählerstände werden gemeinsam dokumentiert, die Erstablesung des Wasserzählers erfolgt mit ⟦name|Wendl⟧.
+
+Traunstein, den 05.07.2026
+
+____________________ ⟦name|Wiltrud Kienzle⟧ (Vermieterin)
+____________________ ⟦name|Quang Tran⟧ (Mieter)
+
+=====
+
+Chatverlauf – Teamraum "Lager Süd" · Firmen-Messenger "Klartext" · Dienstag, 03.11.2026
+
+[07:58] ⟦name|Lena Hartmann⟧: Morgen zusammen! Die Firma für die Regalwartung ist heute da. Bitte den Laufweg 3 komplett freihalten.
+[08:01] ⟦name|hakan.sahin⟧: verstanden. auf laufweg 3 stehen noch zwei paletten etikettenware, die räum ich gleich weg.
+[08:02] ⟦name|Lena Hartmann⟧: Danke, ⟦name|Hakan⟧. Wer hat gestern die Bestellung 7741 abgeschlossen und versiegelt?
+[08:05] ⟦name|Marek Z.⟧: ich. beim zweiten karton ist der etikettendrucker LT-22 wieder ausgestiegen, hab es ins störungslog geschrieben.
+[08:06] ⟦name|Lena Hartmann⟧: ok, danke fürs loggen. ⟦name|Marek⟧, stell bitte heute noch ein ticket an die IT, sonst kommt der drucker vor der inventur nicht zurück.
+[08:07] ⟦name|hakan.sahin⟧: btw, frau ⟦name|Pilarska⟧ aus dem einkauf war schon hier und hat die offenen lieferscheine mitgenommen, falls jemand sucht.
+[08:09] ⟦name|Marek Z.⟧: alles klar, mache ich nach der pause. bis dahin nehme ich den ersatzdrucker LT-23 vom staplerplatz.
+[08:12] ⟦name|Lena Hartmann⟧: passt. wartungsfirma ist jetzt an tor 2, helmpflicht ab betreten von halle 2.
+[08:31] ⟦name|hakan.sahin⟧: laufweg 3 ist frei 👍
+
+=====
+
+RECHNUNG Nr. 2026-P-0912
+Rechnungsdatum: 05.06.2026 · Kundennummer PT-4471
+
+Physiotherapie am Wehr, Inhaberin: ⟦name|Melahat Şahin⟧
+⟦address|Am Wehr 2⟧
+⟦address|34117 Kassel⟧
+Telefon: ⟦phone|0561 2 05 88⟧
+
+Rechnungsempfängerin (Privatpatientin):
+Frau ⟦name|Amina Sadik⟧, geboren am ⟦birth_date|22.06.1968⟧
+⟦address|Frankfurter Straße 30⟧
+⟦address|34121 Kassel⟧
+
+Sehr geehrte Frau ⟦name|Sadik⟧,
+
+wie vereinbart stelle ich die im Behandlungszeitraum erbrachten Heilmittel nach der Gebührenordnung in Rechnung. Die zugrunde liegende Verordnung (Nr. 88/2026-K) wurde von Dr. med. ⟦name|Ahlem Chakroun⟧, Praxis am Königstor, ⟦address|Königstor 6⟧, ⟦address|34117 Kassel⟧, ausgestellt.
+
+Leistungen im Zeitraum 03.04.2026 bis 29.05.2026:
+– 6 × Krankengymnastik à 26,50 € = 159,00 €
+– 4 × Manuelle Therapie à 26,50 € = 106,00 €
+
+Summe: 265,00 €
+
+Heilmittel sind umsatzsteuerfrei (§ 4 Nr. 14 UStG); es fällt keine USt an. Rechnungsbetrag: 265,00 €.
+
+Bitte überweisen Sie den Betrag binnen 14 Tagen auf mein Konto (IBAN ⟦iban⟧, BIC: PBNKDEFF). Die Rechnung können Sie bei Ihrer privaten Krankenversicherung (Vitalia Krankenversicherung a.G., Vertragsnummer PK-774902) einreichen; verwenden Sie das beiliegende Formular "Erstattungsantrag Heilmittel". Eine Kopie der Verordnung liegt bei.
+
+Ihr nächster Behandlungstermin: Freitag, 12.06.2026, 17:30 Uhr. Bei Verhinderung bitten wir um Absage bis 24 Stunden vorher.
+
+Mit freundlichen Grüßen
+
+⟦name|Melahat Şahin⟧
+Staatl. anerkannte Physiotherapeutin
+
+=====
+
+ABMAHNUNG
+
+An Herrn ⟦name|Roberto Ferraro⟧, Kommissionierung/Versand, Personalnummer 87231
+Datum: 09.07.2026
+
+Sehr geehrter Herr ⟦name|Ferraro⟧,
+
+mit heutigem Schreiben sprechen wir Ihnen eine Abmahnung aus. Anlass sind folgende Vorfälle:
+
+1. Am Montag, 04.07.2026, nahmen Sie Ihre Arbeit laut Zeiterfassung erst um 07:12 Uhr auf, obwohl Ihr Dienstplan um 06:00 Uhr den Schichtbeginn vorsah. Eine Meldung an die Schichtleitung, Herrn ⟦name|Frank Obermayr⟧, erfolgte nicht.
+
+2. Am Dienstag, 07.07.2026, erschienen Sie um 06:58 Uhr und stempelten erst um 07:31 Uhr – wiederum ohne Information an ⟦name|Obermayr⟧ –, obwohl die Kommissionierung des Sperrguts bis 07:15 Uhr angelaufen sein musste.
+
+Damit haben Sie wiederholt und schuldhaft gegen die Betriebsvereinbarung "Arbeits- und Pausenzeiten" (§ 7 Abs. 2) verstoßen und die Kolleginnen und Kollegen der Frühschicht erheblich belastet. Die verspätete Bereitstellung der Sperrgutpaletten führte zu einer Verschiebung der Abfahrt von Tour 14 um rund 40 Minuten.
+
+Wir weisen Sie darauf hin, dass wir das Arbeitsverhältnis kündigen werden, falls Sie Ihre Arbeitspflicht weiterhin in dieser Weise verletzen. Sie haben das Recht, binnen fünf Arbeitstagen schriftlich Stellung zu nehmen. Diese Abmahnung wird zu Ihrer Personalakte genommen; eine Kopie erhält der Betriebsrat, Herr ⟦name|Hartmuth Sigl⟧.
+
+Mit freundlichen Grüßen
+
+Frau Dr. ⟦name|Gundula Wegener⟧
+Leitung Personalwesen
+
+=====
+
+VOLLMACHT
+
+Ich, ⟦name|Sophie von Wittenhorst⟧, geboren am ⟦birth_date|19.12.1957⟧, wohnhaft ⟦address|Schlossberg 2⟧, ⟦address|89522 Heidenheim⟧, erteile hiermit Frau ⟦name|Anna-Lena Schmitz⟧, wohnhaft ⟦address|Poststraße 40⟧, ⟦address|89518 Heidenheim⟧, Vollmacht, mich in allen Angelegenheiten vor der Stadtverwaltung Heidenheim, den gesetzlichen Krankenkassen, der Deutschen Post AG sowie der Heidenheimer Volksbank eG zu vertreten.
+
+Die Bevollmächtigte ist insbesondere berechtigt,
+– Anträge zu stellen, zu ändern und zurückzunehmen,
+– Bescheide, Postsendungen und Zustellungen aller Art entgegenzunehmen,
+– Widersprüche einzulegen, sofern keine anwaltliche Vertretung erforderlich ist,
+– Kontoauszüge einzuholen und Überweisungen bis zu einem Limit von 500,00 € je Auftrag zu tätigen.
+
+Diese Vollmacht gilt ab sofort und endet ohne Frist mit ihrem Widerruf; sie erlischt zudem bei Geschäftsunfähigkeit der Vollmachtgeberin. Gegenüber Dritten darf die Vollmacht nur im Original oder als beglaubigte Kopie vorgelegt werden.
+
+Heidenheim, den 04.02.2027
+
+_________________________
+⟦name|Sophie von Wittenhorst⟧
+(Vollmachtgeberin)
+
+=====
+
+LIEFERSCHEIN
+Lieferschein-Nr. LS-88113 · Auftrag 4471-B · Tour N-12 · Datum: 21.05.2026
+
+Lieferant: Harba Logistik & Spedition mbH
+⟦address|Gewerbepark Nord 3⟧
+⟦address|18437 Stralsund⟧
+Tel. ⟦phone|03831 594 201⟧ · Fax ⟦phone|03831 594 250⟧
+
+Empfänger: Steinbruch Werkzeuge AG, Lager 2
+z. Hd. Herrn ⟦name|Oleg Petrenko⟧
+⟦address|Industriering 45⟧
+⟦address|09112 Chemnitz⟧
+
+Anlieferung am 21.05.2026 im Zeitfenster 08:00 bis 12:00 Uhr.
+
+Pos. 1 – ST-1900 – Stemmhammer 900 g – 12 Stk.
+Pos. 2 – ME-0455 – Flachmeißel 20 mm – 40 Stk.
+Pos. 3 – SK-220 – Schnittschutzkittel "ProCut", Gr. L – 25 Stk.
+Pos. 4 – VS-10 – Vibrations-Dämmmatte 10 mm – 60 lfm
+
+Fahrzeug: KN-TR 881 · Fahrer: ⟦name|Waldemar Zink⟧
+
+Hinweis: Position 3 ist bruchempfindlich. Bitte Lagetisch freihalten, Kartons nicht stapeln.
+
+Die Ware wurde in einwandfreiem Zustand übernommen (Aussehen und Stückzahl geprüft):
+
+Chemnitz, 21.05.2026, 10:42 Uhr
+
+Annahme: ⟦name|Giulia Bianchi⟧ (Lagerleitung)
+
+Bei Reklamationen wenden Sie sich binnen 48 Stunden an ⟦email|lager2@steinbruch-ag.example⟧.
+
+=====
+
+Bewerbung um die Stelle der Labortechnikerin, Kennziffer LT-2026-14
+
+⟦name|Natalja Wolkowa⟧
+⟦address|Schillerpromenade 29⟧
+⟦address|12049 Berlin⟧
+Telefon: ⟦phone|+49 157 82345601⟧ · E-Mail: ⟦email|n.wolkowa@example.de⟧
+
+Berlin, 12.09.2026
+
+Wasserlab Analytik GmbH, Personalabteilung, Berlin
+
+Sehr geehrte Frau Dr. ⟦name|Sigrun Pauly⟧,
+
+mit großem Interesse habe ich Ihre Stellenanzeige vom 05.09.2026 gelesen und bewerbe mich um die Position der Labortechnikerin im Bereich Umweltanalytik.
+
+Ich bin geboren am ⟦birth_date|11.02.1997⟧ und habe meine Ausbildung zur biologisch-technischen Assistentin an der Musterberg-Schule Berlin 2018 mit Note 1,4 abgeschlossen. Anschließend war ich drei Jahre bei der AquaScreen GmbH in Teltow beschäftigt, wo ich Probenahmen aus Oberflächengewässern vorbereitete, HPLC-Messreihen betreute und die Dokumentation nach ISO 9001 mitführte. Zurzeit belege ich abends einen Kurs in statistischer Auswertung.
+
+Ihre Anzeige nennt Erfahrung mit ICP-MS – diesen Bereich habe ich während eines sechsmonatigen Praktikums bei einem Prüfinstitut kennengelernt. Im Umgang mit dem Laborinformationssystem "ProbenBuch" bin ich geübt, ich arbeite gern im Schichtdienst und spreche fließend Russisch, Deutsch und Englisch.
+
+Als Referenz nenne ich gern meine frühere Teamleiterin, Frau ⟦name|Hiltrud Sprengel⟧ (Telefon ⟦phone|(030) 74 55 128⟧). Ein mögliches Eintrittsdatum wäre der 01.10.2026. Zeugnisse und Arbeitsproben füge ich als Anhang bei.
+
+Mit freundlichen Grüßen
+⟦name|Natalja Wolkowa⟧
+
+=====
+
+MAHNUNG
+Mitgliedsnummer M-81526 · Mahnungsdatum: 05.05.2026
+
+FitLife Studio An der Werre, Inhaber ⟦name|Riza Korkmaz⟧
+⟦address|Werrestraße 6⟧
+⟦address|32657 Herford⟧
+
+An
+Herrn ⟦name|Emre Yildirim⟧
+⟦address|Bahnhofstraße 17⟧
+⟦address|58706 Menden⟧
+
+Sehr geehrter Herr ⟦name|Yildirim⟧,
+
+trotz unserer Zahlungserinnerung vom 14.04.2026 ist der Betrag von 39,90 € für Ihr Abonnement "Flex Gold" (Leistungszeitraum April 2026) bis heute nicht eingegangen.
+
+Wir bitten Sie höflich, den offenen Betrag bis spätestens 19.05.2026 auf das Studio-Konto (IBAN ⟦iban⟧) zu überweisen und dabei Ihre Mitgliedsnummer als Verwendungszweck anzugeben.
+
+Bleibt der Betrag auch nach dieser Frist aus, sehen wir uns leider gezwungen, die Sauna- und Solariumsberechtigung Ihres Studio-Plus-Pakets vorübergehend zu sperren und die Angelegenheit an unser Inkassobüro weiterzugeben. Das möchten wir vermeiden – eine kurze Nachricht genügt, wenn Sie einen Ratenzahlungsplan benötigen.
+
+Mit freundlichen Grüßen
+FitLife Studio An der Werre
+
+⟦name|Riza Korkmaz⟧
+
+Fragen zur Mitgliedschaft: Telefon ⟦phone|0 52 31 / 4 46 78 90⟧, täglich von 09:00 bis 21:00 Uhr.
+
+=====
+
+BESPRECHUNGSPROTOKOLL
+Projekt "Lagerumstellung 4.0" – Sitzung Nr. 9
+
+Datum: 23.10.2026, 09:30 bis 11:15 Uhr
+Ort: Besprechungsraum "Seeadler", Verwaltungsgebäude, 1. OG
+Leitung: ⟦name|Fatoumata Diallo⟧ (Projektleitung)
+Protokoll: ⟦name|Lukas Mannweiler⟧ (Projektbüro, Werkstudent)
+Teilnehmende: ⟦name|Jan-Philipp Krüger⟧ (IT/ERP), ⟦name|Omar Haddad⟧ (Lagerlogistik), ⟦name|Henrike Voss-Kirsch⟧ (Einkauf), ⟦name|Falk Steinbrecher⟧ (Controlling)
+Entschuldigt: Frau ⟦name|Irmgard Pellens⟧ (Geschäftsführung)
+
+Tagesordnung: 1. Regalanlieferung Halle 2, 2. Schnittstelle WMS–ERP, 3. Schulungsplan, 4. Verschiedenes
+
+Zu 1: ⟦name|Haddad⟧ berichtet, dass von den 36 bestellten Rollregalen (Bestellung 2026-EK-3388) 30 termingerecht geliefert und montiert wurden. Sechs Regale liegen noch im Zollager in Bremerhaven und verzögern die Umstellung der Gassen 12 bis 14.
+
+Zu 2: ⟦name|Krüger⟧ weist auf Fehler bei der Verbuchung von Sammelaufträgen hin (Tickets EDP-4471 bis EDP-4479). Der Middleware-Lieferant hat einen Patch für den 04.11.2026 zugesagt.
+
+Zu 3: Schulungstermine: 10.11.2026, 14:00 bis 16:30 Uhr (Gruppe A), 12.11.2026, gleiche Zeit (Gruppe B). ⟦name|Voss-Kirsch⟧ klärt parallel die Ersatzteilbestände für die Scanner "ProScan X4".
+
+Zu 4: ⟦name|Falk⟧ fragt nach den Auswirkungen auf die Dezemberinventur.
+
+Beschlüsse:
+B-2026-09-1 – Testlauf "ProScan X4" durch ⟦name|Haddad⟧ bis 07.11.2026
+B-2026-09-2 – Nachfrage fehlender Regale durch ⟦name|Voss-Kirsch⟧ bis 30.10.2026
+B-2026-09-3 – Schulungsunterlagen durch ⟦name|Mannweiler⟧ bis 05.11.2026
+B-2026-09-4 – Vorziehen der Inventur auf 28./29.11.2026 (einstimmig)
+
+Nächster Termin: Freitag, 06.11.2026, 09:30 Uhr, Raum "Seeadler". Einladung über den Firmenkalender.
+
+⟦name|Diallo⟧ (Leitung)  ·  ⟦name|Mannweiler⟧ (Protokoll)
+
+=====
+
+AUFSCHREIBEN: AUFTRAGSBESTÄTIGUNG UND WERKVERTRAG
+Auftragsnummer 2026-7741
+
+Auftragnehmer:
+Malerbetrieb Farbe & Struktur, Inhaber ⟦name|Burkhard Trimborn⟧
+⟦address|Kirchgasse 5⟧
+⟦address|07743 Jena⟧
+Telefon: ⟦phone|03641 55 88 21⟧ · E-Mail: ⟦email|buero@farbe-und-struktur.example⟧
+
+Auftraggeber:
+Herr ⟦name|Dmitri Iwanow⟧ (gemeinsam mit Ehefrau ⟦name|Walentina Iwanowa⟧)
+⟦address|Am Sportplatz 9⟧
+⟦address|07745 Jena⟧
+
+Auftrag: Innenanstrich der Wohnung (Wohnzimmer, Flur, Schlafzimmer, Kinderzimmer), Wandfläche laut Aufmaß ca. 220 m². Der Untergrund wird gespachtelt und geschliffen; zwei Anstriche in der Wandfarbe "Alpinweiß" (Material vom Auftragnehmer, 12 Eimer à 12,50 €, separat abgerechnet). Türen und Heizkörper bleiben ausgespart. Klebe- und Abdeckarbeiten sind im Preis enthalten.
+
+Termine: 1. Bauabschnitt (Wohnzimmer/Flur) am 21.07.2026, 08:00 Uhr, bis voraussichtlich 23.07.2026; 2. Bauabschnitt ab 05.08.2026, 07:30 Uhr. Die Wohnung ist jeweils geräumt; Strom und Wasser stellt der Auftraggeber frei. Der Hund der Familie bleibt an den Arbeitstagen im Bürozimmer, das nicht gestrichen wird.
+
+Vergütung: Pauschalpreis 2.450,00 € inkl. Anfahrt, Gerüst- und Maschinenkosten sowie MwSt., zzgl. tatsächlich verbrauchtem Material. Anzahlung 30 % (735,00 €) bei Auftragserteilung; Restzahlung binnen 10 Werktagen nach Abnahme. Zahlung auf Konto IBAN ⟦iban⟧, BIC: HELADEF1JEN.
+
+Abnahme mit Protokoll am Ende jedes Bauabschnitts. Mängelrügen: Frist 14 Tage nach Abnahme; gesetzliche Gewährleistung 4 Jahre.
+
+Jena, den 15.07.2026
+
+_______________________ ⟦name|Burkhard Trimborn⟧ (Auftragnehmer)
+_______________________ ⟦name|Dmitri Iwanow⟧ (Auftraggeber)
+
+=====
+
+Von: ⟦name|Kwesi Boateng⟧ <⟦email|k.boateng@brandhaus-agentur.example⟧>
+An: Team Vertrieb Nord
+CC: ⟦name|Ewa Malinowska⟧ <⟦email|e.malinowska@brandhaus-agentur.example⟧>
+Betreff: Umstellung Zeiterfassung "ClockWise" ab Montag, 16.11.2026
+Datum: 10.11.2026, 14:05 Uhr
+
+Hallo zusammen,
+
+ab Montag stellen wir die Zeiterfassung um: Statt der Excel-Liste im Laufwerk H nutzen alle Teams das System "ClockWise". Die Zugänge legt ⟦name|Ewa Malinowska⟧ bis Freitag Mittag an; die individuellen Startpasswörter bekommt ihr einzeln per SMS und müsst sie nach dem ersten Login sofort ändern.
+
+In der Einführungswoche läuft die Stempeluhr im Foyer noch parallel. Ab 23.11.2026 ist allein "ClockWise" maßgeblich, auch für Korrekturen. Urlaubsanträge bleiben vorerst im alten Tool.
+
+Drei Dinge bitte beachten:
+– Projektzeiten nur mit gültiger Projektnummer buchen (Nummernliste im Intranet unter "Tools → ClockWise → Projekte").
+– Die Pause wird per Klick gestartet und beendet, nicht pauschal abgezogen.
+– Dienstreisen vorab unter dem Code "REISE" buchen, Rückfragen dazu an mich.
+
+Der Helpdesk ist in der Einführungswoche von 08:00 bis 16:30 Uhr erreichbar, Telefon ⟦phone|040 / 22 88 417⟧.
+
+Ein Dank an ⟦name|Svea Lindqvist⟧ und ihr Pilotteam, die zwei Wochen lang jede Ecke des Systems getestet haben – inklusive der Montagmorgenschicht um 06:30 Uhr.
+
+Viele Grüße
+⟦name|Kwesi⟧
+
+=====
+
+ARBEITSZEUGNIS
+
+Frau ⟦name|Alessandra Conti⟧, geboren am ⟦birth_date|23.05.1991⟧, war vom 01.09.2021 bis zum 31.07.2026 in unserem Unternehmen als Marketing- und Kommunikationskauffrau beschäftigt.
+
+Die Bajuwaren Medien GmbH ist ein regionaler Verlag mit angeschlossenem Online-Shop (Hörfunkwerbung, Podcastproduktion, Eventmarketing).
+
+Frau ⟦name|Conti⟧ übernahm in dieser Zeit unter anderem: die redaktionelle Pflege des Newsletter-Systems "PostHorn Pro" (ca. 24.000 Abonnenten), die Terminierung der Podcastreihe "Stadtgeflüster" (16 Folgen pro Quartal), die Pflege des Artikelstamms im Shop (ca. 3.400 Artikel) sowie die Organisation von zwei Fachmessen im Jahr, inklusive Frachtabwicklung und Reiseplanung für das Team.
+
+Sie bereitete die Budgettermine mit der Geschäftsführung vor, erstellte die Monatsstatistiken zum Newsletter und koordinierte die Zusammenarbeit mit zwei externen Agenturen.
+
+Frau ⟦name|Conti⟧ arbeitete stets äußerst sorgfältig, eigenständig und mit großem Engagement. Sie erledigte ihre Aufgaben stets zu unserer vollsten Zufriedenheit. Ihr Verhalten gegenüber Vorgesetzten, Kolleginnen und Kollegen sowie Kunden und externen Dienstleistern war jederzeit vorbildlich.
+
+Frau ⟦name|Conti⟧ verlässt uns auf eigenen Wunsch zum 31.07.2026, um eine Weiterbildung im Bereich Datenanalyse aufzunehmen. Wir danken ihr für die stets gute Zusammenarbeit, bedauern ihr Ausscheiden und wünschen ihr für die Zukunft alles Gute und viel Erfolg.
+
+Landshut, den 04.08.2026
+
+Bajuwaren Medien GmbH
+
+⟦name|Petra Sommerlad⟧, Prokuristin (Personalleitung)
+
+=====
+
+SCHADENANZEIGE Hausratversicherung (Leitungswasser)
+Policen-Nr. VH 4471-889 · Schaden-Nr. S-2026-118343
+
+An die Rheinblick Versicherung AG, Abteilung Leistungsprüfung, Wiesbaden
+
+Antragstellerin (Versicherungsnehmerin):
+⟦name|Katarzyna Nowak⟧, geboren am ⟦birth_date|06.09.1983⟧
+⟦address|In den Gärten 33⟧
+⟦address|67433 Neustadt⟧
+Telefon: ⟦phone|(0 63 32) 8 91 45⟧ · E-Mail: ⟦email|k.nowak79@example.de⟧
+
+Schadenhergang: In der Nacht vom 05.01.2027 auf den 06.01.2027 platzte in der Küche meiner Wohnung der Anschlusschlauch der Geschirrspülmaschine (Gerät "AquaPuro AP-200", Anschaffung 2024). Das Wasser lief mehrere Stunden unbemerkt. Gegen 02:30 Uhr wurde mein Nachbar, Herr ⟦name|Til Brandstetter⟧, durch ein tropfendes Geräusch im Treppenhaus aufmerksam und drehte die Hauptabsperreinheit zu. Die Hausverwaltung wurde am Morgen informiert.
+
+Betroffen sind der Parkettboden der Wohnküche (ca. 14 m², Eiche, verlegt 2022, Rechnung liegt bei), zwei Küchenfronten und die Spülmaschine selbst (elektronischer Defekt nach Wassereintritt).
+
+Aufstellung:
+– Parkett Eiche inkl. Verlegung: 2.100,00 €
+– Geschirrspüler "AquaPuro AP-200": 379,00 €
+– Küchenfronten (2 Türen): 260,00 €
+Summe: 2.739,00 €; lt. Police trägt die Versicherungsnehmerin eine Selbstbeteiligung von 150,00 €.
+
+Beilagen: Fotodokumentation (9 Bilder), Kostenvoranschlag der Bautrocken GmbH vom 09.01.2027, Kaufbelege.
+
+Der von Ihnen benannte Gutachter, Herr ⟦name|Cornelius von Hagenau⟧, hat die Wohnung am 12.01.2027, 11:00 Uhr, besichtigt. Ich bitte um zeitnahe Bestätigung der Sanierungskosten, damit der Parkettauftrag vergeben werden kann.
+
+Mit freundlichen Grüßen
+
+⟦name|Katarzyna Nowak⟧
+
+Neustadt, 14.01.2027
+
+=====
+
+Kündigung des Mietverhältnisses
+
+⟦name|Elif Kaya⟧
+⟦address|Zur Mühle 12b⟧
+⟦address|18055 Rostock⟧
+
+An die Hausverwaltung Stier & Partner GbR, Rostock
+
+Rostock, 09.02.2026
+
+Sehr geehrte Damen und Herren,
+
+hiermit kündige ich das Mietverhältnis über die Wohnung im 1. Obergeschoss, ⟦address|Zur Mühle 12b⟧, ⟦address|18055 Rostock⟧ (Mietvertrag vom 01.10.2023), fristgerecht zum 31.05.2026.
+
+Bitte bestätigen Sie mir den Erhalt dieser Kündigung und das Kündigungsdatum schriftlich. Für Wohnungsbesichtigungen stehe ich gern zur Verfügung; ich schlage die Wochen nach dem 20.04.2026 vor, am besten nachmittags zwischen 15:00 und 18:00 Uhr. Das Übergabeprotokoll und die Zählerablösung sollten gemeinsam mit dem Hausmeister erfolgen.
+
+Die Kaution bitte ich nach ordnungsgemäßer Rückgabe und Abrechnung auf mein Konto zurückzuüberweisen.
+
+Meine künftige Anschrift lautet: c/o ⟦name|Halide Demir⟧, ⟦address|Lindenweg 4⟧, ⟦address|18147 Rostock⟧.
+
+Mit freundlichen Grüßen
+
+⟦name|Elif Kaya⟧
+Telefon: ⟦phone|0176 55 41 237⟧
+
+=====
+
+ANGEBOT Nr. A-2026-610 · gültig bis 30.06.2026
+
+Muster & Mehr Büroeinrichtungen, Vertrieb Nord
+Frau ⟦name|Swantje Ruge⟧
+⟦address|Feldstraße 118⟧
+⟦address|28195 Bremen⟧
+Telefon: ⟦phone|0421 55 88 120⟧ · E-Mail: ⟦email|s.ruge@muster-und-mehr.example.de⟧
+
+An die
+Steuerkanzlei Vogelsang PartG mbB
+z. Hd. Herrn ⟦name|Arkadius Vogelsang⟧
+⟦address|Königsallee 42⟧
+⟦address|40212 Düsseldorf⟧
+
+Sehr geehrter Herr ⟦name|Vogelsang⟧,
+
+vielen Dank für Ihre Anfrage vom 02.06.2026 zur Neuausstattung Ihrer Besprechungsebene. Gerne unterbreiten wir Ihnen das folgende Angebot:
+
+Pos. 1 – Drehstuhl "Kyoto Ergo", Art.-Nr. KS-9011, 14 Stück à 319,00 € = 4.466,00 €
+Pos. 2 – Konferenztisch "Fusion 240", Eichen-Nachbildung, Art.-Nr. KT-240, 3 Stück à 899,00 € = 2.697,00 €
+Pos. 3 – Akustikpaneel "StillWand", grau, Art.-Nr. SW-77, 8 Stück à 145,00 € = 1.160,00 €
+Pos. 4 – Aufbau, Ausrichtung und Altgeräte-Mitnahme (Pauschale) = 480,00 €
+
+Angebotssumme netto: 8.803,00 €
+zzgl. 19 % MwSt.: 1.672,57 €
+Angebotssumme brutto: 9.475,57 €
+
+Die Lieferzeit beträgt ab Auftragsbestätigung drei bis vier Wochen, frei Verwendungsstelle im 2. OG. Für die Montage planen wir einen Vormittagstermin ein; unsere Monteure arbeiten im Duo und bringen Werkzeug sowie Trittleitern mit.
+
+Gern stelle ich Ihnen den Stuhl "Kyoto Ergo" eine Woche lang als Muster zur Verfügung, damit Ihr Team ihn vor der Entscheidung testen kann. Für die Eichen-Nachbildung weisen wir darauf hin, dass unser Zulieferer eine Preisanpassung zum 01.07.2026 angekündigt hat – innerhalb der Gültigkeitsfrist halten wir den genannten Preis verbindlich.
+
+Über Ihre Rückmeldung bis Ende Juni freue ich mich.
+
+Mit freundlichen Grüßen
+
+⟦name|Swantje Ruge⟧
+Außendienst Nordrhein
+
+=====
+
+Ärztliche Bescheinigung über Arbeitsunfähigkeit
+
+Patient: Herr ⟦name|Tomasz Sowa⟧, geboren am ⟦birth_date|30.01.1985⟧
+Arbeitgeber: Nordbahn Instandhaltung GmbH, Werkstattbereich Wandsbek
+
+Ich habe Herrn ⟦name|Sowa⟧ heute in der Sprechstunde untersucht. Eine Arbeitsunfähigkeit im beruflichen Umfeld besteht ab heute, dem 12.08.2026, voraussichtlich bis einschließlich 19.08.2026. Der Patient wurde über die vorgesehenen Nachuntersuchungstermine und die Wiedervorstellung am 19.08.2026, 10:15 Uhr, informiert.
+
+Die Diagnose wird dem Arbeitgeber aus datenschutzrechtlichen Gründen nicht mitgeteilt.
+
+Dr. med. ⟦name|Regine Pflüger⟧
+Allgemeinmedizin, Hausärztin
+Praxis am Markt, ⟦address|Breite Straße 26⟧, ⟦address|23552 Lübeck⟧
+Telefon: ⟦phone|0451 70 66 20⟧ · Fax: ⟦phone|0451 70 66 29⟧
+
+Lübeck, 12.08.2026
+
+(Dienstsiegel)
+
+=====
+
+Datenexport aus dem Personalsystem "StammPlus" · Datei: personalliste_stamm.csv · Exportiert am 01.03.2026, 06:02 Uhr, durch Benutzer hr-admin · Format: CSV (Trennzeichen Semikolon)
+
+Personalnummer;Nachname, Vorname;Abteilung;E-Mail;Telefon;Geburtsdatum;Straße;PLZ Ort;Steuer-ID;IBAN
+40118;⟦name|Yildiz, Sevim⟧;Buchhaltung;⟦email|s.yildiz@textilvertrieb.example⟧;⟦phone|0211 56 77 889⟧;⟦birth_date|04.04.1979⟧;⟦address|Krefelder Str. 112⟧;⟦address|40233 Düsseldorf⟧;⟦tax_id⟧;⟦iban⟧
+40125;⟦name|Pham, Thi Lan⟧;Qualitätsprüfung;⟦email|lan.pham@textilvertrieb.example⟧;⟦phone|01769451207⟧;⟦birth_date|11.10.1990⟧;⟦address|Lerchenweg 7a⟧;⟦address|90402 Nürnberg⟧;⟦tax_id⟧;⟦iban⟧
+40131;⟦name|Rossi, Gennaro⟧;Instandhaltung;⟦email|g.rossi@textilvertrieb.example⟧;⟦phone|0911 3 42 77 01⟧;⟦birth_date|02.06.1965⟧;⟦address|Wolfsgrubenweg 9⟧;⟦address|90317 Nürnberg⟧;⟦tax_id⟧;⟦iban⟧
+40144;⟦name|Osei, Kwabena⟧;Versand;⟦email|k.osei@textilvertrieb.example⟧;⟦phone|+49 152 33 41 289⟧;⟦birth_date|19.11.1992⟧;⟦address|Hallplatz 5⟧;⟦address|90402 Nürnberg⟧;⟦tax_id⟧;⟦iban⟧
+40147;⟦name|Haddad, Yasmin⟧;Einkauf;⟦email|y.haddad@textilvertrieb.example⟧;⟦phone|0911 55 88 442⟧;⟦birth_date|27.02.1988⟧;⟦address|Dianaweg 3⟧;⟦address|90489 Nürnberg⟧;⟦tax_id⟧;⟦iban⟧
+40152;⟦name|Sander, Kim-Luca⟧;Vertrieb;⟦email|kl.sander@textilvertrieb.example⟧;⟦phone|0160 99 84 275⟧;⟦birth_date|14.07.1997⟧;⟦address|Bergbreite 12⟧;⟦address|90491 Nürnberg⟧;⟦tax_id⟧;⟦iban⟧
+40155;⟦name|von Winterfeld, Amalia⟧;Lagerleitung;⟦email|a.vonwinterfeld@textilvertrieb.example⟧;⟦phone|0911 / 5 06 33 21⟧;⟦birth_date|08.03.1972⟧;⟦address|Hirschelgarten 18⟧;⟦address|90443 Nürnberg⟧;⟦tax_id⟧;⟦iban⟧
+40161;⟦name|Beckmann-Voß, Henriette⟧;Personalabteilung;⟦email|h.beckmann-voss@textilvertrieb.example⟧;⟦phone|0911 5 06 77 90⟧;⟦birth_date|31.01.1980⟧;⟦address|Schoppershofstr. 64⟧;⟦address|90402 Nürnberg⟧;⟦tax_id⟧;⟦iban⟧
+
+Anmerkung: Satz 40125 (Elternzeit) wird zum 01.06.2026 reaktiviert; Vertretung siehe Abteilungsplan.
+Ende der Datei · 8 von 8 Sätzen · Export ohne Fehler
+
+=====
+
+ZWEITE MAHNUNG
+Kundenkonto 20-88134 · Rechnung RN-4471 vom 15.11.2026
+
+Edition Lärchenholt Verlagsgesellschaft mbH
+Registergericht: Amtsgericht Freiburg, HRB 7 01 12
+
+An Frau ⟦name|Imke Thomsen⟧
+⟦address|Eichendorffweg 14⟧
+⟦address|79102 Freiburg⟧
+
+Sehr geehrte Frau ⟦name|Thomsen⟧,
+
+der Betrag von 96,40 € für Ihre Bestellung "Die Koblänker Chronik, Band 1–3" (Bestellnummer 2026-B-7331) ist auch nach unserer ersten Mahnung vom 12.12.2026 nicht eingegangen. Am 05.01.2027 (16:40 Uhr) bestätigte unser Mitarbeiter ⟦name|Godwin Uhlemann⟧ Ihre Zahlungszusage – bis heute ohne Zahlungseingang.
+
+Diese zweite Mahnung ist die letzte vor der Abgabe an die ADVOREC Inkasso GmbH. Wir gewähren Ihnen eine letzte Frist bis 27.01.2027. Mahnpauschale: 5,00 €; neuer Gesamtbetrag: 101,40 €, zahlbar auf Konto IBAN ⟦iban⟧.
+
+Bitte beachten Sie: Bis zum Ausgleich des Rechnungsbetrags liefert der Verlag nur noch gegen Vorkasse; das gilt auch für das Abo des "Lärchenholt Boten".
+
+Mit freundlichen Grüßen
+Edition Lärchenholt Verlagsgesellschaft mbH
+
+Frau ⟦name|Rosa Hain⟧ (Debitorenbuchhaltung)
+Telefon: ⟦phone|0761 40 89 220⟧
+
+=====
+
+Beschwerde zu Bestellung B-99123 (Espressomaschine "Cremosa Due")
+
+An den Kundendienst der Kaffeewerk GmbH & Co. KG, Münster
+
+Münster, 15.12.2026
+
+Sehr geehrte Damen und Herren,
+
+am 02.12.2026 habe ich bei Ihnen die Espressomaschine "Cremosa Due" (Art.-Nr. CD-500) bestellt; die Lieferung traf am 09.12.2026 ein. Bereits beim Auspacken fehlte der Siebträger-Einsatz für den doppelten Bezug (laut Packliste Position 4). Seit dem dritten Betriebstag gibt die Maschine zudem ein klapperndes Geräusch von sich, das aus dem Bereich des Gehäusebodens zu kommen scheint.
+
+Am 14.12.2026 versuchte ich zweimal, Ihren Kundendienst telefonisch zu erreichen (17:20 Uhr und 18:05 Uhr); beide Male wurde die Verbindung nach über 20 Minuten Warteschleife getrennt. Das hat mich geärgert, und das sage ich hier offen.
+
+Ich bitte um Zusendung des fehlenden Einsatzes (Art.-Nr. CD-500-12) bis zum 08.01.2027 sowie um eine Einschätzung zu dem Geräusch – notfalls mit Rückhol- und Reparaturauftrag. Vom Rücktritt vom Kaufvertrag sehe ich vorläufig ab, da die Maschine ansonsten einwandfrei brüht.
+
+Mit freundlichen Grüßen
+
+⟦name|Margarete Siemers⟧, Kundennummer 7-441902
+⟦address|Geranienweg 21⟧
+⟦address|48155 Münster⟧
+Telefon tagsüber: ⟦phone|0171 5584230⟧ · E-Mail: ⟦email|m.simmel@example.de⟧
+
+—
+
+Antwort des Kundendienstes, 16.12.2026:
+
+Sehr geehrte Frau ⟦name|Siemers⟧,
+
+vielen Dank für Ihre offenen Worte – die Warteschleifen bitten wir zu entschuldigen, unser Telefonbereich ist in der Vorweihnachtszeit tatsächlich unterbesetzt. Den fehlenden Einsatz (Art.-Nr. CD-500-12) haben wir heute als Gratisversand veranlasicht; er trifft voraussichtlich am 18.12. bei Ihnen ein. Das Klappern lassen wir danach von unserer Technik prüfen.
+
+Ihr Ansprechpartner: ⟦name|Youssef Karim⟧, Service-Zeiten Mo–Fr 09:00–17:00 Uhr, Telefon ⟦phone|0251 4 88 32 10⟧, E-Mail ⟦email|y.karim@kaffeewerk.example⟧. Als Entschädigung legen wir der Sendung einen Gutschein über 15,00 € bei ("Winter Blend", 250 g).
+
+Mit freundlichen Grüßen
+Kaffeewerk GmbH & Co. KG, Kundenservice – ⟦name|Youssef Karim⟧
+
+=====
+
+REISEKOSTENABRECHNUNG Nr. RKA-2026-77
+
+Mitarbeiterin: ⟦name|Irina Sokolowa⟧, Personalnummer 1204, Abteilung Export/Vertriebsinnendienst
+Reisezweck: Betreuung des Messestands auf der "PackExpo" in Stuttgart, Kundentermine mit Novapak Sp. z o.o. und Kartonex AB
+Reisezeit: 17.09.2026, 06:15 Uhr, bis 18.09.2026, 21:30 Uhr
+Die Anreise erfolgte gemeinsam mit Herrn ⟦name|Gerd Hartwich⟧; die Tickets wurden getrennt abgerechnet.
+
+Übersicht der Auslagen:
+
+17.09.2026 · Bahnfahrt 2. Klasse, Hin- und Rückfahrt · Beleg B-8841 · 139,90 €
+17.09.2026 · Hotel "Nachtigall", 1 Übernachtung inkl. Frühstück · Beleg B-8842 · 109,00 €
+17.09.2026 · Abendessen (Spesenrahmen 14,00 €) · Beleg B-8843 · 13,50 €
+18.09.2026 · Taxi Messegelände – Hauptbahnhof · Beleg B-8844 · 24,60 €
+18.09.2026 · Parkhaus Messe P9, 1 Tag · Beleg B-8845 · 15,00 €
+
+Summe laut Beilagen: 302,00 €
+
+Die Auszahlung des Erstattungsbetrags erfolgt mit dem Gehalt für September 2026 auf das in der Personalakte hinterlegte Konto (IBAN ⟦iban⟧).
+
+Genehmigt, Rheinkontor Export GmbH, 21.09.2026:
+
+Reiseleitung: ________________ ⟦name|Martin Apel⟧ (Vertriebsleitung Export)
+Bearbeitung Buchhaltung: Frau ⟦name|Yolanthe Vosseler⟧, Rückfragen per Mail an ⟦email|buchhaltung@rheinkontor-export.example⟧
+
+=====
+
+Von: ⟦name|Faisal Alwan⟧ <⟦email|f.alwan@nordpol-versand.example⟧>
+An: ⟦email|alle@nordpol-versand.example⟧
+Betreff: Umzug Etage 3 ins Gebäude B – Packtermine und Details
+Datum: 17.03.2027, 08:55 Uhr
+
+Liebe Kolleginnen und Kollegen,
+
+von Freitag, 26.03.2027 (13:00 Uhr), bis Sonntag ziehen wir mit der gesamten Etage 3 in das Gebäude B, 5. Stock. Die neuen Raumnummern lauten 501 bis 518; der Belegungsplan hängt ab heute am Aufzug aus.
+
+Die Umzugsfirma KistenRichter bringt am Donnerstag, 25.03.2027, ab 09:00 Uhr die Kisten vorbei. Bitte packt bis Freitag, 10:00 Uhr, und klebt die Raumlabels auf – die Labels liegen im Kopierraum aus. Monitore, Dockingstationen und Festnetztelefone bleiben an den Plätzen stehen; die Kisten bekommen dafür Nummernaufkleber.
+
+Die Schlüssel für die neue Etage erhalten die Teamleitungen am Montagmorgen von Frau ⟦name|Beate Trzcinka⟧ (Facility, Raum 402, Telefon ⟦phone|+49 431 55 88 402⟧).
+
+Die Postfächer bleiben unverändert. Bei den Parkplätzen gilt die aktuelle Zuweisung vorerst weiter; die Neuzuordnung folgt im April. Ein Dank an ⟦name|Waseem⟧, der die Türbeschilderung in Abstimmung mit der Grafikabteilung bereits vorbereitet hat.
+
+Bei Fragen meldet euch einfach bei mir oder direkt im Facility-Team.
+
+Viele Grüße
+⟦name|Faisal Alwan⟧ (Office Management)
+
+=====
+
+ARBEITSVERTRAG
+
+zwischen
+
+der Elbwerk Digital Services GmbH, ⟦address|Peutestraße 64⟧, ⟦address|20539 Hamburg⟧, vertreten durch die Geschäftsführung – im Folgenden "Arbeitgeber" –
+
+und
+
+Herrn ⟦name|Mensah, Kwame⟧, geboren am ⟦birth_date|17.08.1994⟧, wohnhaft ⟦address|Sorbenstraße 9⟧, ⟦address|21079 Hamburg⟧ – im Folgenden "Arbeitnehmer" –.
+
+§ 1 Tätigkeit und Probezeit
+Der Arbeitnehmer wird ab dem 01.07.2026 als Junior Support Engineer (2nd Level) in der Abteilung Customer Operations eingestellt. Die ersten sechs Monate gelten als Probezeit, in der das Arbeitsverhältnis mit einer Frist von zwei Wochen gekündigt werden kann.
+
+§ 2 Arbeitszeit
+Die regelmäßige Arbeitszeit beträgt 39,5 Stunden pro Woche, verteilt auf Montag bis Freitag. Der Dienstplan wird eine Woche im Voraus im Schichttool "RotaFlex" veröffentlicht; getauschte Dienste sind der Teamleitung zu melden.
+
+§ 3 Vergütung
+Der Arbeitnehmer erhält ein Bruttomonatsgehalt von 3.450,00 €, zahlbar zum Monatsende auf das benannte Konto (IBAN ⟦iban⟧). Eine Sonderzahlung in Höhe von 40 % eines Monatsgehalts ist im Dezember fällig.
+
+§ 4 Urlaub
+Der Urlaubsumfang beträgt 28 Werktage pro Kalenderjahr.
+
+§ 5 Pflichtangaben
+Der Arbeitnehmer teilt der Lohnbuchhaltung unverzüglich seine Steuer-Identifikationsnummer (⟦tax_id⟧), die Lohnsteuerklasse sowie etwaige Änderungen der Bankverbindung schriftlich mit.
+
+§ 6 Verschwiegenheit
+Betriebsinterne Abläufe, Kundendaten und Preislisten sind gegenüber Unbeteiligten vertraulich zu behandeln; diese Pflicht gilt über das Vertragsende hinaus.
+
+§ 7 Einarbeitung
+Fachlich eingearbeitet wird der Arbeitnehmer durch Herrn ⟦name|Bogdan Wawrzyniak⟧ (Senior Engineer). Vorgesetzte ist Frau ⟦name|Silke Untermann⟧ (Teamleitung 2nd Level).
+
+Hamburg, den 24.06.2026
+
+Elbwerk Digital Services GmbH
+
+⟦name|Renate Hagedorn⟧ (Leitung Personalwesen)
+
+⟦name|Kwame Mensah⟧
+
+=====
+
+Chatverlauf – Gruppe "Relaunch-Sprint", Projekt Onlineshop · Messenger "Klartext" · Donnerstag, 12.02.2027
+
+[10:14] ⟦name|Zeynep Aydin⟧: steht das startseiten-banner für heute auf dem plan? deadline ist 16:00 uhr.
+[10:15] ⟦name|lan.pham⟧: fast fertig. version 3 liegt im ordner. musste noch die schrift tauschen, marketing hat "Post Grotesk" vorgegeben.
+[10:16] ⟦name|Zeynep Aydin⟧: perfekt, danke! dann schiebe ich es nach dem mittag ins cms.
+[10:21] ⟦name|Chrissi Bode⟧: kurzes heads-up: beim rollout-test ist der server um 09:40 gecrasht, läuft aber wieder. ursache war das cache-plugin "TurboFass", IT ist dran.
+[10:22] ⟦name|Zeynep Aydin⟧: notiert. ⟦name|Chrissi⟧, sag mir bescheid, wenn das staging wieder stabil ist, dann mache ich den finalen abnahmelauf.
+[10:24] ⟦name|lan.pham⟧: banner ist hochgeladen, datei banner_startseite_v3_final2.png 😅
+[10:25] ⟦name|Chrissi Bode⟧: staging stabil seit 10:12. leg los!
+[10:26] ⟦name|Zeynep Aydin⟧: ich starte. wenn grün: wen informieren – herrn ⟦name|Kulhanek⟧ aus dem vertrieb oder direkt die projektleiterin, frau ⟦name|Vossler⟧?
+[10:27] ⟦name|Chrissi Bode⟧: erst ⟦name|Kulhanek⟧, dann ⟦name|Vossler⟧, kette einhalten. sonst herrscht am freitag wieder chaos. 😄
+[10:29] ⟦name|Zeynep Aydin⟧: verstanden, lauf geht los. danke euch beiden!
+
+=====
+
+Von: ⟦name|Matteo Greco⟧ <⟦email|m.greco87@example.com⟧>
+Gesendet: Mittwoch, 03.03.2027, 19:48 Uhr
+An: ⟦email|bewerbung@stadtgarten-gastro.example⟧
+Betreff: Bewerbung als Küchenhilfskraft (Abendbetrieb), Kennziffer 2027-KH-3
+
+Sehr geehrte Damen und Herren,
+
+auf Ihrer Webseite habe ich gelesen, dass Sie ab sofort Küchenhilfskräfte für den Abend- und Wochenenddienst suchen. Hiermit bewerbe ich mich um diese Position.
+
+Ich bin geboren am ⟦birth_date|15.03.2001⟧, studiere im vierten Semester Medienwissenschaft und arbeite seit zwei Jahren neben dem Studium als Aushilfe in der Mensa am Nordcampus – vor allem in der Spülküche, am Salatbuffet und im Ausgabedienst am Abend. Dort arbeite ich im Schichtdienst bis 21:30 Uhr, drei bis vier Schichten pro Woche.
+
+Ich kann ab dem 15.03.2027 etwa 20 Wochenstunden leisten, auch am Wochenende. Zur Referenz: Meine ehemalige Vorgesetzte, Frau ⟦name|Ronja Kessler⟧, erreichen Sie unter ⟦phone|0163 44511802⟧. Einen Nachweis über den Hygiene-Lehrgang der Uniküche (Abschluss Oktober 2025) füge ich bei.
+
+Mit freundlichen Grüßen
+
+⟦name|Matteo Greco⟧
+⟦address|Nernstweg 3⟧
+⟦address|38102 Braunschweig⟧
+Telefon: ⟦phone|0531 77 44 22⟧
