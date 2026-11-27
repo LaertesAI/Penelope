@@ -32,6 +32,7 @@ mod mcpclient;
 mod mcpmem;
 mod mcpserv;
 mod mcpvet;
+mod attach;
 mod mitos;
 mod memory;
 #[allow(dead_code)]

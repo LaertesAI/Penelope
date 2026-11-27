@@ -46,6 +46,7 @@ pub fn default_config() -> Value {
         "plugin_dirs": null,
         "plugin_home": null,
         "brief": {"hosts": [], "roots": []},
+        "mitos": {"attach_over_bytes": 4096, "fetch_cap_bytes": 16384, "store_max_bytes": 524288000},
         "apps": {"allow_install": false, "rights": {"files": false, "network": false, "shell": false}},
         "update": {"url": "", "channel": "stable", "public_key": ""},
         "global_memory": null,
