@@ -374,7 +374,13 @@ fn find_col(header: &[String], hint: &str) -> Option<usize> {
         return None;
     }
     let by = |f: &dyn Fn(&str) -> bool| header.iter().position(|c| f(&norm(c)) && !norm(c).contains("link") && !norm(c).contains("url"));
-    by(&|c| c == h).or_else(|| by(&|c| c.contains(&h) || (c.len() >= 4 && h.contains(c)))).or_else(|| if param_like(hint) { by(&|c| c.contains("param")) } else { None })
+    // A planner writes "BFCL overall score" for the column "Overall Acc": the header that shares most words with the hint.
+    let words: Vec<String> = hint.split(|c: char| !c.is_alphanumeric()).map(|w| w.to_lowercase()).filter(|w| w.len() >= 4 && w != "model" && w != "name").collect();
+    let by_words = || {
+        let score = |c: &str| words.iter().filter(|w| c.contains(w.as_str())).count();
+        header.iter().enumerate().filter(|(_, c)| { let n = norm(c); !n.contains("link") && !n.contains("url") && score(&n) > 0 }).max_by_key(|(i, c)| (score(&norm(c)), std::cmp::Reverse(*i))).map(|(i, _)| i)
+    };
+    by(&|c| c == h).or_else(|| by(&|c| c.contains(&h) || (c.len() >= 4 && h.contains(c)))).or_else(|| if param_like(hint) { by(&|c| c.contains("param")) } else { None }).or_else(by_words)
 }
 
 fn name_col(header: &[String]) -> usize {
@@ -620,6 +626,8 @@ mod tests {
         let by_score = parse_spec(&json!({"filters": [{"column": "parameters", "op": "<", "value": 2, "unit": "B"}], "rank_by": "score"}));
         let s = select(&tie, &by_score).unwrap();
         assert_eq!(s.rows.iter().map(|r| r[0].clone()).collect::<Vec<_>>(), ["1", "1", "3"]);
+        let wordy = parse_spec(&json!({"filters": [{"column": "parameter count", "op": "<", "value": 2, "unit": "B"}], "rank_by": "BFCL overall score"}));
+        assert_eq!(select(&csv, &wordy).unwrap().rank_col, "Overall Acc");
         assert!(select(&tie, &parse_spec(&json!({"filters": [{"column": "license", "op": "=", "value": 1}]}))).is_none());
         // A primary table beats a bigger secondary one.
         let mut big = tie.clone();
