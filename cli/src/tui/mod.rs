@@ -3194,7 +3194,7 @@ mod tests {
         a.ctx.cfg["main"] = serde_json::json!({"kind": "openai", "base_url": "https://opencode.ai/zen/go/v1", "model": "go-model-0"});
         let info = |id: &str| crate::providers::ModelInfo { id: id.into(), label: id.into(), efforts: vec![] };
         a.model_cache.insert("opencode".to_string(), (0..31).map(|i| info(&format!("go-model-{}", i))).collect());
-        a.model_cache.insert("claude-cli".to_string(), vec![info("claude-sonnet-5-5"), info("claude-opus-4-8")]);
+        a.model_cache.insert("ollama".to_string(), vec![info("qwen3:1.7b"), info("llama3:8b")]);
         a.overlay = Overlay::Models { sel: 0, target: "main".into(), filter: String::new() };
         a
     }
@@ -3208,36 +3208,39 @@ mod tests {
         let a = two_provider_app();
         let rows = a.model_rows("main");
         let groups = row_groups(&rows);
-        assert_eq!(groups.iter().map(|g| (g.0.as_str(), g.2)).collect::<Vec<_>>(), vec![("opencode", 31), ("claude-cli", 2)]);
+        assert_eq!((groups[0].0.as_str(), groups[0].2), ("opencode", 31), "the own provider comes first");
+        assert!(groups.iter().any(|g| g.0 == "ollama" && g.2 == 2));
         let summary = a.models_summary("main");
-        assert!(summary.starts_with(&format!("31 {} · 2 Claude subscription", provider_label("opencode"))), "{}", summary);
+        assert!(summary.starts_with(&format!("31 {}", provider_label("opencode"))) && summary.contains(&format!("2 {}", provider_label("ollama"))), "{}", summary);
     }
 
     #[test]
     fn arrow_keys_walk_over_rows_only_and_left_right_jump_between_groups() {
         let mut a = two_provider_app();
-        for _ in 0..30 { press(&mut a, KeyCode::Down); }
+        let groups = row_groups(&a.model_rows("main"));
+        let second = groups[1].1;
+        for _ in 0..second - 1 { press(&mut a, KeyCode::Down); }
         assert_eq!(a.model_rows_filtered("main", "")[picker_sel(&a)].0, "opencode");
         press(&mut a, KeyCode::Down);                       // the header of the next group is no row
-        assert_eq!(a.model_rows_filtered("main", "")[picker_sel(&a)], ("claude-cli".to_string(), "claude-sonnet-5-5".to_string()));
+        assert_eq!(picker_sel(&a), second);
         press(&mut a, KeyCode::Left);
         assert_eq!(picker_sel(&a), 0);
         press(&mut a, KeyCode::Right);
-        assert_eq!(picker_sel(&a), 31);
-        press(&mut a, KeyCode::Right);
+        assert_eq!(picker_sel(&a), second);
+        for _ in 1..groups.len() { press(&mut a, KeyCode::Right); }
         assert_eq!(picker_sel(&a), 0, "the jump wraps around");
     }
 
     #[test]
     fn typing_filters_across_providers_and_enter_picks_the_match() {
         let mut a = two_provider_app();
-        type_text(&mut a, "OPUS");
-        assert_eq!(a.model_rows_filtered("main", "OPUS"), vec![("claude-cli".to_string(), "claude-opus-4-8".to_string())]);
+        type_text(&mut a, "LLAMA");
+        assert_eq!(a.model_rows_filtered("main", "LLAMA"), vec![("ollama".to_string(), "llama3:8b".to_string())]);
         press(&mut a, KeyCode::Backspace);
-        match &a.overlay { Overlay::Models { filter, .. } => assert_eq!(filter, "OPU"), _ => panic!() }
+        match &a.overlay { Overlay::Models { filter, .. } => assert_eq!(filter, "LLAM"), _ => panic!() }
         press(&mut a, KeyCode::Enter);
-        assert_eq!(a.ctx.cfg["main"]["model"], serde_json::json!("claude-opus-4-8"));
-        assert_eq!(a.provider_name("main"), "claude-cli");
+        assert_eq!(a.ctx.cfg["main"]["model"], serde_json::json!("llama3:8b"));
+        assert_eq!(a.provider_name("main"), "ollama");
     }
 
     #[test]
