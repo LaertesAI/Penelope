@@ -89,7 +89,7 @@ pub fn origin_level(tool: &str) -> u8 {
     match tool {
         "fetch" | "http_request" | "search" | "tool_search" | "scrape" | "run" | "run_detail" | "job_read" | "mcp_call" | "screen"
         | "cursor" | "scout" | "scouts" | "brief_check" => 0,
-        "memory_go" | "memory_map" | "memory_note" => 3,
+        "memory_go" | "memory_find" | "memory_map" | "memory_note" => 3,
         _ => 1,
     }
 }

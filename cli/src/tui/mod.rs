@@ -4,6 +4,7 @@
 
 pub(crate) mod art;
 pub(crate) mod picture;
+mod graph;
 mod paths;
 mod text;
 mod toolsearch;
@@ -73,6 +74,8 @@ pub enum Overlay {
     Question { id: String, question: String, options: Vec<String>, sel: usize },
     /// The memory map as a graph, with the vault command.
     Brain { scroll: usize },
+    /// The knowledge graph: nodes, search, neighbours and a walk with Enter and Backspace. See `graph.rs`.
+    Graph(Box<graph::GraphView>),
     /// Registered plugins with commands, skills and MCP servers.
     Plugins { sel: usize, scroll: usize, filter: String, mode: u8 },
     /// The commands of one plugin.
@@ -125,6 +128,7 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd { name: "/clusters", help: "the cluster tree with reports and memory", key: "", takes_text: false },
     Cmd { name: "/factory", help: "factories: new NAME --profile P --every 3h|--at HH:MM, list, install, run, stop", key: "", takes_text: true },
     Cmd { name: "/app", help: "apps: install LINK|DIR|ZIP, update NAME, list, on NAME, off, remove NAME, show NAME", key: "f7", takes_text: false },
+    Cmd { name: "/graph", help: "the knowledge graph of the memory: search, neighbours, walk with enter and backspace", key: "", takes_text: false },
     Cmd { name: "/brain", help: "the memory map as a graph; /brain write makes an Obsidian vault", key: "", takes_text: false },
     Cmd { name: "/cost", help: "tokens and euro per role and model", key: "", takes_text: false },
     Cmd { name: "/context", help: "show what @ and the memory map would send", key: "", takes_text: true },
@@ -1694,6 +1698,7 @@ impl App {
                 }
             }
             "/brain" => self.overlay = Overlay::Brain { scroll: 0 },
+            "/graph" => self.overlay = Overlay::Graph(Box::new(graph::GraphView::open(&self.ctx))),
             "/cost" => self.pager("Cost in euro", crate::cost::report(&self.ctx)),
             "/route" => self.pager("Roles and models", crate::route::report(&self.ctx)),
             "/tools" => self.pager("Tool contracts", crate::route::table(&self.ctx)),
@@ -2219,6 +2224,7 @@ impl App {
                 }
                 _ => {}
             },
+            Overlay::Graph(view) => close = view.key(key),
             Overlay::Brain { scroll } => match key.code {
                 KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => close = true,
                 KeyCode::Up => *scroll = scroll.saturating_sub(1),
