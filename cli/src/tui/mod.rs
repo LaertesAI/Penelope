@@ -1770,19 +1770,46 @@ impl App {
             }
             "/research" => self.toast("/research QUESTION".to_string()),
             "/workflow" if rest.starts_with("run ") || rest.starts_with("run\t") => {
-                let name = rest[4..].trim().to_string();
-                self.start_bg(move |ctx| {
-                    let path = std::path::Path::new(&name);
-                    let options = crate::workflows::RunOptions { confirm: false, ..Default::default() };
-                    let out = if path.is_file() { crate::workflows::run(&ctx, path, options) } else { crate::workflows::run_named(&ctx, &name, options) }?;
-                    Ok(format!("workflow {} done: {:.4} EUR, {} tokens, journal {}", out.id, out.eur, out.tokens, out.journal.display()))
-                });
+                let raw = rest[4..].trim().to_string();
+                let (name, confirmed) = match raw.strip_suffix(" yes") {
+                    Some(name) => (name.trim().to_string(), true),
+                    None => (raw, false),
+                };
+                if name.is_empty() {
+                    self.toast("/workflow run NAME [yes] | list | status ID | stop ID".to_string());
+                } else if !confirmed {
+                    let path = self.ctx.root.join("workflows").join(format!("{}.rhai", name));
+                    let plan = crate::workflows::plan_text(&path, 0.0)
+                        .unwrap_or_else(|_| format!("Workflow {}\n  script: {}", name, path.display()));
+                    self.pager("Start?", format!("{}\n\nStart with /workflow run {} yes", plan, name));
+                } else {
+                    self.start_bg(move |ctx| {
+                        let path = std::path::Path::new(&name);
+                        let options = crate::workflows::RunOptions { confirm: false, ..Default::default() };
+                        let out = if path.is_file() { crate::workflows::run(&ctx, path, options) } else { crate::workflows::run_named(&ctx, &name, options) }?;
+                        Ok(format!("workflow {} done: {:.4} EUR, {} tokens, journal {}", out.id, out.eur, out.tokens, out.journal.display()))
+                    });
+                }
             }
             "/workflow" if rest == "list" => {
                 let list = crate::workflows::list(&self.ctx);
                 self.pager("Workflows", if list.is_empty() { "none yet".to_string() } else { list.join("\n") });
             }
-            "/workflow" => self.toast("/workflow run NAME | /workflow list | penelope workflow status ID".to_string()),
+            "/workflow" if rest.starts_with("status ") => {
+                let id = rest[7..].trim().to_string();
+                match crate::workflows::status(&self.ctx, &id) {
+                    Ok(text) => self.pager(&format!("Workflow {}", id), text),
+                    Err(e) => self.toast(e),
+                }
+            }
+            "/workflow" if rest.starts_with("stop ") => {
+                let id = rest[5..].trim().to_string();
+                match crate::workflows::stop(&self.ctx, &id) {
+                    Ok(text) => self.toast(text),
+                    Err(e) => self.toast(e),
+                }
+            }
+            "/workflow" => self.toast("/workflow run NAME [yes] | /workflow list | /workflow status ID | /workflow stop ID".to_string()),
             "/tools" => self.tools_command(rest),
             "/mcp" => {
                 if rest == "probe" {

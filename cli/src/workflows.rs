@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -57,7 +58,6 @@ struct State {
     ctx: Ctx,
     id: String,
     dir: PathBuf,
-    start_eur: f64,
     spent_eur: f64,
     spent_tokens: u64,
     budget_eur: f64,
@@ -82,9 +82,8 @@ fn value(v: &Dynamic) -> Result<Value, Box<EvalAltResult>> {
 }
 
 /// A stable key for the journal. FNV-1a over the prompt and the options.
-fn key(prompt: &str, opts: &Map) -> String {
+fn key_text(prompt: &str, opts_text: &str) -> String {
     let mut h: u64 = 0xcbf29ce484222325;
-    let opts_text = format!("{:?}", opts);
     for b in prompt.as_bytes().iter().chain(opts_text.as_bytes()) {
         h ^= *b as u64;
         h = h.wrapping_mul(0x100000001b3);
@@ -92,14 +91,36 @@ fn key(prompt: &str, opts: &Map) -> String {
     format!("{:016x}", h)
 }
 
+fn key(prompt: &str, opts: &Map) -> String {
+    key_text(prompt, &format!("{:?}", opts))
+}
+
 fn journal_line(dir: &Path, entry: &Value) -> Result<(), String> {
     let path = dir.join("journal.jsonl");
     let line = serde_json::to_string(entry).map_err(|e| e.to_string())?;
-    let mut text = fs::read_to_string(&path).unwrap_or_default();
-    text.push_str(&line);
-    text.push('\n');
-    fs::write(&path, text).map_err(|e| format!("cannot write {}: {}", path.display(), e))
+    let mut file = fs::OpenOptions::new().create(true).append(true).open(&path)
+        .map_err(|e| format!("cannot write {}: {}", path.display(), e))?;
+    writeln!(file, "{}", line).map_err(|e| format!("cannot write {}: {}", path.display(), e))
 }
+
+/// True when the user asked this run to stop. `/workflow stop ID` writes the marker beside the journal, in this or
+/// another process, so a running workflow sees it before its next agent.
+fn stopped(st: &State) -> bool {
+    st.cancel.load(Ordering::SeqCst) || st.dir.join("stop").is_file()
+}
+
+fn ensure_running(st: &State) -> Result<(), Box<EvalAltResult>> {
+    if stopped(st) { Err(fail("workflow stopped")) } else { Ok(()) }
+}
+
+/// A workflow may not raise its own rights. The cluster and tool layer sees the user's safe policy, so `git push`,
+/// `git merge` and package installs wait for a question that a workflow cannot answer.
+fn workflow_ctx(ctx: &Ctx) -> Ctx {
+    let mut c = ctx.clone();
+    c.cfg["run_policy"] = json!("safe");
+    c
+}
+
 
 fn load_resume(dir: &Path) -> HashMap<String, Value> {
     let mut out = HashMap::new();
@@ -125,42 +146,61 @@ fn opts_model(opts: &Map) -> (Value, String) {
     (Value::String(model), effort)
 }
 
-fn project(ctx: &Ctx) -> PathBuf {
-    ctx.root.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| ctx.root.clone())
+/// The schema is either a map or a JSON string. Rhai's `to_string()` of a map is not JSON, so the map goes through
+/// serde instead of the textual path.
+fn schema_of(opts: &Map) -> Result<Option<Value>, Box<EvalAltResult>> {
+    let Some(raw) = opts.get("schema") else { return Ok(None) };
+    let schema = if let Some(text) = raw.clone().try_cast::<ImmutableString>() {
+        serde_json::from_str::<Value>(text.as_str())
+            .map_err(|e| fail(format!("schema is not JSON: {}", e)))?
+    } else {
+        rhai::serde::from_dynamic::<Value>(raw)
+            .map_err(|e| fail(format!("schema cannot be read: {}", e)))?
+    };
+    Ok(Some(schema))
 }
 
-fn run_agent(st: &mut State, prompt: &str, opts: &Map) -> Result<Dynamic, Box<EvalAltResult>> {
-    if st.cancel.load(Ordering::SeqCst) {
-        return Err(fail("workflow stopped"));
-    }
-    let label = opts.get("label").map(|v| v.to_string()).unwrap_or_default();
-    let phase = opts.get("phase").map(|v| v.to_string()).unwrap_or_default();
-    let worktree = opts.get("worktree").map(|v| v.as_bool().unwrap_or(false)).unwrap_or(false);
-    let schema = opts.get("schema").map(|v| serde_json::from_str::<Value>(&v.to_string())).transpose()
-        .map_err(|e| fail(format!("schema: {}", e)))?;
-    let k = key(prompt, opts);
-    if let Some(v) = st.resume.get(&k) {
-        return dynamic(v.clone());
-    }
+fn budget_left(st: &State) -> Result<(), Box<EvalAltResult>> {
     if st.budget_eur > 0.0 && st.spent_eur >= st.budget_eur {
         return Err(fail(format!("budget of {:.4} EUR is used", st.budget_eur)));
     }
     if st.budget_tokens > 0 && st.spent_tokens >= st.budget_tokens {
         return Err(fail(format!("budget of {} tokens is used", st.budget_tokens)));
     }
+    Ok(())
+}
+
+fn project(ctx: &Ctx) -> PathBuf {
+    ctx.root.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| ctx.root.clone())
+}
+
+fn run_agent(st: &mut State, prompt: &str, opts: &Map) -> Result<Dynamic, Box<EvalAltResult>> {
+    ensure_running(st)?;
+    let label = opts.get("label").map(|v| v.to_string()).unwrap_or_default();
+    let phase = opts.get("phase").map(|v| v.to_string()).unwrap_or_default();
+    let worktree = opts.get("worktree").map(|v| v.as_bool().unwrap_or(false)).unwrap_or(false);
+    let schema = schema_of(opts)?;
+    let k = key(prompt, opts);
+    if let Some(v) = st.resume.get(&k) {
+        return dynamic(v.clone());
+    }
+    budget_left(st)?;
     let before = crate::cost::total_eur(&st.ctx);
     let before_tokens = crate::cost::total_tokens(&st.ctx);
+    let ctx = workflow_ctx(&st.ctx);
     let (model, effort) = opts_model(opts);
+    let mut kept = Value::Null;
     let text = if worktree {
-        let name = format!("wf-{}-{}", st.id, if label.is_empty() { "part" } else { &label });
-        let (path, _branch) = crate::work::create(&project(&st.ctx), &name)
+        let name = format!("wf-{}-{}-{}", st.id, if label.is_empty() { "part" } else { &label }, &k[..8]);
+        let (path, branch) = crate::work::create(&project(&ctx), &name)
             .map_err(|e| fail(format!("worktree: {}", e)))?;
         let goal = format!("{}\n\nWork in this worktree. The check is hidden.", prompt);
-        let out = crate::eval::with_task_cwd(&path, || crate::clusters::run_once(&st.ctx, &goal, model.clone(), &effort));
-        let _ = std::process::Command::new("git").arg("-C").arg(&path).args(["worktree", "remove", "--force"]).arg(&path).output();
+        let out = crate::eval::with_task_cwd(&path, || crate::clusters::run_once(&ctx, &goal, model.clone(), &effort));
+        // The worktree stays: a build workflow must be able to inspect and use its result. The journal names it.
+        kept = json!({"worktree": path.to_string_lossy(), "branch": branch});
         out.map_err(|e| fail(e))?
     } else {
-        crate::clusters::run_once(&st.ctx, prompt, model, &effort).map_err(|e| fail(e))?
+        crate::clusters::run_once(&ctx, prompt, model, &effort).map_err(|e| fail(e))?
     };
     let after = crate::cost::total_eur(&st.ctx);
     let after_tokens = crate::cost::total_tokens(&st.ctx);
@@ -175,13 +215,15 @@ fn run_agent(st: &mut State, prompt: &str, opts: &Map) -> Result<Dynamic, Box<Ev
         }
         None => Value::String(text),
     };
-    let entry = json!({"key": k.clone(), "phase": phase, "label": label, "prompt": prompt, "value": value, "eur": eur});
+    let mut entry = json!({"key": k.clone(), "phase": phase, "label": label, "prompt": prompt, "value": value, "eur": eur});
+    if !kept.is_null() { entry["worktree"] = kept; }
     journal_line(&st.dir, &entry).map_err(|e| fail(e))?;
     if let Some(v) = entry.get("value") {
         st.resume.insert(k, v.clone());
     }
     dynamic(entry["value"].clone())
 }
+
 
 fn engine(state: Rc<RefCell<State>>) -> Engine {
     let mut e = Engine::new();
@@ -200,72 +242,120 @@ fn engine(state: Rc<RefCell<State>>) -> Engine {
     let s = state.clone();
     e.register_fn("parallel", move |items: Array| -> Result<Array, Box<EvalAltResult>> {
         let mut st = s.borrow_mut();
-        if st.cancel.load(Ordering::SeqCst) { return Err(fail("workflow stopped")); }
+        ensure_running(&st)?;
         let mut jobs = Vec::new();
         for item in items.iter() {
             let m = item.clone().try_cast::<Map>().ok_or_else(|| fail("parallel needs maps"))?;
             let prompt = m.get("prompt").map(|v| v.to_string()).unwrap_or_default();
             let opts = m.get("opts").and_then(|v| v.clone().try_cast::<Map>()).unwrap_or_default();
-            jobs.push((prompt, opts));
+            let worktree = opts.get("worktree").map(|v| v.as_bool().unwrap_or(false)).unwrap_or(false);
+            if worktree {
+                return Err(fail("worktree is not supported inside parallel; use agent with worktree for each part"));
+            }
+            let schema = schema_of(&opts)?;
+            let k = key(&prompt, &opts);
+            let label = opts.get("label").map(|v| v.to_string()).unwrap_or_default();
+            let phase = opts.get("phase").map(|v| v.to_string()).unwrap_or_default();
+            jobs.push((prompt, opts, schema, k, label, phase));
         }
         if jobs.len() > st.max_parallel {
             return Err(fail(format!("parallel is limited to {} agents", st.max_parallel)));
         }
-        let ctx = st.ctx.clone();
+        budget_left(&st)?;
+        let ctx = workflow_ctx(&st.ctx);
         let before = crate::cost::total_eur(&st.ctx);
         let before_tokens = crate::cost::total_tokens(&st.ctx);
+        let mut values: Vec<Option<Value>> = vec![None; jobs.len()];
         let mut handles = Vec::new();
-        for (prompt, opts) in jobs {
-            let (model, effort) = opts_model(&opts);
+        for (index, (prompt, opts, _schema, k, label, phase)) in jobs.iter().enumerate() {
+            if let Some(v) = st.resume.get(k) {
+                values[index] = Some(v.clone());
+                continue;
+            }
+            let (model, effort) = opts_model(opts);
             let c = ctx.clone();
-            handles.push(std::thread::spawn(move || crate::clusters::run_once(&c, &prompt, model, &effort)));
+            let prompt = prompt.clone();
+            let label = label.clone();
+            let phase = phase.clone();
+            let key = k.clone();
+            handles.push(std::thread::spawn(move || {
+                let text = crate::clusters::run_once(&c, &prompt, model, &effort)?;
+                Ok::<_, String>((index, key, label, phase, text))
+            }));
         }
-        let mut out = Array::new();
+        let mut out = vec![Value::Null; jobs.len()];
         for h in handles {
-            let text = h.join().map_err(|_| fail("a parallel agent panicked"))?
+            let (index, key, label, phase, text) = h.join().map_err(|_| fail("a parallel agent panicked"))?.map_err(|e| fail(e))?;
+            let schema = jobs[index].2.as_ref();
+            let value = match schema {
+                Some(schema) => {
+                    let v: Value = serde_json::from_str(&text).map_err(|e| fail(format!("answer is not JSON: {}", e)))?;
+                    validate(schema, &v).map_err(|e| fail(e))?;
+                    v
+                }
+                None => Value::String(text),
+            };
+            journal_line(&st.dir, &json!({"key": key, "phase": phase, "label": label, "value": value}))
                 .map_err(|e| fail(e))?;
-            out.push(Dynamic::from(text));
+            st.resume.insert(key, value.clone());
+            out[index] = value;
+        }
+        for (index, slot) in values.into_iter().enumerate() {
+            if let Some(v) = slot { out[index] = v; }
         }
         let after = crate::cost::total_eur(&st.ctx);
         let after_tokens = crate::cost::total_tokens(&st.ctx);
         st.spent_eur += (after - before).max(0.0);
         st.spent_tokens += after_tokens.saturating_sub(before_tokens);
-        let values: Vec<Value> = out.iter().map(value).collect::<Result<_, _>>()?;
-        journal_line(&st.dir, &json!({"phase": "parallel", "results": values})).map_err(|e| fail(e))?;
-        Ok(out)
+        journal_line(&st.dir, &json!({"phase": "parallel", "results": out})).map_err(|e| fail(e))?;
+        out.into_iter().map(dynamic).collect()
     });
 
     let s = state.clone();
     e.register_fn("pipeline", move |items: Array, stages: Array| -> Result<Array, Box<EvalAltResult>> {
         let mut st = s.borrow_mut();
-        if st.cancel.load(Ordering::SeqCst) { return Err(fail("workflow stopped")); }
+        ensure_running(&st)?;
         let stage_maps: Vec<Map> = stages.iter()
             .map(|v| v.clone().try_cast::<Map>().ok_or_else(|| fail("pipeline stages need maps")))
             .collect::<Result<_, _>>()?;
-        let mut jobs = Vec::new();
-        for item in items.iter() {
-            let item = item.to_string();
-            let mut specs = Vec::new();
-            for stage in &stage_maps {
-                let template = stage.get("prompt").map(|v| v.to_string()).unwrap_or_default();
-                let (model, effort) = opts_model(stage);
-                specs.push((template, model, effort));
-            }
-            jobs.push((item, specs));
+        if items.len() > st.max_parallel {
+            return Err(fail(format!("pipeline is limited to {} items", st.max_parallel)));
         }
-        let ctx = st.ctx.clone();
+        let mut specs = Vec::new();
+        for stage in &stage_maps {
+            let template = stage.get("prompt").map(|v| v.to_string()).unwrap_or_default();
+            let (model, effort) = opts_model(stage);
+            let schema = schema_of(stage)?;
+            // Rhai maps are not Send. The thread gets plain JSON, and the key uses the same JSON text on every run.
+            let opts_json = rhai::serde::from_dynamic::<Value>(&Dynamic::from_map(stage.clone()))
+                .map_err(|e| fail(format!("pipeline stage: {}", e)))?;
+            specs.push((template, model, effort, schema, opts_json));
+        }
+        budget_left(&st)?;
+        let ctx = workflow_ctx(&st.ctx);
         let before = crate::cost::total_eur(&st.ctx);
         let before_tokens = crate::cost::total_tokens(&st.ctx);
+        let resume = st.resume.clone();
         let mut handles = Vec::new();
-        for (item, specs) in jobs {
+        for item in items.iter() {
+            let item = item.to_string();
+            let specs = specs.clone();
             let c = ctx.clone();
-            handles.push(std::thread::spawn(move || -> Result<Vec<String>, String> {
+            let resume = resume.clone();
+            handles.push(std::thread::spawn(move || -> Result<Vec<(String, String, String, String)>, String> {
                 let mut out = Vec::new();
                 let mut current = item;
-                for (template, model, effort) in specs {
+                for (template, model, effort, _schema, opts) in specs {
                     let prompt = template.replace("{item}", &current);
-                    current = crate::clusters::run_once(&c, &prompt, model, &effort)?;
-                    out.push(current.clone());
+                    let k = key_text(&prompt, &opts.to_string());
+                    let label = opts["label"].as_str().unwrap_or("").to_string();
+                    let phase = opts["phase"].as_str().unwrap_or("").to_string();
+                    if let Some(v) = resume.get(&k) {
+                        current = v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string());
+                    } else {
+                        current = crate::clusters::run_once(&c, &prompt, model, &effort)?;
+                    }
+                    out.push((k, label, phase, current.clone()));
                 }
                 Ok(out)
             }));
@@ -273,7 +363,19 @@ fn engine(state: Rc<RefCell<State>>) -> Engine {
         let mut out = Array::new();
         for h in handles {
             let row = h.join().map_err(|_| fail("a pipeline agent panicked"))?.map_err(|e| fail(e))?;
-            out.push(dynamic(json!(row))?);
+            let mut values = Vec::new();
+            for (stage_index, (k, label, phase, text)) in row.into_iter().enumerate() {
+                if let Some(schema) = specs.get(stage_index).and_then(|s| s.3.as_ref()) {
+                    let v: Value = serde_json::from_str(&text).map_err(|e| fail(format!("answer is not JSON: {}", e)))?;
+                    validate(schema, &v).map_err(|e| fail(e))?;
+                }
+                let value = Value::String(text);
+                journal_line(&st.dir, &json!({"key": k, "phase": phase, "label": label, "value": value}))
+                    .map_err(|e| fail(e))?;
+                st.resume.insert(k, value.clone());
+                values.push(value);
+            }
+            out.push(dynamic(json!(values))?);
         }
         let after = crate::cost::total_eur(&st.ctx);
         let after_tokens = crate::cost::total_tokens(&st.ctx);
@@ -283,12 +385,17 @@ fn engine(state: Rc<RefCell<State>>) -> Engine {
         Ok(out)
     });
 
+
     let s = state.clone();
     e.register_fn("loop_until", move |ctx: NativeCallContext, condition: FnPtr, step: FnPtr, opts: Map|
         -> Result<Dynamic, Box<EvalAltResult>> {
         let max = opts.get("max_iterations").map(|v| v.as_int().unwrap_or(4)).unwrap_or(4).max(1).min(12);
         let mut result = Dynamic::UNIT;
         for round in 0..max {
+            {
+                let st = s.borrow();
+                ensure_running(&st)?;
+            }
             result = step.call_within_context(&ctx, ())?;
             let verdict: Dynamic = condition.call_within_context(&ctx, (result.clone(),))?;
             let stop = verdict.as_bool().unwrap_or(false);
@@ -325,16 +432,25 @@ fn engine(state: Rc<RefCell<State>>) -> Engine {
 
     let s = state.clone();
     e.register_fn("workflow", move |name: ImmutableString, args: Map| -> Result<Dynamic, Box<EvalAltResult>> {
-        let (ctx, depth) = {
+        let (ctx, depth, remaining_eur, remaining_tokens, cancel) = {
             let st = s.borrow();
             if st.depth >= 1 { return Err(fail("a workflow may call only one level of workflows")); }
-            (st.ctx.clone(), st.depth + 1)
+            let eur = if st.budget_eur > 0.0 { (st.budget_eur - st.spent_eur).max(0.0) } else { 0.0 };
+            let tokens = if st.budget_tokens > 0 { st.budget_tokens.saturating_sub(st.spent_tokens) } else { 0 };
+            (workflow_ctx(&st.ctx), st.depth + 1, eur, tokens, st.cancel.clone())
         };
         let path = ctx.root.join("workflows").join(format!("{}.rhai", name.as_str()));
         if !path.is_file() { return Err(fail(format!("no workflow at {}", path.display()))); }
         let value = rhai::serde::from_dynamic::<Value>(&Dynamic::from_map(args)).map_err(|e| fail(e.to_string()))?;
-        let result = run_script(&ctx, &path, RunOptions { args: value, confirm: false, ..RunOptions::default() }, depth)
-            .map_err(|e| fail(e))?;
+        let result = run_script(&ctx, &path, RunOptions {
+            args: value, confirm: false, budget_eur: remaining_eur, budget_tokens: remaining_tokens, cancel,
+            ..RunOptions::default()
+        }, depth).map_err(|e| fail(e))?;
+        {
+            let mut st = s.borrow_mut();
+            st.spent_eur += result.eur;
+            st.spent_tokens += result.tokens;
+        }
         dynamic(result.output)
     });
 
@@ -350,12 +466,13 @@ fn run_script(ctx: &Ctx, path: &Path, options: RunOptions, depth: usize) -> Resu
     let id = sanitize(&id);
     let dir = ctx.root.join("workflows").join(&id);
     fs::create_dir_all(&dir).map_err(|e| format!("cannot make {}: {}", dir.display(), e))?;
+    // A stop marker from an earlier run is stale. A new run of the same id starts clean.
+    let _ = fs::remove_file(dir.join("stop"));
     let resume = load_resume(&dir);
     let state = Rc::new(RefCell::new(State {
         ctx: ctx.clone(),
         id: id.clone(),
         dir: dir.clone(),
-        start_eur: crate::cost::total_eur(ctx),
         spent_eur: 0.0,
         spent_tokens: 0,
         budget_eur: options.budget_eur,
@@ -367,11 +484,10 @@ fn run_script(ctx: &Ctx, path: &Path, options: RunOptions, depth: usize) -> Resu
         ask: options.ask,
     }));
     if options.confirm {
-        let agents = script.matches("agent(").count() + script.matches("parallel(").count();
-        let text = format!("Workflow {}: about {} agent calls, budget {:.2} EUR. Start?", name, agents, options.budget_eur);
+        let text = plan_text(path, options.budget_eur)?;
         let mut st = state.borrow_mut();
         let Some(ask) = st.ask.as_mut() else { return Err("workflow needs a confirmation, but no ask dialog is attached".to_string()); };
-        let answers = ask(&[json!({"question": text, "kind": "yes_no"})])?;
+        let answers = ask(&[json!({"question": format!("{}\nStart?", text), "kind": "yes_no"})])?;
         let yes = answers.first().and_then(|v| v.as_bool()).unwrap_or(false);
         if !yes { return Err("workflow not started: the user said no".to_string()); }
     }
@@ -394,6 +510,22 @@ fn run_script(ctx: &Ctx, path: &Path, options: RunOptions, depth: usize) -> Resu
         "id": result.id, "output": result.output, "eur": result.eur, "tokens": result.tokens
     })).map_err(|e| e.to_string())?).map_err(|e| format!("cannot write result: {}", e))?;
     Ok(result)
+}
+
+/// A short plan for the confirmation: what the script starts, at least. The exact number is only known while the
+/// script runs, so the number is a lower bound and the dialog says so.
+pub fn plan_text(path: &Path, budget_eur: f64) -> Result<String, String> {
+    let script = fs::read_to_string(path).map_err(|e| format!("cannot read {}: {}", path.display(), e))?;
+    let name = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "workflow".to_string());
+    let direct = script.matches("agent(").count();
+    let parallel = script.matches("prompt:").count();
+    let loops = script.matches("loop_until(").count();
+    Ok(format!(
+        "Workflow {}\n  agent calls: at least {}\n  loop steps: {}\n  budget: {}\n  script: {}",
+        name, direct + parallel, loops,
+        if budget_eur > 0.0 { format!("{:.2} EUR", budget_eur) } else { "no euro limit".to_string() },
+        path.display()
+    ))
 }
 
 /// Run a saved workflow file.
@@ -577,6 +709,73 @@ mod tests {
             ..RunOptions::default()
         };
         assert!(run(&ctx, &path, options).unwrap_err().contains("said no"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_stop_marker_of_another_process_stops_the_next_agent() {
+        let (ctx, dir) = ctx_with_fake(Vec::new());
+        let run_dir = ctx.root.join("workflows").join("stop-check");
+        fs::create_dir_all(&run_dir).unwrap();
+        let state = State {
+            ctx: ctx.clone(), id: "stop-check".to_string(), dir: run_dir.clone(),
+            spent_eur: 0.0, spent_tokens: 0, budget_eur: 0.0, budget_tokens: 0,
+            max_parallel: 4, depth: 0, cancel: Arc::new(AtomicBool::new(false)),
+            resume: HashMap::new(), ask: None,
+        };
+        assert!(!stopped(&state));
+        stop(&ctx, "stop-check").unwrap();
+        assert!(stopped(&state), "the marker must stop the run before the next agent");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_schema_map_through_the_agent_is_json_not_the_rhai_debug_text() {
+        let reply = json!({"choices": [{"finish_reason": "stop",
+            "message": {"role": "assistant", "content": "{\"ok\":true}"}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 2}}).to_string();
+        let (ctx, dir) = ctx_with_fake(vec![(200, reply)]);
+        let path = dir.join("schema.rhai");
+        fs::write(&path, "agent(\"answer\", #{schema: #{type: \"object\", required: [\"ok\"], \
+                          properties: #{ok: #{type: \"boolean\"}}}})").unwrap();
+        let out = run(&ctx, &path, RunOptions { confirm: false, ..RunOptions::default() }).unwrap();
+        assert_eq!(out.output, json!({"ok": true}));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parallel_refuses_more_parts_than_the_limit() {
+        let (ctx, dir) = ctx_with_fake(Vec::new());
+        let path = dir.join("many.rhai");
+        let items: Vec<String> = (0..5).map(|i| format!("#{{prompt: \"p{}\", opts: #{{}}}}", i)).collect();
+        fs::write(&path, format!("parallel([{}])", items.join(", "))).unwrap();
+        let out = run(&ctx, &path, RunOptions { confirm: false, max_parallel: 4, ..RunOptions::default() });
+        assert!(out.unwrap_err().contains("limited to 4"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_pipeline_resumes_finished_stages_from_the_journal() {
+        let reply = json!({"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "done"}}],
+                           "usage": {"prompt_tokens": 10, "completion_tokens": 2}}).to_string();
+        let (ctx, dir) = ctx_with_fake(vec![(200, reply)]);
+        let path = dir.join("pipe.rhai");
+        fs::write(&path, "pipeline([\"a\"], [#{prompt: \"x {item}\", model: \"worker\"}])").unwrap();
+        let first = run(&ctx, &path, RunOptions { confirm: false, ..RunOptions::default() }).unwrap();
+        // No second fake reply: a resumed pipeline that calls the model again would fail.
+        let second = run(&ctx, &path, RunOptions { confirm: false, resume_id: Some(first.id.clone()), ..RunOptions::default() });
+        assert_eq!(second.unwrap().output, first.output);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_workflow_cannot_raise_the_run_policy() {
+        let dir = std::env::temp_dir().join(format!("penelope-workflow-policy-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let mut ctx = crate::config::load(&dir.join(".penelope"));
+        ctx.cfg["run_policy"] = json!("all");
+        assert_eq!(workflow_ctx(&ctx).cfg["run_policy"], json!("safe"));
         let _ = fs::remove_dir_all(&dir);
     }
 }

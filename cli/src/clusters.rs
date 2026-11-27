@@ -2293,10 +2293,63 @@ pub(crate) fn run_once(ctx: &Ctx, prompt: &str, model: Value, effort: &str) -> R
 
 /// `run_cluster` with the euro baseline of the whole orchestration. Every cluster of one session therefore shares one
 /// `session_budget_eur`, beside its own `budget_eur`.
+/// The limits the person agreed in the clarification dialog. `clusters/ID/spec.json` is written before the run and
+/// carries the answers as text, for example `"budget": "5 EUR"`, `"max_iterations": "10 iterations"` and
+/// `"abort": "Stuck for 3 reports"`. The profile is the default; the agreed spec wins. A spec without `confirmed`
+/// is a draft and changes nothing.
+fn apply_spec_limits(ctx: &Ctx, id: &str, profile: &mut Profile) {
+    let path = cluster_dir(ctx, id).join("spec.json");
+    let Ok(text) = fs::read_to_string(&path) else { return };
+    let Ok(spec) = serde_json::from_str::<Value>(&text) else { return };
+    if !spec["confirmed"].as_bool().unwrap_or(false) { return; }
+    if let Some(eur) = spec["budget"].as_str().and_then(parse_eur) {
+        profile.budget_eur = eur;
+    }
+    if let Some(steps) = spec["max_iterations"].as_str().and_then(first_number) {
+        profile.max_steps = steps.clamp(1, 30);
+    }
+    if let Some(abort) = spec["abort"].as_str() {
+        let lower = abort.to_ascii_lowercase();
+        if lower.contains("first failed") || lower.contains("first failing") {
+            profile.stuck_after = 1;
+        } else if lower.contains("never") {
+            profile.stuck_after = 100;
+        } else if let Some(n) = first_number(abort) {
+            profile.stuck_after = n.clamp(1, 100);
+        }
+    }
+}
+
+/// The first number in a text, as a whole number: `"Stuck for 3 reports"` gives 3, `"10 iterations"` gives 10.
+fn first_number(text: &str) -> Option<usize> {
+    let digits: String = text.chars().skip_while(|c| !c.is_ascii_digit())
+        .take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
+}
+
+/// A euro amount in a text: `"5 EUR"`, `"1,5 EUR"`, `"20 €"` or `"2.50 eur"`. A token budget gives no euro limit.
+fn parse_eur(text: &str) -> Option<f64> {
+    let lower = text.to_ascii_lowercase();
+    if lower.contains("token") { return None; }
+    if !(lower.contains("eur") || lower.contains('€')) { return None; }
+    let mut number = String::new();
+    for c in lower.chars() {
+        if c.is_ascii_digit() || (c == '.' && !number.is_empty()) {
+            number.push(c);
+        } else if c == ',' && !number.is_empty() {
+            number.push('.');
+        } else if !number.is_empty() {
+            break;
+        }
+    }
+    number.parse::<f64>().ok().filter(|n| *n > 0.0)
+}
+
 fn run_cluster_inner(ctx: &Ctx, id: &str, session_before: Option<f64>) -> Result<String, String> {
     let mut c = load(ctx, id)?;
     if c.state == "killed" { return Ok(format!("cluster {} was already killed", id)); }
-    let profile = profile(ctx, &c.profile)?;
+    let mut profile = profile(ctx, &c.profile)?;
+    apply_spec_limits(ctx, &c.id, &mut profile);
     if kill_requested(ctx, &c.id) {
         let note = cleanup_worktree(&mut c);
         c.state = "killed".to_string();
@@ -3540,6 +3593,31 @@ mod tests {
         fs::create_dir_all(profile_dir(&ctx)).unwrap();
         fs::write(profile_dir(&ctx).join("tiny.json"), r#"{"name":"tiny","workers":[{"name":"one","role":"worker","model":"main"},{"name":"two","role":"worker","model":"main"}],"max_models":1}"#).unwrap();
         assert!(profile(&ctx, "tiny").unwrap_err().contains("max_models"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_confirmed_spec_overrides_budget_rounds_and_the_abort_rule() {
+        let (ctx, dir) = ctx();
+        let p = profile(&ctx, "solo").unwrap();
+        let c = new_cluster(&ctx, &p, "spec", "do the thing", None, Vec::new(), 0).unwrap();
+        let d = cluster_dir(&ctx, &c.id);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("spec.json"), json!({
+            "confirmed": true, "budget": "1,5 EUR", "max_iterations": "10 iterations",
+            "abort": "Stuck for 3 reports"
+        }).to_string()).unwrap();
+        let mut got = p.clone();
+        apply_spec_limits(&ctx, &c.id, &mut got);
+        assert_eq!((got.budget_eur, got.max_steps, got.stuck_after), (1.5, 10, 3));
+        // A draft is not an agreement: it changes nothing.
+        fs::write(d.join("spec.json"), json!({"confirmed": false, "budget": "9 EUR"}).to_string()).unwrap();
+        let mut draft = p.clone();
+        apply_spec_limits(&ctx, &c.id, &mut draft);
+        assert_eq!(draft.budget_eur, p.budget_eur);
+        assert_eq!(parse_eur("20 €"), Some(20.0));
+        assert_eq!(parse_eur("100k tokens"), None);
+        assert_eq!(first_number("stop after 4 rounds"), Some(4));
         let _ = fs::remove_dir_all(&dir);
     }
 
