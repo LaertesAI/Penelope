@@ -561,7 +561,25 @@ pub fn kind(ctx: &Ctx) -> String {
     sources(ctx).first().cloned().unwrap_or_else(|| "off".to_string())
 }
 
+/// The keyless HTML engines refuse a client that asks too fast. Each of them gets one request per 800 ms, however many
+/// searches run at once; the other engines are not spaced.
+fn throttle(name: &str) {
+    if !matches!(name, "startpage" | "duckduckgo" | "bing") {
+        return;
+    }
+    static NEXT: std::sync::OnceLock<Mutex<std::collections::HashMap<String, std::time::Instant>>> = std::sync::OnceLock::new();
+    let wait = {
+        let mut map = NEXT.get_or_init(|| Mutex::new(std::collections::HashMap::new())).lock().unwrap_or_else(|e| e.into_inner());
+        let now = std::time::Instant::now();
+        let at = map.get(name).copied().filter(|t| *t > now).unwrap_or(now);
+        map.insert(name.to_string(), at + std::time::Duration::from_millis(800));
+        at.saturating_duration_since(now)
+    };
+    std::thread::sleep(wait);
+}
+
 fn engine(ctx: &Ctx, name: &str, query: &str, opts: &Options) -> Result<Vec<Hit>, String> {
+    throttle(name);
     let cfg = &ctx.cfg["search"];
     let start = std::time::Instant::now();
     let result = match name {
@@ -811,6 +829,26 @@ mod tests {
         assert!(searxng_bases(&serde_json::json!({"searxng_url": "", "url": ""})).is_empty());
         assert!(is_searxng_answer(&serde_json::json!({"query": "test", "results": []})));
         assert!(!is_searxng_answer(&serde_json::json!({"results": []})) && !is_searxng_answer(&serde_json::json!({"hello": "world"})));
+    }
+
+    #[test]
+    fn a_keyless_engine_is_spaced_per_engine_and_the_others_are_not() {
+        let start = std::time::Instant::now();
+        std::thread::scope(|s| {
+            for _ in 0..3 {
+                s.spawn(|| throttle("startpage"));
+            }
+        });
+        // Three requests to one engine leave at 0, 0.8 and 1.6 seconds.
+        assert!(start.elapsed() >= std::time::Duration::from_millis(1500), "{:?}", start.elapsed());
+        let start = std::time::Instant::now();
+        std::thread::scope(|s| {
+            for name in ["duckduckgo", "bing", "exa", "brave"] {
+                s.spawn(move || throttle(name));
+            }
+        });
+        // Different engines do not wait for each other; keyed engines never wait.
+        assert!(start.elapsed() < std::time::Duration::from_millis(400), "{:?}", start.elapsed());
     }
 
     #[test]
