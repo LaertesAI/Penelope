@@ -36,7 +36,48 @@ fn known_key(word: &str) -> bool {
     word.starts_with("eyJ") && word.len() >= 30 && word.matches('.').count() == 2      // a signed web token
 }
 
+/// A URL is one word, and read whole its scheme is the key name (`https` before the first `:`), so `?api_key=...`
+/// and `?k=AKIA...` passed. Each path part and each query value is checked on its own.
+fn url_word(w: &str, hits: &mut usize) -> String {
+    let (head, rest) = w.split_once('?').map(|(h, r)| (h, Some(r))).unwrap_or((w, None));
+    let mut out = String::with_capacity(w.len());
+    for (i, part) in head.split('/').enumerate() {
+        if i > 0 {
+            out.push('/');
+        }
+        if known_key(part) {
+            *hits += 1;
+            out.push_str("[masked:key]");
+        } else {
+            out.push_str(part);
+        }
+    }
+    let Some(rest) = rest else { return out };
+    let (query, fragment) = rest.split_once('#').map(|(q, f)| (q, Some(f))).unwrap_or((rest, None));
+    out.push('?');
+    for (i, pair) in query.split('&').enumerate() {
+        if i > 0 {
+            out.push('&');
+        }
+        let (key, value) = pair.split_once('=').map(|(k, v)| (k, Some(v))).unwrap_or((pair, None));
+        match value {
+            Some(v) if known_key(v) => { *hits += 1; out.push_str(&format!("{}=[masked:key]", key)); }
+            Some(v) if is_key_name(key) && is_value(v) => { *hits += 1; out.push_str(&format!("{}=[masked:secret]", key)); }
+            _ => out.push_str(pair),
+        }
+    }
+    if let Some(f) = fragment {
+        out.push('#');
+        out.push_str(f);
+    }
+    out
+}
+
 fn word(w: &str, wait: &mut Wait, hits: &mut usize) -> String {
+    if w.contains("://") && !known_key(w) {
+        *wait = Wait::Nothing;
+        return url_word(w, hits);
+    }
     if known_key(w) {
         *wait = Wait::Nothing;
         *hits += 1;
@@ -166,6 +207,18 @@ pub fn note_failure(ctx: &crate::config::Ctx, why: &str) {
 #[cfg(test)]
 mod tests {
     use super::{mask, mask_pii};
+
+    #[test]
+    fn a_key_inside_a_url_is_masked() {
+        for (url, kind) in [("https://e.example/c?api_key=0123456789abcdef", "secret"), ("https://e.example/c?k=AKIAIOSFODNN7EXAMPLE", "key"),
+                            ("http://e.example/a/ghp_0123456789abcdefghijABCDEFGHIJ/b", "key"), ("https://e.example/?x=1&token=s3cr3tvalue#top", "secret"),
+                            ("ftp://u@e.example/f?password=hunter22xx", "secret")] {
+            let (out, hits) = mask(&format!("see {} now", url));
+            assert_eq!(hits, 1, "{} -> {}", url, out);
+            assert!(out.contains(&format!("[masked:{}]", kind)) && out.starts_with("see ") && out.ends_with(" now"), "{}", out);
+        }
+        assert_eq!(mask("https://docs.rs/serde/latest/serde/?search=json").1, 0);
+    }
 
     #[test]
     fn masks_mail_addresses_and_ibans() {

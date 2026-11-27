@@ -1873,3 +1873,19 @@ Open:
 - Strikes are counted per thread. A scout thread starts at zero and has no turn reset.
 - `route::validate` still runs after the watcher and says `NOT called.` for the cases the watcher misses, such as an
   empty required string inside a nested object.
+
+## Tool description scan (branch `feat/tool-description-scan`, 2026-11-27)
+
+Closes the open point of the vet entry: tool names, descriptions and input schemas from `tools/list` and from
+`.mcp.json` server objects now run the prose rules of `vet.rs` plus rules for tool poisoning (docs/TOOL-SCAN.md).
+The gate sits in `probe`, `describe` and `call`; tool search skips a refused server. The list hash per server lives in
+`<root>/mcp/toolscan.json`; a changed tool that gains a warning holds the server until `penelope mcp allow NAME`.
+`mcp allow` and `mcp add --allow` start the server once and scan its list; a refused list denies it again.
+`/tools install N` scans the registry entry first. New commands: `penelope mcp scan NAME`, `penelope mcp trust NAME`.
+
+Measured: written attack set 44 of 44 blocked; published MCPTox and MCP-ITP payloads 7 of 10 before tuning, 10 of 10
+after; paraphrases without trigger words 1 of 12; 442 offline tools of 15 servers 1 blocked (0.23 %), 9 warned; 249 us
+per tool in a release build.
+
+Found on the way: the TUI arm `"/tools" =>` for the contracts table caught `/tools search`, `install`, `yes` and `no`,
+so the TUI install flow never ran (the compiler warned "unreachable pattern"). Bare `/tools` keeps the table.

@@ -16,11 +16,11 @@ fn fg(c: art::Rgb) -> Style {
     Style::default().fg(col(c))
 }
 
-fn on(c: art::Rgb, bg: art::Rgb) -> Style {
+pub(super) fn on(c: art::Rgb, bg: art::Rgb) -> Style {
     Style::default().fg(col(c)).bg(col(bg))
 }
 
-fn bold(c: art::Rgb) -> Style {
+pub(super) fn bold(c: art::Rgb) -> Style {
     fg(c).add_modifier(Modifier::BOLD)
 }
 
@@ -37,14 +37,14 @@ fn num(n: u64) -> String {
 }
 
 /// Writes text at (x, y), cut at the right edge of `area`.
-fn put(f: &mut Frame, area: Rect, x: u16, y: u16, text: &str, style: Style) {
+pub(super) fn put(f: &mut Frame, area: Rect, x: u16, y: u16, text: &str, style: Style) {
     if y < area.y || y >= area.bottom() || x >= area.right() {
         return;
     }
     f.buffer_mut().set_stringn(x, y, text, (area.right() - x) as usize, style);
 }
 
-fn fill(f: &mut Frame, area: Rect, bg: art::Rgb) {
+pub(super) fn fill(f: &mut Frame, area: Rect, bg: art::Rgb) {
     let area = area.intersection(f.area());
     f.buffer_mut().set_style(area, Style::default().bg(col(bg)));
 }
@@ -558,7 +558,7 @@ fn sidebar(f: &mut Frame, app: &App, area: Rect) {
 }
 
 /// A dialog in the middle of `area`. Returns the inner rectangle below the title row.
-fn dialog(f: &mut Frame, area: Rect, title: &str, want_w: u16, want_h: u16) -> Rect {
+pub(super) fn dialog(f: &mut Frame, area: Rect, title: &str, want_w: u16, want_h: u16) -> Rect {
     let w = want_w.min(area.width.saturating_sub(4)).max(10).min(area.width);
     let h = want_h.min(area.height.saturating_sub(2)).max(3).min(area.height);
     let rect = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
@@ -981,6 +981,7 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
             }
             put(f, inner, inner.x, y + 1, "enter or the number chooses · esc closes without an answer", on(DIM, RAISED));
         }
+        Overlay::Ask { dialog, .. } => super::ask::draw(f, area, dialog, crate::ask::now_secs()),
         Overlay::Sessions { sel } => {
             let all = crate::sessions::all(&app.ctx);
             let inner = dialog(f, area, "Sessions", 92, all.len().min(16) as u16 + 7);
@@ -1007,6 +1008,7 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
                 put(f, inner, inner.x, inner.y + 2, "no session yet. A session is stored after its first answer.", on(DIM, RAISED));
             }
         }
+        Overlay::Graph(view) => super::graph::draw(f, area, view),
         Overlay::Brain { scroll } => {
             let body = crate::brain::ascii(&app.ctx);
             let lines: Vec<&str> = body.lines().collect();
