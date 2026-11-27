@@ -27,6 +27,9 @@ pub const SETUPS: &[&str] = &["large", "large-subagents", "cluster"];
 /// The profile the cluster setup writes. It is small on purpose: one worker, one validator, the weak model.
 const CLUSTER_PROFILE: &str = "eval-small";
 
+/// The cluster starts at three independent parts. A one-part task goes straight to the large model.
+const MIN_CLUSTER_WORKERS: usize = 3;
+
 /// Tools replay may call. Everything else is refused before it reaches a handler, so replay cannot run a command or
 /// change a file. `run_detail` is left out because it reads logs of earlier commands, not the project.
 const REPLAY_TOOLS: &[&str] = &["read", "find", "grep", "tree", "outline", "json_query"];
@@ -433,6 +436,19 @@ fn setup_model(ctx: &Ctx, setup: &str) -> String {
     model["model"].as_str().unwrap_or("?").to_string()
 }
 
+/// The number of workers in the eval cluster profile.
+fn eval_profile_workers(ctx: &Ctx) -> Result<usize, String> {
+    let path = ctx.root.join("clusters").join("profiles").join(format!("{}.json", CLUSTER_PROFILE));
+    let text = fs::read_to_string(&path).map_err(|e| format!("cannot read {}: {}", path.display(), e))?;
+    let profile: Value = serde_json::from_str(&text).map_err(|e| format!("cannot read {}: {}", path.display(), e))?;
+    Ok(profile["workers"].as_array().map_or(0, Vec::len))
+}
+
+/// One-part tasks go straight to the large model. The cluster only starts at three parts.
+fn route_setup<'a>(setup: &'a str, workers: usize) -> &'a str {
+    if setup == "cluster" && workers < MIN_CLUSTER_WORKERS { "large" } else { setup }
+}
+
 fn ensure_cluster_profile(ctx: &Ctx) -> Result<(), String> {
     let dir = ctx.root.join("clusters").join("profiles");
     fs::create_dir_all(&dir).map_err(|e| format!("cannot make {}: {}", dir.display(), e))?;
@@ -491,9 +507,12 @@ fn run_setup(ctx: &Ctx, tasks_path: &str, setup: &str, tasks: &[Task]) -> Result
     if setup == "cluster" {
         ensure_cluster_profile(ctx)?;
     }
+    // A cluster only pays off with at least three independent parts. The eval profile has one worker, so the
+    // one-part tasks in this runner go down the large path and the cluster arm measures that route.
+    let route = if setup == "cluster" { route_setup(setup, eval_profile_workers(ctx)?) } else { setup };
     let run_id = next_run_id(ctx, setup);
-    let run_ctx = eval_context(ctx, setup);
-    let model = setup_model(&run_ctx, setup);
+    let run_ctx = eval_context(ctx, route);
+    let model = setup_model(&run_ctx, route);
     let mut out = SetupResult { setup: setup.to_string(), run_id: run_id.clone(), model: model.clone(), tasks: Vec::new() };
     let mut stored: Vec<Value> = Vec::new();
     for task in tasks {
@@ -508,7 +527,7 @@ fn run_setup(ctx: &Ctx, tasks_path: &str, setup: &str, tasks: &[Task]) -> Result
                 continue;
             }
         };
-        let answer = with_task_cwd(&workspace.dir, || run_one(&run_ctx, setup, task, &workspace.dir));
+        let answer = with_task_cwd(&workspace.dir, || run_one(&run_ctx, route, task, &workspace.dir));
         let check = run_check(&run_ctx, &run_id, task, &workspace.dir);
         if let Some((repo, dir)) = &workspace.worktree {
             let _ = std::process::Command::new("git").arg("-C").arg(repo)
@@ -550,6 +569,7 @@ fn run_setup(ctx: &Ctx, tasks_path: &str, setup: &str, tasks: &[Task]) -> Result
         "schema": 1,
         "id": run_id,
         "setup": setup,
+        "route": route,
         "started": crate::sessions::stamp(now()),
         "tasks_path": tasks_path,
         "model": model,
@@ -968,30 +988,40 @@ mod tests {
     }
 
     #[test]
-    fn the_cluster_setup_uses_orchestrate_with_the_small_profile() {
-        let (mut ctx, d) = ctx("cluster");
+    fn a_one_part_cluster_setup_uses_the_large_model() {
+        let (mut ctx, d) = ctx("cluster-large");
         let repo = repo(&d);
         let file = tasks(&d, &repo, "test -f README.md", "Say what the project is.");
-        let (address, seen) = crate::llm::fake::serve(vec![
-            reply("the coder read the README", 30, 3),
-            reply("PASS the evidence is in the memory", 20, 4),
-        ]);
-        endpoint(&mut ctx, &address, "weak");
+        let (address, seen) = crate::llm::fake::serve(vec![reply("the task is done", 30, 3)]);
+        endpoint(&mut ctx, &address, "main");
         ctx.cfg["prices"] = json!({"test-model": [1.0, 2.0]});
         let parsed = parse_tasks(&file).unwrap();
         let result = run_setup(&ctx, file.to_str().unwrap(), "cluster", &parsed).unwrap();
         assert_eq!((result.passed(), result.tokens()), (1, (30, 3)));
+        assert_eq!(result.model, "test-model");
+        assert_eq!(eval_profile_workers(&ctx).unwrap(), 1);
         assert!(ctx.root.join("clusters/profiles").join(format!("{}.json", CLUSTER_PROFILE)).is_file());
         let profile: Value = serde_json::from_str(&fs::read_to_string(ctx.root.join("clusters/profiles").join(format!("{}.json", CLUSTER_PROFILE))).unwrap()).unwrap();
         assert_eq!(profile["single_model"], true);
+        let run: Value = serde_json::from_str(&fs::read_to_string(ctx.root.join("eval/runs").join(format!("{}.json", result.run_id))).unwrap()).unwrap();
+        assert_eq!((run["setup"].as_str(), run["route"].as_str()), (Some("cluster"), Some("large")));
         let seen = seen.lock().unwrap();
-        assert_eq!(seen.len(), 1);
+        assert_eq!(seen.len(), 1, "a one-part task must make one model call, not a cluster");
         let systems: Vec<String> = seen.iter().map(|s| s.body["messages"][0]["content"].as_str().unwrap_or("").to_string()).collect();
-        assert!(systems.iter().any(|s| s.contains("part of the Penelope cluster")), "{:?}", systems);
-        assert!(!systems.iter().any(|s| s.contains("validator part")), "the one-worker profile with no retry must skip the validator: {:?}", systems);
-        let names: Vec<String> = seen[0].body["tools"].as_array().unwrap().iter()
-            .map(|t| t["name"].as_str().unwrap_or("").to_string()).collect();
-        assert!(names.windows(2).all(|w| w[0] <= w[1]), "the tool list must be sorted for the cache prefix: {:?}", names);
+        assert!(systems.iter().all(|s| !s.contains("part of the Penelope cluster")), "a one-part task must not start a cluster: {:?}", systems);
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn the_eval_profile_worker_count_builds_the_route() {
+        let (ctx, d) = ctx("profile-workers");
+        fs::create_dir_all(ctx.root.join("clusters/profiles")).unwrap();
+        let path = ctx.root.join("clusters/profiles").join(format!("{}.json", CLUSTER_PROFILE));
+        fs::write(&path, json!({"workers": [{"name": "a"}, {"name": "b"}, {"name": "c"}]}).to_string()).unwrap();
+        assert_eq!(eval_profile_workers(&ctx).unwrap(), 3);
+        assert_eq!(route_setup("cluster", 3), "cluster");
+        assert_eq!(route_setup("cluster", 2), "large");
+        assert_eq!(route_setup("large", 1), "large");
         let _ = fs::remove_dir_all(&d);
     }
 

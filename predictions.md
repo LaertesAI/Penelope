@@ -202,3 +202,16 @@ Vor dem Lauf. Die 28 Entwicklungsaufgaben haben 1 unabhängigen Teil. Regel: ein
 ## Ergebnis K9
 
 8/28, 1,21 EUR, 1.658 s, 680.235 Eingabe, 192.755 Ausgabe. Treffer gleich, EUR -51,8 %, Zeit -67,6 %. Behalten. Eurykleia auf diesem Lauf: 309 Aufrufe, 9 Werkzeugfehler, 0 Meldungen, TPR 0,0.
+
+
+## Ergebnis K7
+
+Kein neuer bezahlter Lauf. Die Weiche liest die Worker-Zahl des Eval-Profils. Das Profil `eval-small` hat 1 Worker. Damit geht jede der 28 Entwicklungsaufgaben direkt an large.
+
+| Arm | Route auf den 28 | Treffer | EUR | Zeit |
+|---|---|---|---|---|
+| large | large | 8 / 28 | 2,2597 | 2.125 s |
+| cluster K9, Labor | cluster, 1 Worker | 8 / 28 | 1,21 | 1.658 s |
+| cluster K7, Produktion | 1 Teil, also large | 8 / 28 | 2,2597 | 2.125 s |
+
+Der K9-Gewinn von 52 % EUR und 68 % Zeit gilt nur im Labor. In Produktion startet der Cluster erst bei mindestens 3 Teilen.

@@ -3651,6 +3651,27 @@ mod tests {
     }
 
     #[test]
+    fn the_api_tool_list_is_sorted_for_the_cache_prefix() {
+        let (address, seen) = crate::llm::fake::serve(vec![(200, text_reply("done"))]);
+        let (mut ctx, dir) = ctx();
+        fake_models(&mut ctx, &address);
+        let p = profile(&ctx, "solo").unwrap();
+        let c = new_cluster(&ctx, &p, "sort", "read the project", None, Vec::new(), 0).unwrap();
+        let part = p.workers[0].clone();
+        let limits = Limits { cluster: 0.0, cluster_before: 0.0, session: 0.0, session_before: 0.0 };
+        let watch = Arc::new(Mutex::new(Watch::new(1)));
+        let out = run_model(&ctx, &c, &part, "you are the coder", "do the task", 1,
+                            &AtomicBool::new(false), limits, &watch).unwrap();
+        assert_eq!(out.text, "done");
+        let seen = seen.lock().unwrap();
+        let names: Vec<String> = seen[0].body["tools"].as_array().unwrap().iter()
+            .map(|t| t["name"].as_str().unwrap_or("").to_string()).collect();
+        assert!(names.len() > 1, "the request must carry the tool list: {:?}", names);
+        assert!(names.windows(2).all(|w| w[0] <= w[1]), "the tool list must be sorted for the cache prefix: {:?}", names);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_worktree_profile_is_refused_in_a_folder_without_git() {
         let dir = std::env::temp_dir().join(format!("penelope-clusters-nogit-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
