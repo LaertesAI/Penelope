@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -61,8 +61,12 @@ struct Server {
     alive: bool,
     /// The brief extension from `initialize`, if this server announced it.
     extension: Option<crate::brief::Extension>,
-    /// `tools/list` as long as this process lives. It is read only when a call carries a brief.
+    /// `tools/list` as long as this process lives, exactly as the server sent it and as `toolscan::gate` read it.
     tools: Option<Vec<Value>>,
+    /// Full specs from `mitos/describe` for lazy index entries; each passed `toolscan::check_one` before it was kept.
+    full: HashMap<String, Value>,
+    /// Set by the reader thread on `notifications/tools/list_changed`; the next list read asks the server again.
+    list_changed: Arc<AtomicBool>,
     /// True when the server announced Mitos; its `tools/list` may then hold index entries without schemas.
     mitos: bool,
     /// True when the server announced version 1 with the `attachments` feature: it may answer with resource links,
@@ -145,10 +149,16 @@ fn spawn(name: &str, server: &Value, signature: String) -> Result<Server, String
         return Err(format!("MCP server {} has no stdout", name));
     };
     let (tx, rx) = channel();
+    let list_changed = Arc::new(AtomicBool::new(false));
+    let changed_flag = list_changed.clone();
     std::thread::spawn(move || {
         for line in BufReader::new(stdout).lines() {
             let Ok(line) = line else { break };
             let Ok(v) = serde_json::from_str::<Value>(line.trim()) else { continue };
+            if v["method"].as_str() == Some("notifications/tools/list_changed") {
+                changed_flag.store(true, Ordering::SeqCst);
+                continue;
+            }
             let Some(id) = v["id"].as_u64() else { continue };
             if tx.send((id, v)).is_err() {
                 break;
@@ -156,7 +166,7 @@ fn spawn(name: &str, server: &Value, signature: String) -> Result<Server, String
         }
     });
     let mut live = Server { name: name.to_string(), signature, child, input: Some(input), rx, next: 0, alive: true,
-                             extension: None, tools: None, mitos: false, attach: false };
+                             extension: None, tools: None, full: HashMap::new(), list_changed, mitos: false, attach: false };
     let hello = live.request("initialize", json!({
         "protocolVersion": "2025-06-18", "capabilities": {"experimental": {crate::mitos::EXTENSION_ID: crate::mitos::manifest()}},
         "clientInfo": {"name": "penelope", "version": env!("CARGO_PKG_VERSION")}
@@ -225,38 +235,54 @@ impl Server {
         }
     }
 
-    /// The tools of this process, read once. Only a call that carries a brief asks for the list.
-    fn tools(&mut self, wait: Duration) -> Result<Vec<Value>, String> {
-        if let Some(tools) = &self.tools {
-            return Ok(tools.clone());
+    /// The tools of this process, read once and again after `notifications/tools/list_changed`. Every read, cached or
+    /// new, passes `toolscan::gate`: the one gate point for probe, describe, call and tool search.
+    fn tools(&mut self, ctx: &Ctx, wait: Duration) -> Result<Vec<Value>, String> {
+        if self.list_changed.swap(false, Ordering::SeqCst) {
+            self.tools = None;
+            self.full.clear();
         }
-        let result = match self.request("tools/list", json!({}), wait)? {
-            Reply::Ok(value) => value,
-            Reply::Server(e) => return Err(format!("MCP server {} refused tools/list: {}", self.name, e)),
+        let tools = match &self.tools {
+            Some(tools) => tools.clone(),
+            None => {
+                let result = match self.request("tools/list", json!({}), wait)? {
+                    Reply::Ok(value) => value,
+                    Reply::Server(e) => return Err(format!("MCP server {} refused tools/list: {}", self.name, e)),
+                };
+                let tools = result["tools"].as_array().cloned().unwrap_or_default();
+                self.tools = Some(tools.clone());
+                tools
+            }
         };
-        let tools = result["tools"].as_array().cloned().unwrap_or_default();
-        self.tools = Some(tools.clone());
+        crate::toolscan::gate(ctx, &self.name, &tools)?;
         Ok(tools)
     }
 
-    /// The full spec of one tool. An index entry of a Mitos server is replaced by the answer to `mitos/describe`;
-    /// every other server already sent the schema in `tools/list`.
-    fn full_tool(&mut self, name: &str, wait: Duration) -> Result<Option<Value>, String> {
-        let tools = self.tools(wait)?;
+    /// The list with each described full spec in place of its lazy index entry.
+    fn merged(&self) -> Option<Vec<Value>> {
+        self.tools.as_ref().map(|list| list.iter().map(|t| {
+            t["name"].as_str().and_then(|n| self.full.get(n)).cloned().unwrap_or_else(|| t.clone())
+        }).collect())
+    }
+
+    /// The full spec of one tool. An index entry of a Mitos server is replaced by the answer to `mitos/describe`,
+    /// which is scanned before it is kept; every other server already sent the schema in `tools/list`.
+    fn full_tool(&mut self, ctx: &Ctx, name: &str, wait: Duration) -> Result<Option<Value>, String> {
+        let tools = self.tools(ctx, wait)?;
         let Some(entry) = tools.iter().find(|t| t["name"].as_str() == Some(name)).cloned() else { return Ok(None) };
         if !self.mitos || !crate::mitos::is_lazy(&entry) {
             return Ok(Some(entry));
+        }
+        if let Some(full) = self.full.get(name) {
+            return Ok(Some(full.clone()));
         }
         let answer = match self.request("mitos/describe", json!({"names": [name]}), wait)? {
             Reply::Ok(value) => value,
             Reply::Server(e) => return Err(format!("MCP server {} refused mitos/describe: {}", self.name, e)),
         };
         let Some(full) = answer["tools"].as_array().and_then(|a| a.first()).cloned() else { return Ok(Some(entry)) };
-        if let Some(cache) = self.tools.as_mut() {
-            if let Some(slot) = cache.iter_mut().find(|t| t["name"].as_str() == Some(name)) {
-                *slot = full.clone();
-            }
-        }
+        crate::toolscan::check_one(ctx, &self.name, &tools, &full)?;
+        self.full.insert(name.to_string(), full.clone());
         Ok(Some(full))
     }
 
@@ -310,6 +336,14 @@ fn with_server<T>(ctx: &Ctx, name: &str, server: &Value, f: impl FnOnce(&mut Ser
     out
 }
 
+/// Stops the process of one server in this root.
+#[cfg(test)]
+pub fn shutdown_one(ctx: &Ctx, name: &str) {
+    let cell = cell_for(ctx, name);
+    let mut slot = cell.lock().unwrap_or_else(|e| e.into_inner());
+    *slot = None;
+}
+
 /// Stops every server this session started. Call it when Penelope leaves; a well-behaved server gets to close first.
 pub fn shutdown() {
     let cells: Vec<Cell> = {
@@ -328,8 +362,7 @@ pub fn probe(ctx: &Ctx, server: &str) -> Result<Vec<ToolInfo>, String> {
         return Err(format!("NOT listed. This agent run may use the MCP servers: {}.", crate::agents::mcp_scope().unwrap_or_default().join(", ")));
     }
     let (entry, _) = crate::plugins::server_entry(ctx, server).ok_or_else(|| format!("no MCP server named {}", server))?;
-    let tools = with_server(ctx, server, &entry, |live| live.tools(timeout_of(&entry, LIST_TIMEOUT)))?;
-    crate::toolscan::gate(ctx, server, &tools)?;
+    let tools = with_server(ctx, server, &entry, |live| live.tools(ctx, timeout_of(&entry, LIST_TIMEOUT)))?;
     Ok(tools.into_iter().map(|t| ToolInfo {
         name: t["name"].as_str().unwrap_or("").to_string(),
         description: t["description"].as_str().unwrap_or("").to_string(),
@@ -347,10 +380,14 @@ pub fn cached_tools_all(ctx: &Ctx) -> Vec<(String, ToolInfo)> {
     };
     let mut out = Vec::new();
     for (name, cell) in cells {
-        if !crate::agents::mcp_allowed(&name) || crate::toolscan::blocked(ctx, &name) { continue; }
+        if !crate::agents::mcp_allowed(&name) { continue; }
         let Ok(slot) = cell.try_lock() else { continue };
         let Some(server) = slot.as_ref().filter(|s| s.alive) else { continue };
-        for t in server.tools.iter().flatten() {
+        // The cached list is gated again: a record lost or written by another process cannot let an unscanned list
+        // through, because the gate compares the hash of this list.
+        let Some(listed) = server.tools.as_ref() else { continue };
+        if crate::toolscan::gate(ctx, &name, listed).is_err() { continue; }
+        for t in server.merged().iter().flatten() {
             out.push((name.clone(), ToolInfo {
                 name: t["name"].as_str().unwrap_or("").to_string(),
                 description: t["description"].as_str().unwrap_or("").to_string(),
@@ -367,7 +404,20 @@ pub fn cached_tools(ctx: &Ctx, name: &str) -> Option<Vec<Value>> {
     let cell = cell_for(ctx, name);
     let slot = cell.try_lock().ok()?;
     let server = slot.as_ref().filter(|s| s.alive)?;
-    server.tools.clone()
+    server.merged()
+}
+
+/// `probe`, and the process stops again afterwards unless it already ran. The claude command's configuration uses
+/// it: that command starts its own process, so a second one here would only hold memory.
+pub fn probe_once(ctx: &Ctx, server: &str) -> Result<Vec<ToolInfo>, String> {
+    let cell = cell_for(ctx, server);
+    let running = cell.lock().map(|slot| slot.as_ref().map(|s| s.alive).unwrap_or(false)).unwrap_or(false);
+    let out = probe(ctx, server);
+    if !running {
+        let mut slot = cell.lock().unwrap_or_else(|e| e.into_inner());
+        *slot = None;
+    }
+    out
 }
 
 /// The full argument schema of one tool, asked from a Mitos server only when needed. The model reads it before
@@ -377,11 +427,8 @@ pub fn describe(ctx: &Ctx, server: &str, tool: &str) -> Result<String, String> {
         return Err(format!("NOT described. This agent run may use the MCP servers: {}.", crate::agents::mcp_scope().unwrap_or_default().join(", ")));
     }
     let (entry, _) = crate::plugins::server_entry(ctx, server).ok_or_else(|| format!("no MCP server named {}", server))?;
-    let spec = with_server(ctx, server, &entry, |live| {
-        crate::toolscan::gate(ctx, server, &live.tools(timeout_of(&entry, LIST_TIMEOUT))?)?;
-        live.full_tool(tool, timeout_of(&entry, LIST_TIMEOUT))
-    })?.ok_or_else(|| format!("MCP server {} has no tool named {}", server, tool))?;
-    crate::toolscan::check_one(ctx, server, &spec)?;
+    let spec = with_server(ctx, server, &entry, |live| live.full_tool(ctx, tool, timeout_of(&entry, LIST_TIMEOUT)))?
+        .ok_or_else(|| format!("MCP server {} has no tool named {}", server, tool))?;
     let schema = if spec["inputSchema"].is_null() { &spec["input_schema"] } else { &spec["inputSchema"] };
     Ok(format!("{} · {}\n{}\narguments: {}", server, tool, spec["description"].as_str().unwrap_or(""),
                serde_json::to_string(schema).unwrap_or_default()))
@@ -415,17 +462,16 @@ pub fn call(ctx: &Ctx, server: &str, tool: &str, args: &Value) -> Result<String,
         return Err(format!("NOT called. The tool scan refused the tool list of MCP server {}. penelope mcp scan {} shows why.", server, server));
     }
     let result = with_server(ctx, server, &entry, |live| {
-        // A list this process already read is scanned before the call; no new request is sent for it.
-        if let Some(listed) = live.tools.clone() {
-            crate::toolscan::gate(ctx, server, &listed)?;
-        }
+        // The list is read and gated before the first call of a process, so an allowed server with no verdict yet,
+        // a restarted process or a changed list never runs unscanned.
+        live.tools(ctx, timeout_of(&entry, LIST_TIMEOUT))?;
         let mut arguments = args.clone();
         // Only a Laertes server that announced the extension and whose tool names `brief` gets the packed form.
         // Every other server, and every call without a brief, keeps exactly the old path.
         if let Some(ext) = live.extension.clone() {
             let short = arguments.get("brief").filter(|brief| brief.is_object() && brief.get("items").is_none()).cloned();
             if let Some(short) = short {
-                let wanted = live.full_tool(tool, timeout_of(&entry, LIST_TIMEOUT))?.map(|t| has_brief_property(&t)).unwrap_or(false);
+                let wanted = live.full_tool(ctx, tool, timeout_of(&entry, LIST_TIMEOUT))?.map(|t| has_brief_property(&t)).unwrap_or(false);
                 if wanted {
                     let roots = crate::brief::allowed_roots(ctx, server);
                     let packed = crate::brief::pack(&short, &roots, &ext)

@@ -47,6 +47,13 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked
 
+  scripts:
+    name: eval scripts (python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m unittest discover -s scripts/tests -v
+
   audit:
     name: cargo audit
     runs-on: ubuntu-latest

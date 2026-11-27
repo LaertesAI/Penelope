@@ -244,11 +244,11 @@ const REQUEST_START: &str = "[The person's request]";
 fn extra_servers(ctx: &Ctx, servers: &mut Value, allowed: &mut Vec<String>, wants_screen: bool) {
     if crate::modes::allows(ctx, "mcp_call") {
         allowed.extend(crate::plugins::allowed(ctx));        // a call works for plugins with "allow": true only
-        if let Some(obj) = crate::plugins::servers(ctx).as_object() {
-            for (k, s) in obj {
-                if allowed.iter().any(|a| a.starts_with(&format!("mcp__{}__", crate::plugins::tool_server(k)))) {
-                    servers[k] = s.clone();
-                }
+        // The claude command reads each server's tool descriptions itself, so only servers whose list passed the tool
+        // scan go in: no blocked, held, unvetted or unreadable server (toolscan::claude_servers).
+        for (k, s) in crate::toolscan::claude_servers(ctx) {
+            if allowed.iter().any(|a| a.starts_with(&format!("mcp__{}__", crate::plugins::tool_server(&k)))) {
+                servers[k] = s;
             }
         }
     }
@@ -927,8 +927,9 @@ while IFS= read -r line; do printf '%s\n' "$line" >> "$D/in.log"; reply_$mode; d
         let _ = std::fs::remove_dir_all(&root);
         let mut ctx = crate::config::load(&root);
         ctx.cfg["screencodec"]["command"] = json!("/bin/true");
-        let said = crate::plugins::mcp_add(&ctx, "db", "true", &[], true);
-        assert!(!said.starts_with("NOT"), "{}", said);
+        // An http server needs no probe; a stdio server that lists no tools is kept out by the tool scan.
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("mcp.json"), json!({"servers": {"db": {"type": "http", "url": "https://db.example/mcp", "allow": true}}}).to_string()).unwrap();
         let build = |mode: &str| {
             let moded = if mode.is_empty() { ctx.clone() } else { crate::modes::effective(&ctx, mode, 0) };
             let (mut servers, mut allowed) = (json!({}), Vec::new());
