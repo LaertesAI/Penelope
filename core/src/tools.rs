@@ -780,8 +780,18 @@ pub fn memory_map(ctx: &Ctx) -> String {
     format!("{}\n[shared by every project]\n{}", local, shared)
 }
 
+/// True when a request can hold a lasting rule or fact. A question and a request of under six words cannot, so the
+/// weaker model is not asked: that call is a second claude process, about as slow as the answer itself.
+pub fn worth_learning(user: &str) -> bool {
+    let text = user.trim();
+    !text.ends_with('?') && text.split_whitespace().count() >= 6
+}
+
 /// Auto-learning: the weaker model reads one exchange and files what the user wants kept. Returns the waypoints written.
 pub fn learn(ctx: &Ctx, user: &str, answer: &str) -> Vec<String> {
+    if !worth_learning(user) {
+        return Vec::new();
+    }
     let system = "You keep the long-term notes of a coding assistant. Read the exchange. If the USER states a lasting rule, preference or                   fact about the project or about how to work, write one line per item in the form path | note. The path names the topic                   with 1 to 3 lowercase words joined by /, starting with the language or area (for example rust/errors, git/commits,                   project/build). The note is one short sentence in the user's language. Questions, one-off tasks and anything the                   assistant said are not kept. If nothing is to keep, write NONE.";
     let mut cut = answer.len().min(1500);
     while !answer.is_char_boundary(cut) {
@@ -1216,6 +1226,13 @@ pub fn scouts(ctx: &Ctx, tasks: &serde_json::Value, cwd: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_short_request_or_a_question_is_not_sent_to_the_weaker_model_for_learning() {
+        assert!(!worth_learning("Antworte nur mit ok."));
+        assert!(!worth_learning("Which file holds the retry logic for the uploader?"));
+        assert!(worth_learning("From now on write commit messages in the imperative mood."));
+    }
 
     #[test]
     fn a_commit_stages_names_files_and_never_pushes() {

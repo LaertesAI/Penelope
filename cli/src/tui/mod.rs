@@ -10,6 +10,7 @@ mod paths;
 mod text;
 mod toolsearch;
 mod view;
+mod weave;
 
 use penelope_core::backend::{Chat, Event as TurnEvent};
 use penelope_core::config::Ctx;
@@ -3334,11 +3335,36 @@ mod tests {
     #[test]
     fn the_shuttle_moves_along_the_weft() {
         let mut a = app();
-        let shuttle = |a: &App| crate::tui::view::loom(a, 80, 0)[0].spans.iter().position(|s| s.content == "◆").unwrap();
+        let shuttle = |a: &App| crate::tui::view::loom(a, 80, 0).iter().find_map(|l| {
+            let mut col = 0usize;
+            l.spans.iter().find_map(|s| { let hit = s.content.chars().position(|c| c == '◆').map(|i| col + i); col += s.content.chars().count(); hit })
+        }).unwrap();
         a.tick = 0;
         let first = shuttle(&a);
         a.tick = 10;
         assert_ne!(first, shuttle(&a));
+        a.ctx.cfg["tui"] = serde_json::json!({"reduced_motion": true});
+        a.tick = 0;
+        let still = shuttle(&a);
+        a.tick = 10;
+        assert_eq!(still, shuttle(&a), "reduced motion keeps the shuttle in place");
+    }
+
+    #[test]
+    fn the_loom_looks_different_while_it_waits_for_the_person_and_while_a_tool_runs() {
+        let mut a = app();
+        a.items.push(Item::User("go".into()));
+        a.busy = Some(Instant::now());
+        a.items.push(Item::Tool { id: "1".into(), name: "run".into(), detail: "ls".into(), state: ToolState::Done, summary: String::new() });
+        let thinking = screen(&mut a, 120, 40);
+        assert!(thinking.contains("▓") && thinking.contains("warping the loom"), "a finished step is a row of cloth: {}", thinking);
+        a.items.push(Item::Tool { id: "2".into(), name: "run".into(), detail: "ls".into(), state: ToolState::Running, summary: String::new() });
+        assert!(screen(&mut a, 120, 40).contains("a tool runs"));
+        a.side.clusters = 2;
+        assert!(screen(&mut a, 120, 40).contains("2 clusters weaving"));
+        a.overlay = Overlay::Question { id: "q".into(), question: "ok?".into(), options: vec!["yes".into()], sel: 0 };
+        let rows: String = crate::tui::view::loom(&a, 100, 4).iter().map(|l| l.spans.iter().map(|s| s.content.to_string()).collect::<String>()).collect::<Vec<_>>().join("\n");
+        assert!(rows.contains("waiting for you") && rows.contains("◆") || rows.contains("◇"), "{}", rows);
     }
 
     #[test]

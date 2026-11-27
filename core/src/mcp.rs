@@ -273,6 +273,7 @@ fn parse_line(raw: &[u8]) -> Result<Option<Value>, Value> {
 }
 
 pub fn serve(ctx: &Ctx) {
+    crate::timing::mark("mcp server up", "");
     let stdin = std::io::stdin();
     let mut out = std::io::stdout();
     // True after a client announced Mitos in `initialize`; then `tools/list` answers with the index.
@@ -301,6 +302,8 @@ pub fn serve(ctx: &Ctx) {
             continue; // a notification
         }
         let method = msg["method"].as_str().unwrap_or("");
+        let _t = crate::timing::span("mcp request");
+        crate::timing::mark("mcp request in", method);
         let result = match method {
             "initialize" => {
                 mitos = crate::mitos::announced(&msg["params"]);
@@ -330,6 +333,7 @@ pub fn serve(ctx: &Ctx) {
                 }
             },
             "tools/call" => {
+                crate::gates::refresh_live();
                 let name = msg["params"]["name"].as_str().unwrap_or("");
                 let args = &msg["params"]["arguments"];
                 let role = crate::route::current_role();

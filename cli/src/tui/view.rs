@@ -3,6 +3,7 @@
 use super::art::{self, col, Mood, CLAY, ASH, DIM, GOLD, INK, NIGHT, PAPER, RAISED, RED, SEA};
 use super::text::{clip, input_rows, markdown, width, wrap_plain};
 use super::picture;
+use super::weave::{self, Look, Tone};
 use super::{App, Item, Overlay, ToolState};
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
@@ -323,7 +324,7 @@ fn chat(f: &mut Frame, app: &mut App, area: Rect) {
 fn transcript(app: &App, w: usize) -> Vec<Line<'static>> {
     let mut out: Vec<Line<'static>> = Vec::new();
     let mut last_small = false;
-    for item in &app.items {
+    for (idx, item) in app.items.iter().enumerate() {
         let small = matches!(item, Item::Tool { .. } | Item::Note { .. });
         if !out.is_empty() && !(small && last_small) {
             out.push(Line::default());
@@ -366,6 +367,13 @@ fn transcript(app: &App, w: usize) -> Vec<Line<'static>> {
                                          Span::raw("  "), Span::styled(clip(text, room), fg(ASH))]));
             }
             Item::Error(text) => {
+                // the broken thread of a failed turn, once, under the last error
+                if idx + 1 == app.items.len() && app.busy.is_none() {
+                    let rows = weave::frame(&weave::Params { look: Look::Error, tick: 0, width: w.saturating_sub(2), steps: 0, reduced: true, ascii: weave::ascii(&app.ctx.cfg) });
+                    if let Some(row) = rows.get(1).or_else(|| rows.first()) {
+                        out.push(Line::from(weave_line(row)));
+                    }
+                }
                 for (i, row) in wrap_plain(text, w.saturating_sub(6).max(1)).into_iter().enumerate() {
                     out.push(Line::from(vec![Span::styled(if i == 0 { "  ✖ " } else { "    " }, fg(RED)), Span::styled(row, fg(RED))]));
                 }
@@ -384,28 +392,77 @@ fn transcript(app: &App, w: usize) -> Vec<Line<'static>> {
 /// What the loom says while the model works, one phase every three seconds.
 const LOOM_PHASES: [&str; 4] = ["warping the loom", "casting the shuttle", "beating the weft", "reading the pattern"];
 
-/// The waiting block under the transcript: a shuttle runs along the weft between two posts, woven thread behind it,
-/// open warp ahead. Below it the tail of the model's thinking, when the provider streams it.
-pub fn loom(app: &App, w: usize, secs: u64) -> Vec<Line<'static>> {
-    let span = w.saturating_sub(34).clamp(8, 40);
-    let step = (app.tick / 2) as usize % (2 * span);
-    let (at, right) = if step < span { (step, true) } else { (2 * span - 1 - step, false) };
-    let mut weft: Vec<Span<'static>> = vec![Span::raw("  "), Span::styled("╪", fg(ASH))];
-    for i in 0..span {
-        let span_style = if i == at {
-            Span::styled("◆", bold(SEA))
-        } else if (right && i < at) || (!right && i > at) {
-            Span::styled("═", fg(CLAY))
-        } else {
-            Span::styled("┄", fg(DIM))
-        };
-        weft.push(span_style);
+/// The look of the waiting block: what the turn is doing right now.
+fn look_of(app: &App) -> Look {
+    if matches!(app.overlay, Overlay::Approve { .. } | Overlay::Question { .. } | Overlay::Ask { .. }) {
+        Look::Waiting
+    } else if app.side.clusters > 0 {
+        Look::Cluster(app.side.clusters)
+    } else if app.mood() == Mood::Working {
+        Look::Tool
+    } else {
+        Look::Thinking
     }
-    weft.push(Span::styled("╪", fg(ASH)));
-    let working = app.mood() == Mood::Working;
-    let phase = if working { "a tool runs" } else { LOOM_PHASES[(secs / 3) as usize % LOOM_PHASES.len()] };
-    weft.push(Span::styled(format!("  {} · {}s", phase, secs), fg(ASH)));
-    let mut out = vec![Line::from(weft)];
+}
+
+fn tone_style(t: Tone) -> Style {
+    match t {
+        Tone::Post => fg(ASH),
+        Tone::Warp => fg(DIM),
+        Tone::Weft => fg(CLAY),
+        Tone::Shuttle => bold(SEA),
+        Tone::Cloth => fg(CLAY),
+        Tone::Idle => fg(DIM),
+        Tone::Error => bold(RED),
+    }
+}
+
+fn weave_line(row: &weave::Row) -> Vec<Span<'static>> {
+    let mut out: Vec<Span<'static>> = Vec::new();
+    let mut run = String::new();
+    let mut tone = None;
+    for &(c, t) in row {
+        if tone.map(|x| x != t).unwrap_or(false) {
+            out.push(Span::styled(std::mem::take(&mut run), tone_style(tone.unwrap())));
+        }
+        tone = Some(t);
+        run.push(c);
+    }
+    if let Some(t) = tone {
+        out.push(Span::styled(run, tone_style(t)));
+    }
+    out
+}
+
+/// Steps of this turn that are finished: the tool calls and the text blocks after the last request of the person.
+fn finished_steps(app: &App) -> usize {
+    let from = app.items.iter().rposition(|i| matches!(i, Item::User(_))).map(|i| i + 1).unwrap_or(0);
+    app.items[from..].iter().filter(|i| matches!(i, Item::Tool { state: ToolState::Done | ToolState::Failed, .. } | Item::Reply(_))).count()
+}
+
+/// The waiting block under the transcript, a weaving: warp threads hang down, a shuttle crosses and lays the weft, and
+/// each finished step adds a row of cloth (see `weave.rs`). A waiting person, running tools and running clusters each
+/// look different. Below it the tail of the model's thinking, when the provider streams it.
+pub fn loom(app: &App, w: usize, secs: u64) -> Vec<Line<'static>> {
+    let look = look_of(app);
+    let params = weave::Params { look, tick: app.tick, width: w.saturating_sub(2), steps: finished_steps(app), reduced: weave::reduced(&app.ctx.cfg), ascii: weave::ascii(&app.ctx.cfg) };
+    let rows = weave::frame(&params);
+    let phase = match look {
+        Look::Waiting => "waiting for you".to_string(),
+        Look::Tool => "a tool runs".to_string(),
+        Look::Cluster(n) => format!("{} cluster{} weaving", n, if n == 1 { "" } else { "s" }),
+        Look::Error => "a thread broke".to_string(),
+        Look::Thinking => LOOM_PHASES[(secs / 3) as usize % LOOM_PHASES.len()].to_string(),
+    };
+    let mut out: Vec<Line<'static>> = Vec::new();
+    let shed = if rows.len() == 1 { 0 } else { 1 };
+    for (i, row) in rows.iter().enumerate() {
+        let mut spans = weave_line(row);
+        if i == shed {
+            spans.push(Span::styled(format!("  {} · {}s", phase, secs), fg(ASH)));
+        }
+        out.push(Line::from(spans));
+    }
     let thought: String = app.thinking.split_whitespace().collect::<Vec<_>>().join(" ");
     if !thought.is_empty() {
         let rows = wrap_plain(&thought, w.saturating_sub(8).max(10));
