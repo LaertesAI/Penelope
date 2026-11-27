@@ -75,3 +75,11 @@ Der Loop stoppt bei Erfolg (cluster +3 Aufgaben, ≤60 % EUR, ≤large Zeit), na
 ### Preflight vor dem Basislauf
 
 Drei Entwicklungsaufgaben, je ein anderes Repo, mit dem Gold-Patch und ohne Modell. Die Prüfung muss PASS geben. Sonst ist die Umgebung falsch, nicht das Modell. Der Preflight kostet keine API. Er braucht die Repos und die Umgebungen. Ergebnis 26.11.2026: 3 von 3 bestanden, django, sympy, pytest.
+
+## Runde 8 A2: Hold-out mit korrigierten Preisen
+
+Vor dem Lauf. 20 eingefrorene Hold-out-Aufgaben, SHA-256 `626fbf6d14e0d4340bc1b7e6d741b96a5ca437ce3d5f3a18e9427d509b36be90`. Zwei Arme: Sonnet 5.5 und Haiku 5.5 mit `effort: low` (K9-Einstellung). Preise: Sonnet 2/10, Haiku 0,1/0,5 USD je Mio, 0,92 EUR je USD.
+
+Vorhersage: large 5/20, K9 5/20, b = 0, c = 0, exakter McNemar p = 1,0. K9 kostet höchstens 20 % von large und braucht höchstens 1,0-mal die Zeit. Abbruch: K9 löst 2 oder mehr Aufgaben weniger als large, oder die Zeit liegt über 1,2-mal large.
+
+Die 1 scikit-Aufgabe ist `infra` und wird ausgeschlossen.
