@@ -52,7 +52,8 @@ pub fn default_config() -> Value {
         "apps": {"allow_install": false, "rights": {"files": false, "network": false, "shell": false}},
         "update": {"url": "", "channel": "stable", "public_key": ""},
         "global_memory": null,
-        "clipboard": {"read": "", "write": ""}
+        "clipboard": {"read": "", "write": ""},
+        "ask": {"timeout_secs": 900}
     })
 }
 

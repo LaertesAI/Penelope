@@ -2,6 +2,7 @@
 //!
 //! One thread draws and reads keys. A turn of the main model runs in a second thread and reports through a channel.
 
+mod ask;
 pub(crate) mod art;
 pub(crate) mod picture;
 mod graph;
@@ -72,6 +73,8 @@ pub enum Overlay {
     Sessions { sel: usize },
     /// A question of the main model with fixed answers.
     Question { id: String, question: String, options: Vec<String>, sel: usize },
+    /// The question dialog of `ask_user`: 1 to 6 questions with tabs, a free answer and a summary page.
+    Ask { id: String, dialog: crate::ask::Dialog },
     /// The memory map as a graph, with the vault command.
     Brain { scroll: usize },
     /// The knowledge graph: nodes, search, neighbours and a walk with Enter and Backspace. See `graph.rs`.
@@ -285,7 +288,7 @@ pub struct App {
 }
 
 /// Labels and icons of status lines, so that a stored transcript finds its fixed texts again.
-const NOTE_KINDS: &[(&str, &str)] = &[("memory", "◆"), ("learned", "✦"), ("utis", "◆"), ("resumed", "↺"), ("unravel", "↺"), ("stopped", "■"), ("lesson", "✦"), ("scout", "◆"), ("note", "◆"), ("cluster", "◆")];
+const NOTE_KINDS: &[(&str, &str)] = &[("memory", "◆"), ("learned", "✦"), ("utis", "◆"), ("resumed", "↺"), ("unravel", "↺"), ("stopped", "■"), ("lesson", "✦"), ("scout", "◆"), ("note", "◆"), ("cluster", "◆"), ("answered", "◆")];
 
 fn item_json(item: &Item) -> serde_json::Value {
     use serde_json::json;
@@ -323,8 +326,8 @@ impl App {
     pub fn new(ctx: Ctx) -> App {
         let (tx, rx) = channel();
         let approve_dir = ctx.root.join("approvals");
-        let _ = fs::remove_dir_all(&approve_dir);
         let _ = fs::create_dir_all(&approve_dir);
+        crate::ask::drop_stale(&approve_dir);          // files of dead processes and of questions past their deadline
         let history = fs::read_to_string(ctx.root.join("history.jsonl")).unwrap_or_default().lines()
             .filter_map(|l| serde_json::from_str::<String>(l).ok()).collect::<Vec<_>>();
         let history = history[history.len().saturating_sub(200)..].to_vec();
@@ -510,7 +513,7 @@ impl App {
     }
 
     pub fn mood(&self) -> Mood {
-        if matches!(self.overlay, Overlay::Approve { .. } | Overlay::Question { .. }) {
+        if matches!(self.overlay, Overlay::Approve { .. } | Overlay::Question { .. } | Overlay::Ask { .. }) {
             return Mood::Asking;
         }
         if self.busy.is_some() {
@@ -1352,7 +1355,7 @@ impl App {
         if self.tick % 3 != 0 {
             return;
         }
-        if let Overlay::Approve { id, .. } | Overlay::Question { id, .. } = &self.overlay {       // the asker gave up: the question is gone
+        if let Overlay::Approve { id, .. } | Overlay::Question { id, .. } | Overlay::Ask { id, .. } = &self.overlay {       // the asker gave up: the question is gone
             if id != "x" && !self.approve_dir.join(format!("{}.req", id)).exists() {
                 self.overlay = Overlay::None;
                 self.toast("the question ran out of time and counted as no".to_string());
@@ -1371,6 +1374,13 @@ impl App {
             self.seen.insert(id.to_string());
             let v: serde_json::Value = fs::read_to_string(entry.path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
             let command = v["command"].as_str().unwrap_or("").to_string();
+            if v["kind"].as_str() == Some("questions") {
+                match crate::ask::Dialog::from_request(&v) {
+                    Some(dialog) => self.overlay = Overlay::Ask { id: id.to_string(), dialog },
+                    None => self.answer_text(id, ""),                   // a request nobody can show counts as closed
+                }
+                return;
+            }
             if v["kind"].as_str() == Some("question") {
                 let options = v["options"].as_array().map(|a| a.iter().filter_map(|o| o.as_str().map(String::from)).collect()).unwrap_or_default();
                 self.overlay = Overlay::Question { id: id.to_string(), question: command, options, sel: 0 };
@@ -1626,7 +1636,7 @@ impl App {
                     self.toast("/cluster GOAL [--profile NAME] [--sequential], or /cluster profiles".to_string());
                 } else {
                     let profile = profile.clone();
-                    self.start_bg(move |ctx| crate::clusters::orchestrate(&ctx, &goal, profile.as_deref(), parallel));
+                    self.start_bg(move |ctx| crate::clarify::start_cluster(&ctx, &goal, profile.as_deref(), parallel, &serde_json::Map::new()));
                 }
             }
             "/factory" if rest.is_empty() => {
@@ -1640,6 +1650,11 @@ impl App {
                 } else {
                     self.start_bg(move |ctx| crate::factories::run(&ctx, &name));
                 }
+            }
+            "/factory" if rest.starts_with("new ") && !rest.contains("--dry") => {
+                // the questions wait for a person, so they run off the thread that reads the keys
+                let rest = rest.to_string();
+                self.start_bg(move |ctx| crate::factories::slash_asked(&ctx, &rest));
             }
             "/factory" => {
                 let report = crate::factories::slash(&self.ctx, rest);
@@ -2130,6 +2145,7 @@ impl App {
         let mut effort: Option<String> = None;
         let mut open: Option<usize> = None;
         let mut said: Option<(String, String)> = None;
+        let mut ask_done: Option<(String, Option<(Vec<crate::ask::Question>, Vec<crate::ask::Answer>)>)> = None;
         let mut plugin_open: Option<String> = None;
         let mut plugin_back: Option<String> = None;
         let mut plugin_toggle: Option<(String, bool)> = None;
@@ -2241,6 +2257,12 @@ impl App {
                     said = Some((id.clone(), options[c as usize - '1' as usize].clone())),
                 KeyCode::Esc => said = Some((id.clone(), String::new())),
                 _ => {}
+            },
+            Overlay::Ask { .. } if ctrl => {}
+            Overlay::Ask { id, dialog } => match dialog.key(key.code) {
+                crate::ask::Outcome::Continue => {}
+                crate::ask::Outcome::Send(answers) => ask_done = Some((id.clone(), Some((dialog.qs.clone(), answers)))),
+                crate::ask::Outcome::Close => ask_done = Some((id.clone(), None)),
             },
             Overlay::Sessions { sel } => match key.code {
                 KeyCode::Esc | KeyCode::Char('q') => close = true,
@@ -2551,6 +2573,21 @@ impl App {
             self.answer_text(&id, &text);
             close = true;
         }
+        if let Some((id, sent)) = ask_done {
+            match sent {
+                Some((qs, answers)) => {
+                    self.answer_text(&id, &crate::ask::answers_file(&answers));
+                    for line in crate::ask::answer_lines(&qs, &answers) {
+                        self.note("◆", "answered", line, art::CLAY);        // the answers stay in the transcript
+                    }
+                }
+                None => {
+                    self.answer_text(&id, "");
+                    self.note("■", "stopped", "the question dialog was closed without an answer".to_string(), art::ASH);
+                }
+            }
+            close = true;
+        }
         if let Some(index) = open {
             self.overlay = Overlay::None;
             self.open_tab(index);
@@ -2576,7 +2613,7 @@ impl App {
             return;
         }
         if !matches!(self.overlay, Overlay::None) {
-            if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) && !matches!(self.overlay, Overlay::Approve { .. } | Overlay::Question { .. }) {
+            if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) && !matches!(self.overlay, Overlay::Approve { .. } | Overlay::Question { .. } | Overlay::Ask { .. }) {
                 let previous = std::mem::replace(&mut self.overlay, Overlay::None);
                 if let Overlay::AppInstall { prepared } = previous {
                     self.toast(apps::cancel(prepared));
@@ -3051,6 +3088,85 @@ mod tests {
         a.poll_approvals();
         assert_eq!(fs::read_to_string(a.approve_dir.join("9.ans")).unwrap(), "yes");
         assert!(matches!(a.overlay, Overlay::None));
+    }
+
+    fn questions_request(deadline: u64) -> String {
+        serde_json::json!({"kind": "questions", "command": "x", "cwd": "", "deadline": deadline, "questions": [
+            {"question": "Which database?", "header": "Database", "options": [{"label": "sqlite", "description": "one file"}, "postgres", "mysql"]},
+            {"question": "Which checks?", "header": "Checks", "multi_select": true, "options": ["lint", "tests", "audit"]}]}).to_string()
+    }
+
+    fn answer_of(a: &App, id: &str) -> String {
+        fs::read_to_string(a.approve_dir.join(format!("{}.ans", id))).unwrap_or_default()
+    }
+
+    #[test]
+    fn the_question_dialog_takes_a_choice_several_choices_and_a_summary() {
+        let mut a = app();
+        fs::write(a.approve_dir.join("q1.req"), questions_request(crate::ask::now_secs() + 900)).unwrap();
+        a.poll_approvals();
+        assert!(matches!(&a.overlay, Overlay::Ask { dialog, .. } if dialog.qs.len() == 2));
+        assert_eq!(a.mood(), Mood::Asking);
+        press(&mut a, KeyCode::Down);
+        press(&mut a, KeyCode::Enter);                       // postgres
+        press(&mut a, KeyCode::Char(' '));                   // lint
+        press(&mut a, KeyCode::Down);
+        press(&mut a, KeyCode::Down);
+        press(&mut a, KeyCode::Char(' '));                   // audit
+        press(&mut a, KeyCode::Enter);
+        assert!(matches!(&a.overlay, Overlay::Ask { dialog, .. } if dialog.on_summary()));
+        let shown = screen(&mut a, 100, 40);
+        assert!(shown.contains("Your answers") && shown.contains("postgres") && shown.contains("lint, audit") && shown.contains("left"), "{}", shown);
+        press(&mut a, KeyCode::Enter);
+        assert!(matches!(a.overlay, Overlay::None));
+        let v: serde_json::Value = serde_json::from_str(&answer_of(&a, "q1")).unwrap();
+        assert_eq!(v["answers"][0]["labels"], serde_json::json!(["postgres"]));
+        assert_eq!(v["answers"][1]["labels"], serde_json::json!(["lint", "audit"]));
+        let notes: Vec<String> = a.items.iter().filter_map(|i| if let Item::Note { label: "answered", text, .. } = i { Some(text.clone()) } else { None }).collect();
+        assert_eq!(notes.len(), 2, "the answers stay in the transcript");
+        assert!(notes[0].contains("Database") && notes[0].contains("postgres"), "{:?}", notes);
+    }
+
+    #[test]
+    fn the_question_dialog_takes_a_typed_answer_by_number_keys_and_tabs() {
+        let mut a = app();
+        fs::write(a.approve_dir.join("q2.req"), questions_request(crate::ask::now_secs() + 900)).unwrap();
+        a.poll_approvals();
+        type_text(&mut a, "own database");                   // letters start the free answer
+        press(&mut a, KeyCode::Enter);
+        press(&mut a, KeyCode::Char('2'));                   // multi-select: toggles tests
+        press(&mut a, KeyCode::Enter);
+        press(&mut a, KeyCode::Enter);
+        let v: serde_json::Value = serde_json::from_str(&answer_of(&a, "q2")).unwrap();
+        assert_eq!(v["answers"][0]["text"], "own database");
+        assert_eq!(v["answers"][0]["labels"], serde_json::json!([]));
+        assert_eq!(v["answers"][1]["labels"], serde_json::json!(["tests"]));
+    }
+
+    #[test]
+    fn escape_closes_the_whole_question_dialog_with_an_empty_answer() {
+        let mut a = app();
+        fs::write(a.approve_dir.join("q3.req"), questions_request(crate::ask::now_secs() + 900)).unwrap();
+        a.poll_approvals();
+        press(&mut a, KeyCode::Char('1'));
+        press(&mut a, KeyCode::Esc);
+        assert!(matches!(a.overlay, Overlay::None));
+        assert_eq!(answer_of(&a, "q3"), "");
+        assert!(matches!(crate::ask::parse_reply(&answer_of(&a, "q3"), 2), crate::ask::Reply::Closed));
+    }
+
+    #[test]
+    fn the_question_dialog_shows_the_remaining_time_and_closes_when_the_asker_gives_up() {
+        let mut a = app();
+        fs::write(a.approve_dir.join("q4.req"), questions_request(crate::ask::now_secs() + 125)).unwrap();
+        a.poll_approvals();
+        let shown = screen(&mut a, 100, 40);
+        assert!(shown.contains("2:0") || shown.contains("2:05") || shown.contains("1:5"), "{}", shown);
+        assert!(shown.contains("Which database?") && shown.contains("Database") && shown.contains("one file"), "{}", shown);
+        fs::remove_file(a.approve_dir.join("q4.req")).unwrap();
+        a.tick = 3;
+        a.poll_approvals();
+        assert!(matches!(a.overlay, Overlay::None), "the timeout of the asker removes the request");
     }
 
     #[test]
