@@ -129,7 +129,7 @@ fn call_raw_inner(ctx: &Ctx, name: &str, a: &Value) -> Result<String, String> {
             args["cwd"] = json!(s("cwd"));
             crate::lsp::tool(ctx, &args).map(|text| tools::guard(ctx, &text))
         }
-        "ask_user" => Ok(tools::ask_user(&s("question"), &a["options"])),
+        "ask_user" => Ok(tools::ask_user_args(ctx, a)),
         "plan" => Ok(tools::plan(ctx, &a["items"])),
         "run_detail" => Ok(tools::run_detail(ctx, a["id"].as_u64().unwrap_or(0), &s("pattern"))),
         "fetch" => Ok(tools::fetch(ctx, &s("url"), &s("question"))),
@@ -161,7 +161,12 @@ fn call_raw_inner(ctx: &Ctx, name: &str, a: &Value) -> Result<String, String> {
         "agent" => Ok(tools::agent(ctx, a)),
         "cluster_start" => {
             let profile = a["profile"].as_str().filter(|p| !p.trim().is_empty());
-            Ok(crate::clusters::start(ctx, &s("goal"), profile, a["parallel"].as_bool().unwrap_or(true)))
+            let known: serde_json::Map<String, serde_json::Value> = ["done", "abort", "budget", "max_iterations", "rights", "models", "results_to"].iter()
+                .filter_map(|k| a[*k].as_str().filter(|v| !v.trim().is_empty()).map(|v| (k.to_string(), json!(v)))).collect();
+            Ok(match crate::clarify::start_cluster(ctx, &s("goal"), profile, a["parallel"].as_bool().unwrap_or(true), &known) {
+                Ok(text) => text,
+                Err(e) => if e.starts_with("NOT") { e } else { format!("NOT started. {}", e) },
+            })
         }
         "cluster_spawn" => crate::clusters::spawn(ctx, &s("profile"), a["name"].as_str().filter(|n| !n.trim().is_empty()), &s("task")),
         "cluster_ask" => crate::clusters::ask(ctx, &s("target"), &s("question")),

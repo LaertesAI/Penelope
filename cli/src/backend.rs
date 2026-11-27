@@ -292,6 +292,13 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
         if let Ok(dir) = std::env::var("PENELOPE_APPROVE_DIR") {
             servers["penelope"]["env"]["PENELOPE_APPROVE_DIR"] = json!(dir);       // the interface answers questions about unsafe commands
         }
+        if let Ok(dir) = std::env::var("PENELOPE_ASK_DIR") {
+            servers["penelope"]["env"]["PENELOPE_ASK_DIR"] = json!(dir);           // the ACP server answers the question dialog
+        }
+        let acp_session = crate::ask::current_session();
+        if !acp_session.is_empty() {
+            servers["penelope"]["env"]["PENELOPE_ACP_SESSION"] = json!(acp_session);   // a question goes to this editor session
+        }
         // The gates read the user text and the session taint from a 0600 file: the text stays off the command line.
         let turn_file = crate::gates::write_turn_file(ctx, user, self.gate_taint.as_deref());
         if let Some(path) = &turn_file {
