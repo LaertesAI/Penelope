@@ -924,8 +924,9 @@ while IFS= read -r line; do printf '%s\n' "$line" >> "$D/in.log"; reply_$mode; d
         let _ = std::fs::remove_dir_all(&root);
         let mut ctx = crate::config::load(&root);
         ctx.cfg["screencodec"]["command"] = json!("/bin/true");
-        let said = crate::plugins::mcp_add(&ctx, "db", "true", &[], true);
-        assert!(!said.starts_with("NOT"), "{}", said);
+        // An http server needs no probe; a stdio server that lists no tools is kept out by the tool scan.
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("mcp.json"), json!({"servers": {"db": {"type": "http", "url": "https://db.example/mcp", "allow": true}}}).to_string()).unwrap();
         let build = |mode: &str| {
             let moded = if mode.is_empty() { ctx.clone() } else { crate::modes::effective(&ctx, mode, 0) };
             let (mut servers, mut allowed) = (json!({}), Vec::new());
