@@ -2264,6 +2264,8 @@ fn prompt_rewrite(ctx: &Ctx, c: &Cluster, p: &Profile, session_before: Option<f6
 }
 
 /// Runs one cluster: every worker part, then the validator. A FAIL sends the result back to the workers up to `retries`.
+/// The CLI enters through `run_cluster_inner` with the session baseline; this shorthand is for tests.
+#[cfg(test)]
 pub fn run_cluster(ctx: &Ctx, id: &str) -> Result<String, String> {
     run_cluster_inner(ctx, id, None)
 }
@@ -3128,8 +3130,17 @@ pub fn advise_apply(ctx: &Ctx, name: Option<&str>) -> Result<String, String> {
     Ok(out)
 }
 
-pub fn status_text(ctx: &Ctx, id: Option<&str>) -> String {
-    if let Some(id) = id.filter(|s| !s.is_empty()) {
+/// `status_text` for the CLI: a named target that does not exist is an error, not a line with exit 0. A name that
+/// exists resolves to its id, so `cluster status NAME` works like `cluster status ID`.
+pub fn status_checked(ctx: &Ctx, target: Option<&str>) -> Result<String, String> {
+    let Some(target) = target.filter(|s| !s.trim().is_empty()) else {
+        return Ok(status_text(ctx, None));
+    };
+    let c = find_target(ctx, target)?;
+    Ok(status_text(ctx, Some(&c.id)))
+}
+
+pub fn status_text(ctx: &Ctx, id: Option<&str>) -> String {    if let Some(id) = id.filter(|s| !s.is_empty()) {
         let c = match load(ctx, id) { Ok(c) => c, Err(e) => return e };
         let mut out = format!("cluster {} · {} · profile {} · state {}\nTask: {}\nProgress: {}/{}\nMemory: {}\n",
                               c.id, c.name, c.profile, c.state, c.task, c.done, c.total, c.memory);
@@ -3537,6 +3548,16 @@ mod tests {
     }
 
     #[test]
+    fn a_cluster_status_by_name_resolves_and_an_unknown_target_is_an_error() {
+        let (ctx, dir) = ctx();
+        let p = profile(&ctx, "solo").unwrap();
+        let c = new_cluster(&ctx, &p, "named", "do the thing", None, Vec::new(), 0).unwrap();
+        assert!(status_checked(&ctx, Some("named")).unwrap().contains(&c.id));
+        assert!(status_checked(&ctx, Some("nosuch")).unwrap_err().contains("no cluster"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_plan_keeps_dependencies_and_refuses_an_unknown_profile() {
         let (ctx, dir) = ctx();
         let plan = parse_plan(r#"{"clusters":[{"name":"back","profile":"backend","task":"server"},{"name":"front","profile":"frontend","task":"ui"},{"name":"live","profile":"live-test","task":"test","after":["back","front"]}]}"#, &ctx).unwrap();
@@ -3628,7 +3649,7 @@ mod tests {
 
     #[test]
     fn a_tool_call_without_cwd_from_an_api_part_writes_in_its_worktree() {
-        let (address, seen) = crate::llm::fake::serve(vec![
+        let (address, _seen) = crate::llm::fake::serve(vec![
             (200, tool_reply("write", json!({"path": "part.txt", "text": "made by the part\n"}))),
             (200, text_reply("wrote part.txt")),
             (200, tool_reply("run", json!({"command": "cat hello.txt"}))),
@@ -3641,10 +3662,8 @@ mod tests {
         assert!(!dir.join("part.txt").exists());
         let out = run_cluster(&ctx, &c.id).unwrap();
         assert!(out.contains("done"), "{}", out);
-        let body = seen.lock().unwrap()[1].body.to_string();
-        // The body is JSON: a Windows path arrives there with every \ escaped as \\.
-        let in_json = json!(c.worktree).to_string();
-        assert!(body.contains(in_json.trim_matches('"')), "the write went to the worktree, not the live tree: {}", body);
+        // The tool answer shortens /home/... to ~/..., so the request body is not a reliable path witness.
+        // The two files below are: the worktree holds the part's write, the live tree only gets the applied diff.
         assert_eq!(fs::read_to_string(dir.join("part.txt")).unwrap(), "made by the part\n");
         assert_eq!(fs::read_to_string(Path::new(&c.worktree).join("part.txt")).unwrap(), "made by the part\n");
         let _ = fs::remove_dir_all(&dir);

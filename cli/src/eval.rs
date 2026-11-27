@@ -54,7 +54,7 @@ pub fn task_cwd() -> String {
     std::env::var("PENELOPE_TASK_CWD").unwrap_or_default()
 }
 
-fn with_task_cwd<T>(dir: &Path, f: impl FnOnce() -> T) -> T {
+pub(crate) fn with_task_cwd<T>(dir: &Path, f: impl FnOnce() -> T) -> T {
     let before = TASK_CWD.with(|d| d.replace(Some(dir.to_path_buf())));
     let out = f();
     TASK_CWD.with(|d| *d.borrow_mut() = before);
@@ -322,6 +322,13 @@ fn run_check(ctx: &Ctx, run_id: &str, task: &Task, dir: &Path) -> CheckRun {
     let penelope_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap_or(std::path::Path::new("."));
     cmd.env("PENELOPE_ROOT", penelope_root);
     cmd.current_dir(dir).stdin(Stdio::null()).stdout(Stdio::from(out)).stderr(Stdio::from(err));
+    // The check gets its own process group. `kill_tree` then reaches pytest and every process the check started;
+    // without this, only the shell died and a hung check ran for hours (sympy-18698).
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => return CheckRun { passed: false, output: format!("the check command could not start: {}", e) },
@@ -860,9 +867,30 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
     }
 
+    #[cfg(unix)]
     #[test]
-    fn a_swebench_task_does_not_show_the_check_command() {
-        let base = Task { id: "x".into(), prompt: "Do it".into(), repo: std::path::PathBuf::from("."),
+    fn a_timed_out_check_kills_the_grandchild_too() {
+        let (ctx, d) = ctx("timeout-tree");
+        let repo = repo(&d);
+        let task = Task { id: "tree".into(), prompt: "Do it".into(), repo: repo.clone(),
+                          cwd: String::new(), copy: false, check: "sleep 30 & echo $! > child.pid; wait".into(),
+                          check_timeout_seconds: 1, max_steps: 1, base_commit: String::new() };
+        let run = run_check(&ctx, "tree-run", &task, &repo);
+        assert!(run.output.contains("timed out"), "{}", run.output);
+        let pid = fs::read_to_string(repo.join("child.pid")).unwrap().trim().to_string();
+        let mut alive = true;
+        for _ in 0..20 {
+            alive = std::process::Command::new("kill").args(["-0", &pid]).stderr(Stdio::null()).status()
+                .map(|s| s.success()).unwrap_or(false);
+            if !alive { break; }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert!(!alive, "the grandchild {} survived the timeout", pid);
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_swebench_task_does_not_show_the_check_command() {        let base = Task { id: "x".into(), prompt: "Do it".into(), repo: std::path::PathBuf::from("."),
                           cwd: String::new(), copy: false, check: "python3 secret_check.py".into(),
                           check_timeout_seconds: 5, max_steps: 1, base_commit: "a".repeat(40) };
         let text = task_text(&base, Path::new("/tmp/x"));
