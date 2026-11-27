@@ -4,3 +4,6 @@ cli/tests/data/eval/swebench50.json -text
 cli/tests/data/eval/swebench_dev30.jsonl -text
 cli/tests/data/eval/swebench_holdout20.jsonl -text
 cli/tests/data/privacy/*.txt -text
+core/tests/data/eval/*.jsonl -text
+core/tests/data/eval/repo/** -text
+core/tests/data/privacy/*.txt -text

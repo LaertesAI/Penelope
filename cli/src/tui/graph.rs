@@ -8,8 +8,8 @@
 use super::art::{ASH, CLAY, DIM, GOLD, INK, NIGHT, PAPER, RAISED, SEA};
 use super::text::{clip, wrap_plain};
 use super::view::{bold, dialog, fill, on, put};
-use crate::config::Ctx;
-use crate::graph::{now, Graph, Kind, Neighbour, Node, Stats};
+use penelope_core::config::Ctx;
+use penelope_core::graph::{now, Graph, Kind, Neighbour, Node, Stats};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 use ratatui::Frame;
@@ -249,8 +249,31 @@ fn footer(f: &mut Frame, inner: Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::tests::filled;
     use std::fs;
+    use std::path::PathBuf;
+
+    /// Project notes with cross-links, one global rule and two cluster logs. The core keeps the same fixture for its
+    /// own tests; a test binary cannot see a `#[cfg(test)]` module of a dependency.
+    fn filled(tag: &str) -> (PathBuf, Ctx) {
+        let dir = std::env::temp_dir().join(format!("penelope-graph-{}-{}", tag, std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let mut ctx = penelope_core::config::load(&dir.join(".penelope"));
+        ctx.cfg["global_memory"] = serde_json::json!(dir.join("global").to_string_lossy());
+        let mut m = penelope_core::memory::Memory::open(&ctx.root);
+        m.note("rust/errors", "Use anyhow in the binary. See [[rust/build]] and src/main.rs.");
+        m.note("rust/build", "cargo test --release is the fast check. Docs: https://doc.rust-lang.org/cargo/ and src/main.rs.");
+        m.note("git/commits", "One change per commit. The notes in rust/errors say how to report failures.");
+        m.mark_used(&["rust/errors".to_string()]);
+        let mut g = penelope_core::memory::shared(&ctx);
+        g.note("rules/style", "Always write plain English. Never use em dashes.");
+        let log = ctx.root.join("clusters").join("c1-1");
+        fs::create_dir_all(&log).unwrap();
+        let t = now();
+        fs::write(log.join("memory.log"), format!("{}\n{}\nnot json\n",
+            serde_json::json!({"t": t, "C": "c1-1", "L": 1, "text": "ENT: parser\nATT: owner\nVAL: Anna uses [[rust/errors]]\nSRC: mcp"}),
+            serde_json::json!({"t": t - 30 * DAY, "C": "c1-1", "L": 2, "text": "worker finished the backend in docs/PLAN.md"}))).unwrap();
+        (dir, ctx)
+    }
 
     fn press(v: &mut GraphView, code: KeyCode) -> bool {
         v.key(KeyEvent::new(code, KeyModifiers::NONE))
