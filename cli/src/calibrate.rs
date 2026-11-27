@@ -48,21 +48,23 @@ pub struct Variant {
     pub effort: String,
     /// `current` or `short`.
     pub prompt: String,
+    /// The most tool-call rounds of one turn through an HTTP endpoint; 0 keeps the built-in 12.
+    pub rounds: u64,
 }
 
 impl Variant {
     pub fn default_for(effort: &str) -> Variant {
-        Variant { name: "default".into(), tool_format: "native".into(), tool_list: "full".into(), effort: effort.into(), prompt: "current".into() }
+        Variant { name: "default".into(), tool_format: "native".into(), tool_list: "full".into(), effort: effort.into(), prompt: "current".into(), rounds: 0 }
     }
 
     pub fn to_json(&self) -> Value {
-        json!({"variant": self.name, "tool_format": self.tool_format, "tool_list": self.tool_list, "effort": self.effort, "prompt": self.prompt})
+        json!({"variant": self.name, "tool_format": self.tool_format, "tool_list": self.tool_list, "effort": self.effort, "prompt": self.prompt, "rounds": self.rounds})
     }
 
     pub fn from_json(v: &Value) -> Variant {
         let s = |k: &str, d: &str| v[k].as_str().filter(|x| !x.is_empty()).unwrap_or(d).to_string();
         Variant { name: s("variant", "default"), tool_format: s("tool_format", "native"), tool_list: s("tool_list", "full"),
-                  effort: v["effort"].as_str().unwrap_or("").to_string(), prompt: s("prompt", "current") }
+                  effort: v["effort"].as_str().unwrap_or("").to_string(), prompt: s("prompt", "current"), rounds: v["rounds"].as_u64().unwrap_or(0) }
     }
 }
 
@@ -86,7 +88,10 @@ pub fn variants(provider: &str, model: &str) -> Vec<Variant> {
     } else if default_effort == "low" && levels.contains(&"high") {
         out.push(Variant { name: "effort-high".into(), effort: "high".into(), ..base.clone() });
     }
-    out.push(Variant { name: "prompt-short".into(), prompt: "short".into(), ..base });
+    out.push(Variant { name: "prompt-short".into(), prompt: "short".into(), ..base.clone() });
+    if provider != "claude-cli" {
+        out.push(Variant { name: "rounds-24".into(), rounds: 24, ..base });
+    }
     out
 }
 
@@ -137,6 +142,9 @@ pub fn apply(ctx: &Ctx) -> Ctx {
     m["tool_format"] = json!(p.tool_format);
     m["tool_list"] = json!(p.tool_list);
     m["prompt"] = json!(p.prompt);
+    if p.rounds > 0 {
+        m["max_rounds"] = json!(p.rounds);
+    }
     run
 }
 
@@ -691,10 +699,10 @@ mod tests {
     fn variants_change_one_factor_each() {
         let v = variants("opencode", "glm-5.3");
         let names: Vec<&str> = v.iter().map(|x| x.name.as_str()).collect();
-        assert_eq!(names, ["default", "text", "index", "effort-low", "prompt-short"]);
+        assert_eq!(names, ["default", "text", "index", "effort-low", "prompt-short", "rounds-24"]);
         assert_eq!(v[0].effort, "high");
         for x in &v[1..] {
-            let diffs = [x.tool_format != v[0].tool_format, x.tool_list != v[0].tool_list, x.effort != v[0].effort, x.prompt != v[0].prompt];
+            let diffs = [x.tool_format != v[0].tool_format, x.tool_list != v[0].tool_list, x.effort != v[0].effort, x.prompt != v[0].prompt, x.rounds != v[0].rounds];
             assert_eq!(diffs.iter().filter(|d| **d).count(), 1, "{} changes one factor", x.name);
         }
         // Kimi K3 has only "max", MiniMax M3 none: no effort variant. The claude command owns its tool loop.
@@ -718,6 +726,10 @@ mod tests {
         assert_eq!(run.cfg["main"]["effort"], "low");
         assert_eq!(run.cfg["main"]["tool_format"], "text");
         assert_eq!(run.cfg["main"]["tool_list"], "full");
+        assert!(run.cfg["main"]["max_rounds"].is_null());
+        let rounds = Variant { name: "rounds-24".into(), rounds: 24, ..Variant::default_for("high") };
+        save_profile(&dir, "opencode", "glm-5.3", &rounds.to_json()).unwrap();
+        assert_eq!(apply(&ctx).cfg["main"]["max_rounds"], 24);
         // A level the model does not have is not sent; the switch turns the profile off.
         save_profile(&dir, "opencode", "glm-5.3", &json!({"variant": "x", "effort": "xhigh"})).unwrap();
         assert_eq!(apply(&ctx).cfg["main"]["effort"], "high");

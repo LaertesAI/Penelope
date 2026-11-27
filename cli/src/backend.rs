@@ -451,7 +451,8 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
         let mut history = std::mem::take(&mut self.history);
         // Both closures report to the interface, so the events go through one shared cell.
         let events = std::cell::RefCell::new(on);
-        let out = crate::llm::run_loop(m, system, &mut history, &tools, 12, Some(&*self.cancel), &mut usage,
+        let rounds = m["max_rounds"].as_u64().filter(|r| (1..=64).contains(r)).unwrap_or(12) as usize;          // a model profile may raise the cap
+        let out = crate::llm::run_loop(m, system, &mut history, &tools, rounds, Some(&*self.cancel), &mut usage,
             &mut |call| {
                 (*events.borrow_mut())(Event::ToolStart { id: call.id.clone(), name: short_name(&call.name), detail: tool_detail(&call.args) });
                 let called = if call.name == crate::calibrate::DESCRIBE && m["tool_list"].as_str() == Some("index") {
