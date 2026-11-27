@@ -202,6 +202,25 @@ fn schedule_text(f: &Factory) -> String {
     }
 }
 
+/// The spec the person confirmed when the factory was created, from the profile file. None for an older factory.
+pub fn stored_spec(ctx: &Ctx, profile: &str) -> Option<Value> {
+    let path = ctx.root.join("clusters").join("profiles").join(format!("{}.json", safe(profile)));
+    let v: Value = serde_json::from_str(&fs::read_to_string(path).ok()?).ok()?;
+    v.get("spec").filter(|s| s.is_object()).cloned()
+}
+
+/// True if the spec says a person must approve each run. A timer starts a run alone, so it cannot honor that.
+fn needs_approval_each_run(ctx: &Ctx, profile: &str) -> bool {
+    stored_spec(ctx, profile).map(|s| s["approve_each_run"].as_str() == Some("yes")).unwrap_or(false)
+}
+
+/// The stored spec as one line for the list: approval, budget, rights, abort rule, rounds, results.
+fn spec_line(spec: &Value) -> String {
+    let get = |k: &str, label: &str| spec[k].as_str().map(|v| format!("{} {}", label, v.chars().take(60).collect::<String>()));
+    ["approve_each_run", "budget", "rights", "abort", "max_iterations", "results_to"].iter().zip(["approval", "budget", "rights", "abort", "max", "results"])
+        .filter_map(|(k, l)| get(k, l)).collect::<Vec<_>>().join(" · ")
+}
+
 /// The command every timer starts. It is the normal cluster command; a factory has no runner of its own.
 fn runner_args(ctx: &Ctx, f: &Factory) -> Vec<String> {
     let exe = std::env::current_exe().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|_| "penelope".to_string());
@@ -483,6 +502,14 @@ fn scheduler_disable(ctx: &Ctx, f: &Factory) -> Result<String, String> {
 /// `dry` renders the units and writes neither the profile nor the registry.
 pub fn new_factory(ctx: &Ctx, name: &str, base_name: &str, every: Option<&str>, at: Option<&str>, goal: &str,
                    dry: bool, yes: bool) -> Result<String, String> {
+    new_factory_spec(ctx, name, base_name, every, at, goal, dry, yes, None)
+}
+
+/// `new_factory` with the spec the person confirmed. The profile of the factory carries it under `spec`, and a euro
+/// budget of the spec becomes the `budget_eur` of the profile.
+#[allow(clippy::too_many_arguments)]
+pub fn new_factory_spec(ctx: &Ctx, name: &str, base_name: &str, every: Option<&str>, at: Option<&str>, goal: &str,
+                        dry: bool, yes: bool, spec: Option<&crate::clarify::Spec>) -> Result<String, String> {
     let name = name.trim();
     let base_name = base_name.trim();
     if name.is_empty() || !valid_name(name) {
@@ -541,6 +568,10 @@ pub fn new_factory(ctx: &Ctx, name: &str, base_name: &str, every: Option<&str>, 
     value["every"] = json!(every);
     value["at"] = json!(at);
     value["purpose"] = json!(goal);
+    if let Some(spec) = spec.filter(|s| s.confirmed) {
+        value["spec"] = spec.to_value();
+        if let Some(eur) = spec.budget_eur() { value["budget_eur"] = json!(eur); }
+    }
     crate::clusters::profile_upsert(ctx, name, &value)?;
     let mut all = load(ctx)?;
     all.push(f.clone());
@@ -564,9 +595,17 @@ pub fn install(ctx: &Ctx, name: &str, dry: bool, yes: bool) -> Result<String, St
     if dry && yes {
         return Err("choose --dry (show the units, change nothing) or --yes (install), not both.".to_string());
     }
+    let must_approve = needs_approval_each_run(ctx, &f.profile);
+    if must_approve && yes && !dry {
+        return Err(format!("NOT installed. The spec of factory {} says a person approves each run, and a timer starts runs alone. \
+                            Run it by hand with `penelope factory run {}` after your yes, or create the factory again with approval no.", f.name, f.name));
+    }
     let dir = unit_dir(ctx, &f);
     let units = units(ctx, &f);
     let mut out = report(ctx, &f);
+    if must_approve {
+        out.push_str("\nWarning: the spec says a person approves each run. A timer cannot ask, so installing it is refused.\n");
+    }
     if dry || !yes {
         out.push_str(&format!("\nNothing written and no timer enabled. After a yes, the files go to {}:\n", dir.display()));
         for unit in &units { out.push_str(&format!("  {}\n", dir.join(&unit.name).display())); }
@@ -662,6 +701,9 @@ pub fn list_text(ctx: &Ctx) -> String {
         out.push_str(&format!("{:<14} {:<14} {:<20} {:<9} {:>4}  {}\n", f.name, f.profile, schedule_text(f),
                               if f.armed { "armed" } else { "stopped" }, f.runs,
                               if f.last_run > 0 { format!("{} · {}", crate::sessions::stamp(f.last_run), f.last_result) } else { "never".to_string() }));
+        if let Some(spec) = stored_spec(ctx, &f.profile) {
+            out.push_str(&format!("{:<14} spec: {}\n", "", spec_line(&spec)));
+        }
         if !f.base.is_empty() && f.base != f.profile {
             out.push_str(&format!("{:<14} copied from profile {}\n", "", f.base));
         }
@@ -751,6 +793,28 @@ pub fn cli(ctx: &Ctx, args: &[String]) -> Result<String, String> {
         }
         other => Err(format!("unknown factory command {}. The commands are new, list, install, run and stop.", other)),
     }
+}
+
+/// `/factory new` from the interface: asks for the missing fields first, then creates the factory with the confirmed
+/// spec. Every other verb, a dry run and a session nobody can answer in go straight to `slash`.
+pub fn slash_asked(ctx: &Ctx, rest: &str) -> Result<String, String> {
+    let args: Vec<String> = rest.split_whitespace().map(str::to_string).collect();
+    if args.first().map(String::as_str) != Some("new") || args.iter().any(|a| a == "--dry") || !crate::clarify::can_ask() {
+        return cli(ctx, &args);
+    }
+    let (name, profile, every, at, goal, dry, yes) = parse_new_args(&args[1..])?;
+    let mut preset = serde_json::Map::new();
+    if let Some(e) = &every { preset.insert("schedule".to_string(), json!(format!("every {}", normalize_every(e)?))); }
+    if let Some(a) = &at { preset.insert("schedule".to_string(), json!(format!("at {}", normalize_at(a)?))); }
+    preset.insert("models".to_string(), json!(format!("{} profile", profile)));
+    let request = if goal.trim().is_empty() { crate::clusters::profile(ctx, &profile).ok().and_then(|p| p.purpose).unwrap_or_default() } else { goal.clone() };
+    let done = crate::clarify::clarify(ctx, crate::clarify::Kind::Factory, &request, &preset)?;
+    let schedule = done.spec.get("schedule").unwrap_or("").to_string();
+    let (every, at) = match (every, at) {
+        (None, None) => (schedule.strip_prefix("every ").map(str::to_string), schedule.strip_prefix("at ").map(str::to_string)),
+        other => other,
+    };
+    new_factory_spec(ctx, &name, &profile, every.as_deref(), at.as_deref(), &goal, dry, yes, Some(&done.spec))
 }
 
 /// The slash form of the same parser: `/factory new NAME --profile P --every 3h`.
@@ -866,6 +930,23 @@ mod tests {
         let win_at = Factory { at: Some("09:30".into()), every: None, ..f.clone() };
         assert!(windows_units(&ctx, &win_at)[0].body.contains("<CalendarTrigger>") &&
                 windows_units(&ctx, &win_at)[0].body.contains("T09:30:00"), "{}", windows_units(&ctx, &win_at)[0].body);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_stored_approval_blocks_the_timer_and_the_list_shows_the_spec() {
+        let (ctx, dir) = ctx();
+        let mut spec = crate::clarify::Spec::new(crate::clarify::Kind::Factory);
+        for (k, v) in [("goal", "Check mail"), ("approve_each_run", "yes"), ("budget", "2 EUR"), ("rights", "read-only")] { spec.values.insert(k.to_string(), v.to_string()); }
+        spec.confirmed = true;
+        new_factory_spec(&ctx, "mail", "base", Some("1h"), None, "Check mail", false, false, Some(&spec)).unwrap();
+        assert_eq!(stored_spec(&ctx, "mail").unwrap()["approve_each_run"], "yes");
+        let list = list_text(&ctx);
+        assert!(list.contains("spec: approval yes · budget 2 EUR · rights read-only"), "{}", list);
+        let e = install(&ctx, "mail", false, true).unwrap_err();
+        assert!(e.starts_with("NOT installed") && e.contains("approves each run"), "{}", e);
+        assert!(install(&ctx, "mail", true, false).unwrap().contains("Warning: the spec says a person approves each run"));
+        assert!(!dir.join(".penelope/factories.json").exists() || !fs::read_to_string(dir.join(".penelope/factories.json")).unwrap().contains("\"armed\": true"));
         let _ = fs::remove_dir_all(&dir);
     }
 

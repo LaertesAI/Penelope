@@ -36,6 +36,8 @@ pub struct Usage {
     pub tokens_in: u64,
     pub tokens_out: u64,
     pub steps: u64,
+    /// The largest input of one request in the loop: the context at its fullest.
+    pub max_in: u64,
 }
 
 pub fn is_api(kind: &str) -> bool {
@@ -356,7 +358,7 @@ pub fn run_loop_with(model: &Value, system: &str, history: &mut Vec<Value>, tool
                      tick: &mut dyn FnMut(&Usage) -> Option<String>,
                      exec: &mut dyn FnMut(&ToolCall) -> (String, bool), on_text: &mut dyn FnMut(&str)) -> Result<String, String> {
     let kind = kind_of(model).to_string();
-    for _ in 0..rounds {
+    for round in 0..rounds {
         if cancel.map(|c| c.load(Ordering::SeqCst)).unwrap_or(false) {
             return Err("stopped".to_string());
         }
@@ -365,6 +367,7 @@ pub fn run_loop_with(model: &Value, system: &str, history: &mut Vec<Value>, tool
         }
         let reply = chat_cancel(model, system, history, tools, cancel)?;
         usage.tokens_in += reply.tokens_in;
+        usage.max_in = usage.max_in.max(reply.tokens_in);
         usage.tokens_out += reply.tokens_out;
         if let Some(stop) = tick(usage) {
             return Err(stop);
@@ -387,6 +390,13 @@ pub fn run_loop_with(model: &Value, system: &str, history: &mut Vec<Value>, tool
             continue;
         }
         if reply.calls.is_empty() {
+            // A code edit without a check gets one reminder, but only while a round is left for the answer to it.
+            if round + 1 < rounds {
+                if let Some(reminder) = crate::checker::before_final() {
+                    history.push(user_message(&reminder));
+                    continue;
+                }
+            }
             return Ok(reply.text);
         }
         if !reply.text.is_empty() {

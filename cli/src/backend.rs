@@ -112,7 +112,7 @@ above it holds a repository. Paths are relative to it, and ~ stands for the home
 8. A rule that binds every later session goes to the shared memory: memory_note with scope global. A fact of this project stays in the project. \
 9. When a fixed command would save steps next time, write it as a tool with tool_new; a call runs through run and asks like run. \
 10. After a change, hand the claim and the command output to check. Report what passed and what is still open. \
-11. Answer briefly. Today is {today} (UTC).", look, cwd = cwd, tests = tests,
+11. Answer briefly. Today is {today} (UTC).{check}", look, cwd = cwd, tests = tests, check = crate::checker::rule(ctx),
             today = &crate::sessions::stamp(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0))[..10])
 }
 
@@ -130,18 +130,26 @@ pub struct Chat {
     pub pid: Arc<AtomicU32>,
     /// The tool calls of the last turn, for the lessons the weaker model draws from them.
     pub trace: Vec<crate::tools::Call>,
+    /// Cost mode: true once this chat has started its task, and the context size of the last turn in tokens.
+    routed: bool,
+    context_tokens: u64,
+    route: crate::autoroute::RouteId,
+    /// The first outside text of this chat (Kerkis gates). It stays while the history can hold that text.
+    gate_taint: Option<String>,
 }
 
 impl Chat {
     pub fn new() -> Chat {
         Chat { session: None, history: Vec::new(), history_kind: String::new(), input_tokens: 0, output_tokens: 0, turns: 0,
-               cancel: Arc::new(AtomicBool::new(false)), pid: Arc::new(AtomicU32::new(0)), trace: Vec::new() }
+               cancel: Arc::new(AtomicBool::new(false)), pid: Arc::new(AtomicU32::new(0)), trace: Vec::new(),
+               routed: false, context_tokens: 0, route: crate::autoroute::RouteId::new(), gate_taint: None }
     }
 
     /// Goes on with a stored conversation. A conversation through an HTTP endpoint gets its message history back from disk.
     pub fn resume(ctx: &Ctx, entry: &Value) -> Chat {
         let mut chat = Chat::new();
         chat.session = entry["id"].as_str().map(String::from);
+        chat.gate_taint = chat.session.as_deref().and_then(|id| crate::gates::load_session(ctx, id));
         if let Some((kind, messages)) = chat.session.as_deref().and_then(|id| crate::sessions::load_history(ctx, id)) {
             chat.history = messages;
             chat.history_kind = kind;
@@ -152,16 +160,53 @@ impl Chat {
         chat
     }
 
-    /// One turn. `on` receives the text and the tool calls while the turn runs.
+    pub fn route_id(&self) -> &str {
+        &self.route.id
+    }
+
+    /// One turn. `on` receives the text and the tool calls while the turn runs. With config `route` set to `auto` the
+    /// turn runs on the weak or the main model (see `autoroute.rs`); a trigger during a weak turn adds one follow-up
+    /// turn on the main model.
     pub fn turn_with(&mut self, ctx: &Ctx, user: &str, memory: &str, on: &mut dyn FnMut(Event)) -> Result<String, String> {
+        if !crate::autoroute::active(ctx) {
+            return self.turn_once(ctx, user, memory, on);
+        }
+        if !self.routed {
+            crate::autoroute::start_task(ctx, &self.route);
+            self.routed = true;
+        }
+        let (out, fired) = self.turn_routed(ctx, user, memory, on);
+        match fired {
+            Some(why) if out.is_ok() && !self.cancel.load(Ordering::SeqCst) => {
+                let follow = format!("The weaker model could not finish this task ({}). Continue the same task on this model: read the last failing output, find the cause and fix it.", why);
+                self.turn_routed(ctx, &follow, memory, on).0
+            }
+            _ => out,
+        }
+    }
+
+    /// One turn on the model that the cost mode picks. Returns the reason when a trigger fired during the turn.
+    fn turn_routed(&mut self, ctx: &Ctx, user: &str, memory: &str, on: &mut dyn FnMut(Event)) -> (Result<String, String>, Option<String>) {
+        let mut run = ctx.clone();
+        run.cfg["main"] = crate::autoroute::pick(ctx, &self.route, user);
+        self.context_tokens = 0;
+        let route = self.route.clone();
+        let out = crate::autoroute::with_chat(ctx, &route, || self.turn_once(&run, user, memory, on));
+        let fired = crate::autoroute::after_turn(ctx, &self.route, self.context_tokens);
+        (out, fired)
+    }
+
+    fn turn_once(&mut self, ctx: &Ctx, user: &str, memory: &str, on: &mut dyn FnMut(Event)) -> Result<String, String> {
         if let Some(family) = crate::crew::family_of(&ctx.cfg["main"]) {
             return Err(format!("The main model is {} 1, one of the Laertes families. It is in training and cannot answer yet. \
 Choose a hosted model: penelope provider use NAME --role main.", family));
         }
         crate::tools::begin_turn();
+        crate::gates::set_session(self.gate_taint.clone());
         self.cancel.store(false, Ordering::SeqCst);
         let (user, masked) = crate::tools::guard_count(ctx, user);
         let user = user.as_str();
+        crate::gates::user_said(user);
         if masked > 0 {
             on(Event::Masked(masked));
         }
@@ -209,7 +254,12 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
             kind if crate::llm::is_api(kind) => self.turn_api(ctx, user, &system, &mut watch),
             _ => self.turn_claude(ctx, user, &system, &mut watch),
         };
+        let checked = crate::checker::turn_note(ctx, &trace, crate::checker::turn_start());
         self.trace = trace;
+        let out = out.map(|answer| match checked {
+            Some(line) => format!("{}\n\n{}", answer, line),
+            None => answer,
+        });
         let out = out.map(|answer| {
             let (shown, hits) = answers.block(ctx, &answer);
             if hits > 0 {
@@ -217,6 +267,9 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
             }
             shown
         });
+        if let Some(id) = &self.session {
+            crate::gates::save_session(ctx, id, self.gate_taint.as_deref());
+        }
         if out.is_ok() {
             self.turns += 1;
             if let Some(id) = &self.session {
@@ -236,8 +289,26 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
         if !task_cwd.is_empty() {
             servers["penelope"]["env"] = json!({"PENELOPE_TASK_CWD": task_cwd});   // an eval task: the MCP server uses this folder
         }
+        if crate::autoroute::active(ctx) {
+            for (k, v) in self.route.env(ctx) {
+                servers["penelope"]["env"][k] = json!(v);        // the MCP server writes its test and strike events for this chat
+            }
+        }
         if let Ok(dir) = std::env::var("PENELOPE_APPROVE_DIR") {
             servers["penelope"]["env"]["PENELOPE_APPROVE_DIR"] = json!(dir);       // the interface answers questions about unsafe commands
+        }
+        servers["penelope"]["env"]["PENELOPE_CHECK_SESSION"] = json!(crate::checker::session());   // the checker keys its record per session
+        if let Ok(dir) = std::env::var("PENELOPE_ASK_DIR") {
+            servers["penelope"]["env"]["PENELOPE_ASK_DIR"] = json!(dir);           // the ACP server answers the question dialog
+        }
+        let acp_session = crate::ask::current_session();
+        if !acp_session.is_empty() {
+            servers["penelope"]["env"]["PENELOPE_ACP_SESSION"] = json!(acp_session);   // a question goes to this editor session
+        }
+        // The gates read the user text and the session taint from a 0600 file: the text stays off the command line.
+        let turn_file = crate::gates::write_turn_file(ctx, user, self.gate_taint.as_deref());
+        if let Some(path) = &turn_file {
+            servers["penelope"]["env"]["PENELOPE_GATES_TURN"] = json!(path.to_string_lossy());
         }
         let mut allowed: Vec<String> = mcp::main_tools(ctx).iter().map(|t| format!("mcp__penelope__{}", t)).collect();
         for t in crate::forge::specs(ctx) {          // a tool Penelope wrote is offered to the claude command too
@@ -268,16 +339,23 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
         if let Some(s) = &self.session {
             cmd.args(["--resume", s]);
         }
-        let mut child = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()
-            .map_err(|e| format!("cannot start the claude command: {}", e))?;
+        let mut child = match cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn() {
+            Ok(child) => child,
+            Err(e) => {
+                if let Some(path) = &turn_file { let _ = std::fs::remove_file(path); }
+                return Err(format!("cannot start the claude command: {}", e));
+            }
+        };
         self.pid.store(child.id(), Ordering::SeqCst);
         let mut result: Option<Value> = None;
         let mut seen = String::new();
+        let mut step_max = 0u64;
         for line in BufReader::new(child.stdout.take().unwrap()).lines() {
             let line = match line { Ok(l) => l, Err(_) => break };
             let v: Value = match serde_json::from_str(line.trim()) { Ok(v) => v, Err(_) => { seen = line; continue } };
             match v["type"].as_str().unwrap_or("") {
                 "assistant" => {
+                    step_max = step_max.max(crate::autoroute::step_context(&v["message"]["usage"]));
                     for c in v["message"]["content"].as_array().cloned().unwrap_or_default() {
                         match c["type"].as_str().unwrap_or("") {
                             "text" => {
@@ -324,6 +402,9 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
         }
         let _ = child.wait();
         self.pid.store(0, Ordering::SeqCst);
+        if let Some(taint) = turn_file.as_deref().and_then(crate::gates::read_turn_file) {
+            self.gate_taint = Some(taint);
+        }
         if self.cancel.load(Ordering::SeqCst) {
             return Err("stopped".to_string());
         }
@@ -335,6 +416,10 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
         let tout = v["usage"]["output_tokens"].as_u64().unwrap_or(0);
         self.input_tokens += tin;
         self.output_tokens += tout;
+        // The result sums every step; the context is the fullest single step. Without step records, the mean per step.
+        self.context_tokens = if step_max > 0 { step_max } else {
+            (tin + v["usage"]["cache_read_input_tokens"].as_u64().unwrap_or(0)) / v["num_turns"].as_u64().unwrap_or(1).max(1)
+        };
         crate::cost::record(ctx, "lead", ctx.cfg["main"]["model"].as_str().unwrap_or(""), tin, tout);
         if v["is_error"].as_bool().unwrap_or(false) {
             return Err(v["result"].as_str().unwrap_or("the claude command reported an error").trim().to_string());
@@ -374,8 +459,10 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
             },
             &mut |text| (*events.borrow_mut())(Event::Text(text.to_string())));
         self.history = history;
+        self.gate_taint = crate::gates::snapshot().map(|t| t.source);
         self.input_tokens += usage.tokens_in;
         self.output_tokens += usage.tokens_out;
+        self.context_tokens = usage.max_in;
         crate::cost::record(ctx, "lead", m["model"].as_str().unwrap_or(""), usage.tokens_in, usage.tokens_out);
         if out.is_err() {
             self.history.truncate(before);          // a failed turn leaves no half exchange behind

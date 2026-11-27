@@ -276,6 +276,13 @@ The console of Model Studio shows the ID in the column API Host.", p.name, p.bas
 /// `config.json`. The file gets the name of the key variable and no key.
 pub fn use_provider(ctx: &mut Ctx, args: &[String]) -> String {
     let flag = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).map(String::as_str);
+    for f in ["--role", "--model", "--workspace", "--base-url"] {
+        if let Some(i) = args.iter().position(|a| a == f) {
+            if args.get(i + 1).map(|v| v.is_empty() || v.starts_with("--")).unwrap_or(true) {
+                return format!("NOT set. {} needs a value.", f);
+            }
+        }
+    }
     let Some(name) = args.first().filter(|a| !a.starts_with("--")) else {
         return "NOT set. Name a provider: penelope provider use NAME. penelope providers lists the names.".to_string();
     };
@@ -315,9 +322,15 @@ pub fn use_provider(ctx: &mut Ctx, args: &[String]) -> String {
     if let Err(e) = std::fs::write(ctx.root.join("config.json"), serde_json::to_string_pretty(&ctx.cfg).unwrap()) {
         return format!("NOT set. cannot write config.json: {}", e);
     }
-    format!("set: {} model {} on {} ({}, {}). Key: {}{}.", role, value["model"].as_str().unwrap_or("?"), p.name, p.kind,
+    let chosen = value["model"].as_str().unwrap_or("?");
+    let known = models(p.name);
+    let alias = p.name == "claude-cli" && ["sonnet", "opus", "haiku", "fable"].contains(&chosen);
+    let warning = if !known.is_empty() && !alias && !known.iter().any(|m| m.id == chosen) && chosen != p.model {
+        format!(" Warning: {} is not in the model list Penelope knows for {}; it is set anyway because providers add models.", chosen, p.name)
+    } else { String::new() };
+    format!("set: {} model {} on {} ({}, {}). Key: {}{}.{}", role, chosen, p.name, p.kind,
             value["base_url"].as_str().unwrap_or("the claude command"), state_of(p),
-            if p.key_env.is_empty() { String::new() } else { format!(" in {}", p.key_env) })
+            if p.key_env.is_empty() { String::new() } else { format!(" in {}", p.key_env) }, warning)
 }
 
 /// One exact model name, its display name and the effort levels the provider accepts.

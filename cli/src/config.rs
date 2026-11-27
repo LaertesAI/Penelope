@@ -14,12 +14,15 @@ pub fn default_config() -> Value {
     json!({
         "main": {"kind": "claude-cli", "model": "sonnet", "effort": "high"},
         "weak": {"kind": "claude-cli", "model": "haiku", "effort": "high"},
+        "route": "fixed",
+        "route_context_limit": 100000,
         "run_policy": "safe",
         "sandbox": "off",
         "edit_policy": "ask",
         "test_command": "",
         "test_attempts": 3,
         "eurykleia": "on",
+        "check": {"mode": "gate", "module_tests": "", "run": "", "candidates": 3, "models": ["weak"], "timeout": 300, "budget": 1200, "nudges": 1},
         "delegate": "auto",
         "search": {"kind": "auto", "url": "", "api_key_env": "BRAVE_API_KEY", "tavily_api_key_env": "TAVILY_API_KEY",
                    "exa_api_key_env": "EXA_API_KEY", "firecrawl_api_key_env": "FIRECRAWL_API_KEY", "fanout": true,
@@ -49,10 +52,12 @@ pub fn default_config() -> Value {
         "plugin_dirs": null,
         "plugin_home": null,
         "brief": {"hosts": [], "roots": []},
+        "mitos": {"attach_over_bytes": 4096, "fetch_cap_bytes": 16384, "store_max_bytes": 524288000},
         "apps": {"allow_install": false, "rights": {"files": false, "network": false, "shell": false}},
         "update": {"url": "", "channel": "stable", "public_key": ""},
         "global_memory": null,
-        "clipboard": {"read": "", "write": ""}
+        "clipboard": {"read": "", "write": ""},
+        "ask": {"timeout_secs": 900}
     })
 }
 
@@ -104,6 +109,8 @@ fn adopt(dir: &Path) -> Option<PathBuf> {
 }
 
 pub fn load(root: &Path) -> Ctx {
+    let redirected = state_dir(root);
+    let root = redirected.as_path();
     let _ = fs::create_dir_all(root.join("runs"));
     let path = root.join("config.json");
     let mut cfg = default_config();
@@ -115,6 +122,18 @@ pub fn load(root: &Path) -> Ctx {
         let _ = fs::write(&path, serde_json::to_string_pretty(&cfg).unwrap());
     }
     Ctx { root: root.to_path_buf(), cfg }
+}
+
+/// The folder that holds Penelope's own files. A path that is a project (it has `.git` or a `.penelope` folder) and is
+/// not itself named `.penelope` gets its `.penelope` folder, so `config.json`, `runs/` and `stats.json` never land
+/// between the files of the project.
+pub fn state_dir(root: &Path) -> PathBuf {
+    let named = root.file_name().map(|n| n == ".penelope").unwrap_or(false);
+    if !named && (root.join(".git").exists() || root.join(".penelope").is_dir()) {
+        root.join(".penelope")
+    } else {
+        root.to_path_buf()
+    }
 }
 
 /// Merges the saved settings over the defaults, one level deeper for objects. A new setting reaches an old folder
@@ -156,4 +175,25 @@ pub fn which(name: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod state_dir_tests {
+    use super::*;
+
+    #[test]
+    fn a_project_folder_gets_its_penelope_folder_and_no_files_of_its_own() {
+        let dir = std::env::temp_dir().join(format!("penelope-state-dir-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(".git")).unwrap();
+        let ctx = load(&dir);
+        assert_eq!(ctx.root, dir.join(".penelope"));
+        assert!(dir.join(".penelope/config.json").is_file());
+        assert!(!dir.join("config.json").exists() && !dir.join("runs").exists(), "files between the project files");
+        // A state folder that is not a project stays as it is.
+        let plain = std::env::temp_dir().join(format!("penelope-state-plain-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&plain);
+        assert_eq!(load(&plain).root, plain);
+        assert_eq!(state_dir(&dir.join(".penelope")), dir.join(".penelope"));
+    }
 }

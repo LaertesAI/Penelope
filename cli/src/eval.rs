@@ -668,12 +668,18 @@ pub fn eval(ctx: &Ctx, tasks_path: &str, setup: &str, runs_path: Option<&Path>) 
         }
     }
     let mut results = Vec::new();
+    let mut rates = String::new();
     for name in list {
+        let before = crate::autoroute::counters(ctx);
         results.push(run_setup(ctx, tasks_path, name, &tasks)?);
+        rates.push_str(&crate::autoroute::rate_line(name, before, crate::autoroute::counters(ctx)));
     }
     let mut out = format!("{} tasks in {} setup{}. No answer of a model is stored in this table; the check decides.\n\n",
                           tasks.len(), results.len(), if results.len() == 1 { "" } else { "s" });
     out.push_str(&table(&results));
+    if !rates.is_empty() {
+        out.push_str(&format!("\ncost mode (route auto):\n{}", rates));
+    }
     if let Some(path) = runs_path {
         match append_runs_doc(path, tasks_path, &results) {
             Ok(()) => out.push_str(&format!("\nwritten: {}\n", path.display())),
