@@ -526,7 +526,9 @@ pub fn dispatch_retry_plain(ctx: &Ctx, role: &str, name: &str, args: &serde_json
     if let Some(refusal) = crate::gates::check(ctx, name, args) {
         return (refusal, false);
     }
+    let tree = crate::gates::before_call(ctx, name, args);
     let (text, ok) = retry_loop(|| crate::route::dispatch_as(ctx, role, name, args), name, args);
+    crate::gates::after_call(ctx, tree);
     crate::gates::observe(ctx, name, args);
     after_edit(ctx, role, name, args, text, ok)
 }
