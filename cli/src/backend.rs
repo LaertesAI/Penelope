@@ -674,10 +674,10 @@ mod tests {
         let script = dir.join("claude");
         std::fs::write(&script, r#"#!/bin/sh
 D="$(dirname "$0")"
-echo "SPAWN $*" >> "$D/args.log"
+printf 'SPAWN %s\n' "$*" >> "$D/args.log"
 reply() { printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}],"usage":{}}}' '{"type":"result","is_error":false,"result":"ok","session_id":"S1","usage":{"input_tokens":3,"output_tokens":1},"num_turns":1}'; }
 case " $* " in *" -p "*) reply; exit 0;; esac
-while IFS= read -r line; do echo "$line" >> "$D/in.log"; reply; done
+while IFS= read -r line; do printf '%s\n' "$line" >> "$D/in.log"; reply; done
 "#).unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         let mut ctx = crate::config::load(&dir.join(".penelope"));
