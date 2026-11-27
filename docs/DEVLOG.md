@@ -1945,3 +1945,21 @@ Review round, same branch:
   attack test asserts all 44 cases. Server entry findings quote no secret value. New: `penelope mcp secrets`.
 - Measured after the round: 44 of 44, 10 of 10 published, 1 of 12 paraphrases, 442 offline tools 0 blocked and 10
   warned (tuned on that corpus).
+
+Second review round, same branch:
+
+- `vet::redact` lower-cased with full Unicode and cut `text` at offsets of the lower-cased copy. İ grows by one byte,
+  ẞ and the Kelvin sign shrink, so `"İ token=é ẞ"` panicked at "byte index 10 is not a char boundary" and
+  `"İİ token=secret K"` leaked 2 characters. ASCII lower case keeps every offset; the markers are ASCII.
+- `check_one` skipped the scan of a `mitos/describe` answer when the list was trusted, and `record_block` had no
+  effect on a trusted record. A describe answer is now scanned after a trust too; a finding ends the trust, and a
+  second trust accepts that exact spec. A describe block stays when the same list is scanned again.
+- `is_state_path` compared a canonical path with `$HOME` as written. On Windows `\\?\C:\` never starts with `C:\`,
+  and a symlinked home failed the same way. Both sides now go through `real_target`; Windows compares without case.
+- `claude_servers` probed servers with no `command`; the stdio client refused them, so every HTTP plugin server
+  dropped out of `--mcp-config`. They go in unscanned again, as before the tool scan; `"toolscan": {"http": "block"}`
+  keeps them out (docs/TOOL-SCAN.md names the gap).
+- A trusted record returned before the `seen` refresh, so after 24 hours every claude turn probed it again (up to
+  50 s for a server that hangs). The gate refreshes `seen` for trusted records too, and a probe that reads no list is
+  not repeated for an hour.
+- Tests: 6 new in `toolscan.rs`, 1 in `vet.rs`.

@@ -82,7 +82,9 @@ phrase alone, padding without an order, a base64 block of 200 characters.
   gates the list before the first call of each process, so an allowed server with no verdict yet, a restarted process
   or a changed signature never runs unscanned. Tool search gates each cached list again before listing it.
 - On `mitos/describe`: the full spec of a lazy index entry is scanned with the names of the whole list as the
-  server's own, before it is cached. A finding is recorded as a block of the server.
+  server's own, before it is cached, also after `penelope mcp trust NAME`: the trust covers the list, and the
+  describe answer is not part of the list hash. A finding is recorded as a block of the server and ends a trust of
+  the list; a second `penelope mcp trust NAME` accepts that exact spec.
 - On `notifications/tools/list_changed`: the reader thread marks the list, and the next read asks the server again.
 - When the list changes. The verdict is cached under list hash (SHA-256 over the specs sorted by name, the same as
   the Mitos `listHash`) + `RULES_VERSION` + hash of the foreign tool names. A change of any of the three scans again:
@@ -97,9 +99,12 @@ phrase alone, padding without an order, a base64 block of 200 characters.
 - On the claude command backend, before each turn: plugin and standalone servers with a blocked or held list, the
   `unvetted` mark from tool search, or a list that cannot be read stay out of `--mcp-config`, so the claude command
   neither reads their descriptions nor runs their package. A server with no verdict, a verdict of older rules or one
-  older than 24 hours is started once by Penelope and scanned first. Gap: a list that changes within those 24 hours
-  reaches the claude command unscanned until the next refresh. The agent and scout configurations hold only
-  Penelope's own server.
+  older than 24 hours is started once by Penelope and scanned first; a probe that reads no list keeps the server out
+  and is not repeated for an hour. A trusted server refreshes its age on every gate, like a clean one. Gap: a list
+  that changes within those 24 hours reaches the claude command unscanned until the next refresh. Gap: a server with
+  no `command` (`"type": "http"` or a `url`) goes in unscanned, because Penelope's client speaks stdio only and
+  cannot read its list; `"toolscan": {"http": "block"}` in config.json keeps such servers out. The agent and scout
+  configurations hold only Penelope's own server.
 - On `/tools install N`: the registry name and description of the candidate are scanned before anything waits for
   a yes. A repository install scans every string of each server object in `.mcp.json`; a finding quotes no
   environment value and nothing after `Bearer`, `Authorization` or `token=`.

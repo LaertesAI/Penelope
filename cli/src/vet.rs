@@ -616,11 +616,9 @@ pub fn redact(text: &str, whole: bool) -> String {
     if whole {
         return format!("<{} characters, not shown>", text.chars().count());
     }
-    let lower = text.to_lowercase();
-    if lower.len() != text.len() {
-        // Lower case changed the byte length (rare scripts): hide the whole text rather than cut at a wrong offset.
-        return if SECRET_MARKERS.iter().any(|m| lower.contains(m)) { format!("<{} characters, not shown>", text.chars().count()) } else { text.to_string() };
-    }
+    // ASCII lower case keeps every byte offset of `text`, so the offsets found in `lower` slice `text` on a character
+    // boundary. The markers are ASCII; full Unicode lower case changes byte lengths (İ grows, ẞ and K shrink).
+    let lower = text.to_ascii_lowercase();
     let mut out = String::new();
     let mut from = 0;
     while let Some((at, marker)) = SECRET_MARKERS.iter().filter_map(|m| lower[from..].find(m).map(|i| (from + i, *m))).min_by_key(|(i, _)| *i) {
@@ -1376,6 +1374,16 @@ mod tests {
         for w in &vet.warnings { assert!(!w.text.contains("s3cr3t"), "{}", w.text); }
         assert_eq!(redact(&format!("Authorization: Bearer {}", token), false), "Authorization: <55 characters, not shown>");
         assert_eq!(redact("http://h/x?token=abc&b=1", false), "http://h/x?token=<3 characters, not shown>&b=1");
+    }
+
+    /// Text whose Unicode lower case changes byte lengths: İ grows by one byte, ẞ and the Kelvin sign shrink. The
+    /// review input panicked at "byte index 10 is not a char boundary" and leaked two characters of the secret.
+    #[test]
+    fn redact_non_ascii_keeps_char_boundaries() {
+        assert_eq!(redact("\u{130} token=\u{e9} \u{1E9E}", false), "\u{130} token=<1 characters, not shown> \u{1E9E}");
+        assert_eq!(redact("\u{130}\u{130} token=secret \u{212A}", false), "\u{130}\u{130} token=<6 characters, not shown> \u{212A}");
+        assert_eq!(redact("\u{1E9E}\u{1E9E} TOKEN=abc", false), "\u{1E9E}\u{1E9E} TOKEN=<3 characters, not shown>");
+        assert_eq!(redact("\u{130}\u{130}\u{130}", false), "\u{130}\u{130}\u{130}");
     }
 
     /// Measurement on published payloads kept outside the repository:
