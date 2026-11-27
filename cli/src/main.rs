@@ -42,7 +42,9 @@ mod platform;
 mod plugins;
 #[allow(dead_code)]
 mod proof;
+mod pii;
 mod privacy;
+mod privacy_bench;
 mod providers;
 mod research;
 mod route;
@@ -166,6 +168,10 @@ penelope tool list            the tools Penelope wrote for this project
 penelope tool call NAME JSON  call one tool through the same gate a model uses
 penelope route                the roles, their tools and their models
 penelope mode [NAME]          auto, manual, safe, review, privacy or power
+penelope privacy factory --out DIR [--seed N] [--count N]
+                              write synthetic German business documents with known personal data
+penelope privacy bench [--seed N] [--count N] [--model] [--misses N]
+                              recall and precision of the privacy filter per kind of personal data
 penelope agents               the agents written with $name(...)
 penelope skills               the skills Penelope wrote for this project
 penelope run-agent NAME --goal TEXT
@@ -412,6 +418,10 @@ fn main() {
                 }
             }
         }
+        "privacy" => match privacy_bench::cli(&ctx, &args[1..]) {
+            Ok(text) => print!("{}", text),
+            Err(e) => { loom::warn(&e); std::process::exit(2); }
+        },
         "factory" => match factories::cli(&ctx, &args[1..]) {
             Ok(text) => print!("{}", text),
             Err(e) => { loom::warn(&e); std::process::exit(2); }
