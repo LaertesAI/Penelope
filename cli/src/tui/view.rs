@@ -893,10 +893,16 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
                 put(f, row, inner.right().saturating_sub(cmd.key.len() as u16), y, cmd.key, on(if chosen { INK } else { DIM }, bg));
             }
         }
-        Overlay::Models { sel, target } => {
-            let rows = app.model_rows(target);
-            let choices: Vec<String> = rows.iter().map(|(_, m)| m.clone()).collect();
-            let inner = dialog(f, area, &format!("Models · {}", target_label(target)), 84, choices.len().min(20) as u16 + 10);
+        Overlay::Models { sel, target, filter } => {
+            let rows = app.model_rows_filtered(target, filter);
+            // display lines: a header per provider group, then its rows; headers carry no row index
+            let mut lines: Vec<(Option<usize>, String, usize)> = Vec::new();
+            for (provider, first, n) in super::row_groups(&rows) {
+                lines.push((None, provider, n));
+                for i in first..first + n { lines.push((Some(i), String::new(), 0)); }
+            }
+            let shown = 20usize;
+            let inner = dialog(f, area, &format!("Models · {}", target_label(target)), 84, lines.len().min(shown) as u16 + 10);
             let current = target_value(app, target)["model"].as_str().unwrap_or("?").to_string();
             let current_levels = app.model_efforts(target, &current);
             let current_effort = if current_levels.is_empty() { "no effort".to_string() }
@@ -905,17 +911,28 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
             if !app.model_source.is_empty() {
                 put(f, inner, inner.x, inner.y, &clip(&app.model_source, inner.width as usize), on(DIM, RAISED));
             }
-            let first = if choices.len() > 20 { sel.saturating_sub(19) } else { 0 };
-            for (i, (row_provider, name)) in rows.iter().enumerate().skip(first).take(20) {
-                let y = inner.y + 2 + (i - first) as u16;
-                let chosen = i == (*sel).min(rows.len().saturating_sub(1));
+            put(f, inner, inner.x, inner.y + 1, &clip(&format!("filter: {}▏", filter), inner.width as usize), on(if filter.is_empty() { DIM } else { PAPER }, RAISED));
+            let at = (*sel).min(rows.len().saturating_sub(1));
+            let disp_sel = lines.iter().position(|(i, _, _)| *i == Some(at)).unwrap_or(0);
+            let first = if lines.len() > shown { disp_sel.saturating_sub(shown - 1) } else { 0 };
+            if rows.is_empty() {
+                put(f, inner, inner.x, inner.y + 2, "no model matches the filter", on(ASH, RAISED));
+            }
+            for (d, (index, group, count)) in lines.iter().enumerate().skip(first).take(shown) {
+                let y = inner.y + 2 + (d - first) as u16;
+                let Some(i) = index else {
+                    fill(f, Rect::new(inner.x.saturating_sub(1), y, inner.width + 2, 1), RAISED);
+                    let head = format!("{} · {} models", super::provider_label(group), count);
+                    put(f, inner, inner.x, y, &clip(&head, inner.width as usize), bold(CLAY).bg(col(RAISED)));
+                    continue;
+                };
+                let (row_provider, name) = &rows[*i];
+                let chosen = *i == at;
                 let bg = if chosen { NIGHT } else { RAISED };
                 let is_current = *name == current && *row_provider == provider;
                 fill(f, Rect::new(inner.x.saturating_sub(1), y, inner.width + 2, 1), bg);
-                put(f, inner, inner.x, y, if is_current { "●" } else { "○" }, on(if is_current { SEA } else { DIM }, bg));
-                put(f, inner, inner.x + 2, y, &clip(name, 34), on(PAPER, bg));
-                let shown = if row_provider == "claude-cli" { "Claude subscription".to_string() } else { row_provider.clone() };
-                put(f, inner, inner.x + 37, y, &clip(&shown, 20), on(ASH, bg));
+                put(f, inner, inner.x + 1, y, if is_current { "●" } else { "○" }, on(if is_current { SEA } else { DIM }, bg));
+                put(f, inner, inner.x + 3, y, &clip(name, 34), on(PAPER, bg));
                 let effort = app.provider_efforts(row_provider, name).join(" ");
                 put(f, inner, inner.x + 59, y, &clip(if effort.is_empty() { "no effort" } else { &effort }, 24), on(DIM, bg));
             }
@@ -925,7 +942,7 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
                 .unwrap_or_else(|| selected.clone());
             let note = format!("{} · current {} / effort {}", selected_label, current, current_effort);
             put(f, inner, inner.x, inner.bottom().saturating_sub(2), &clip(&note, inner.width as usize), on(CLAY, RAISED));
-            put(f, inner, inner.x, inner.bottom().saturating_sub(1), "↑↓ · tab main/weak · r roles · e effort · enter chooses · esc", on(DIM, RAISED));
+            put(f, inner, inner.x, inner.bottom().saturating_sub(1), "type filters · ↑↓ · ←→ provider · tab main/weak · ^r roles · ^e effort · esc", on(DIM, RAISED));
         }
         Overlay::Pager { title, lines, scroll } => {
             let widest = lines.iter().map(|l| width(l)).max().unwrap_or(20) as u16;

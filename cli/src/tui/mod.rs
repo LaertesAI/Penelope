@@ -57,7 +57,7 @@ pub enum Overlay {
     None,
     Palette { query: String, sel: usize },
     /// Exact model names of one target: main, weak, scout or a role such as tool, condenser or worker.
-    Models { sel: usize, target: String },
+    Models { sel: usize, target: String, filter: String },
     /// Providers and their login state. Enter signs in or opens the key dialog.
     Providers { sel: usize, target: String, scroll: usize },
     /// The list of role models: tool calls, processing, research, coding, judge, router, filter.
@@ -606,6 +606,12 @@ impl App {
         out
     }
 
+    /// The rows whose model name contains `filter`, ignoring case, across all providers. An empty filter keeps all rows.
+    pub fn model_rows_filtered(&self, target: &str, filter: &str) -> Vec<(String, String)> {
+        let q = filter.trim().to_lowercase();
+        self.model_rows(target).into_iter().filter(|(_, m)| q.is_empty() || m.to_lowercase().contains(&q)).collect()
+    }
+
     /// The effort levels of one model at one provider, the provider's answer before the static rules.
     pub fn provider_efforts(&self, provider: &str, model: &str) -> Vec<String> {
         if let Some(found) = self.model_cache.get(provider).and_then(|list| list.iter().find(|m| m.id == model)) {
@@ -640,16 +646,13 @@ impl App {
         if !asked.is_empty() { self.model_source.push_str(" · refreshing"); }
     }
 
-    /// One line above the list: how many models from how many providers, and how many providers still lack a key.
+    /// One line above the list: the model count per provider, and how many providers still lack a key.
     fn models_summary(&self, target: &str) -> String {
-        let providers = self.connected_providers(target);
-        let rows = self.model_rows(target).len();
+        let rows = self.model_rows(target);
         let missing = crate::providers::TABLE.iter().filter(|p| !p.key_optional && !crate::providers::connected(p)).count();
-        let names: Vec<String> = providers.iter().map(|p| match p.as_str() {
-            "claude-cli" => "Claude subscription".to_string(),
-            other => crate::providers::get(other).map(|x| x.label.to_string()).unwrap_or_else(|| other.to_string()),
-        }).collect();
-        format!("{} models from {} · {} providers without a key: /providers", rows, names.join(", "), missing)
+        let counts: Vec<String> = self.connected_providers(target).iter()
+            .map(|p| format!("{} {}", rows.iter().filter(|(rp, _)| rp == p).count(), provider_label(p))).collect();
+        format!("{} · {} providers without a key: /providers", counts.join(" · "), missing)
     }
 
     fn model_value(&self, target: &str) -> &serde_json::Value {
@@ -676,7 +679,7 @@ impl App {
 
     fn cycle_effort(&mut self, target: &str) {
         let (_sel, model) = match &self.overlay {
-            Overlay::Models { sel, .. } => (*sel, self.model_rows(target).get(*sel).filter(|(p, _)| *p == self.provider_name(target)).map(|(_, m)| m.clone())),
+            Overlay::Models { sel, filter, .. } => (*sel, self.model_rows_filtered(target, filter).get(*sel).filter(|(p, _)| *p == self.provider_name(target)).map(|(_, m)| m.clone())),
             _ => return,
         };
         let Some(model) = model else { return };
@@ -1216,10 +1219,10 @@ impl App {
                     match result {
                         Ok(list) => {
                             self.model_cache.insert(provider.clone(), list);
-                            if let Overlay::Models { sel: _, target } = &self.overlay {
-                                let target = target.clone();
+                            if let Overlay::Models { sel: _, target, filter } = &self.overlay {
+                                let (target, filter) = (target.clone(), filter.clone());
                                 self.model_source = self.models_summary(&target);
-                                let last = self.model_rows(&target).len().saturating_sub(1);
+                                let last = self.model_rows_filtered(&target, &filter).len().saturating_sub(1);
                                 if let Overlay::Models { sel, .. } = &mut self.overlay { *sel = (*sel).min(last); }
                             }
                         }
@@ -1406,7 +1409,7 @@ impl App {
                 self.load_models(&target);
                 let current = self.model_value(&target)["model"].as_str().unwrap_or("").to_string();
                 let at = self.model_rows(&target).iter().position(|(_, m)| *m == current).unwrap_or(0);
-                self.overlay = Overlay::Models { sel: at, target };
+                self.overlay = Overlay::Models { sel: at, target, filter: String::new() };
             }
             "/mode" if !rest.is_empty() => {
                 match crate::mode::apply(&mut self.ctx, rest) {
@@ -2086,7 +2089,8 @@ impl App {
         let mut roles_open = false;
         let mut providers_open: Option<String> = None;
         let mut key_save: Option<(String, String, String, String)> = None;
-        let mut pick: Option<(usize, String)> = None;
+        let mut pick: Option<(usize, String, String)> = None;
+        let mut group_jump: Option<bool> = None;
         let mut effort: Option<String> = None;
         let mut open: Option<usize> = None;
         let mut said: Option<(String, String)> = None;
@@ -2168,16 +2172,21 @@ impl App {
                 KeyCode::Char(c) if !ctrl => { input.insert(*cursor, c); *cursor += 1; error.clear(); }
                 _ => {}
             },
-            Overlay::Models { sel, target } => match key.code {
+            Overlay::Models { sel, target, filter } => match key.code {
+                KeyCode::Esc if !filter.is_empty() => { filter.clear(); *sel = 0; }
                 KeyCode::Esc => close = true,
                 KeyCode::Up => *sel = sel.saturating_sub(1),
                 KeyCode::Down => *sel += 1,
                 KeyCode::PageUp => *sel = sel.saturating_sub(10),
                 KeyCode::PageDown => *sel += 10,
+                KeyCode::Left => group_jump = Some(false),
+                KeyCode::Right => group_jump = Some(true),
                 KeyCode::Tab => models_open = Some(if target == "main" { "weak".to_string() } else { "main".to_string() }),
-                KeyCode::Enter => pick = Some((*sel, target.clone())),
-                KeyCode::Char('e') => effort = Some(target.clone()),
-                KeyCode::Char('r') => roles_open = true,
+                KeyCode::Enter => pick = Some((*sel, target.clone(), filter.clone())),
+                KeyCode::Char('e') if ctrl => effort = Some(target.clone()),
+                KeyCode::Char('r') if ctrl => roles_open = true,
+                KeyCode::Backspace => { filter.pop(); *sel = 0; }
+                KeyCode::Char(c) if !ctrl && !key.modifiers.contains(KeyModifiers::ALT) => { filter.push(c); *sel = 0; }
                 _ => {}
             },
             Overlay::Pager { scroll, lines, .. } => match key.code {
@@ -2305,8 +2314,15 @@ impl App {
                 _ => {}
             },
         }
-        if let Overlay::Models { sel: _, target } = &self.overlay {
-            let last = self.model_rows(target).len().saturating_sub(1);
+        if let Some(forward) = group_jump {
+            if let Overlay::Models { sel, target, filter } = &self.overlay {
+                let rows = self.model_rows_filtered(target, filter);
+                let at = jump_group(&rows, *sel, forward);
+                if let Overlay::Models { sel, .. } = &mut self.overlay { *sel = at; }
+            }
+        }
+        if let Overlay::Models { sel: _, target, filter } = &self.overlay {
+            let last = self.model_rows_filtered(target, filter).len().saturating_sub(1);
             if let Overlay::Models { sel, .. } = &mut self.overlay {
                 *sel = (*sel).min(last);
             }
@@ -2325,7 +2341,7 @@ impl App {
             self.load_models(&target);
             let current = self.model_value(&target)["model"].as_str().unwrap_or("").to_string();
             let at = self.model_rows(&target).iter().position(|(_, m)| *m == current).unwrap_or(0);
-            self.overlay = Overlay::Models { sel: at, target };
+            self.overlay = Overlay::Models { sel: at, target, filter: String::new() };
             close = false;
         }
         if roles_open {
@@ -2460,8 +2476,8 @@ impl App {
             self.cycle_effort(&target);
             close = false;
         }
-        if let Some((sel, target)) = pick {
-            if let Some((provider, model)) = self.model_rows(&target).get(sel).cloned() {
+        if let Some((sel, target, filter)) = pick {
+            if let Some((provider, model)) = self.model_rows_filtered(&target, &filter).get(sel).cloned() {
                 if provider != self.provider_name(&target) {
                     self.select_provider(&provider, &target);
                 }
@@ -2692,6 +2708,35 @@ fn help_text() -> String {
     out
 }
 
+/// The name the picker shows for a provider.
+pub fn provider_label(name: &str) -> String {
+    match name {
+        "claude-cli" => "Claude subscription".to_string(),
+        other => crate::providers::get(other).map(|x| x.label.to_string()).unwrap_or_else(|| other.to_string()),
+    }
+}
+
+/// The rows grouped by provider: (provider, first row, row count). Rows of one provider are contiguous.
+pub fn row_groups(rows: &[(String, String)]) -> Vec<(String, usize, usize)> {
+    let mut out: Vec<(String, usize, usize)> = Vec::new();
+    for (i, (p, _)) in rows.iter().enumerate() {
+        match out.last_mut() {
+            Some(g) if g.0 == *p => g.2 += 1,
+            _ => out.push((p.clone(), i, 1)),
+        }
+    }
+    out
+}
+
+/// The first row of the next (or previous) provider group; the ends wrap around.
+pub fn jump_group(rows: &[(String, String)], sel: usize, forward: bool) -> usize {
+    let groups = row_groups(rows);
+    if groups.len() < 2 { return sel; }
+    let at = groups.iter().position(|(_, first, n)| sel >= *first && sel < first + n).unwrap_or(0);
+    let to = if forward { (at + 1) % groups.len() } else { (at + groups.len() - 1) % groups.len() };
+    groups[to].1
+}
+
 /// Runs the interface until the person leaves it.
 pub fn run(ctx: Ctx, resume: Option<serde_json::Value>) -> Result<(), String> {
     art::detect_colour();
@@ -2712,6 +2757,9 @@ pub fn run(ctx: Ctx, resume: Option<serde_json::Value>) -> Result<(), String> {
         loop {
             app.drain();
             app.poll_approvals();
+            if let Ok(size) = terminal.size() {
+                painter.watch((size.width, size.height), &mut std::io::stdout());
+            }
             let frame = terminal.draw(|f| view::draw(f, &mut app)).map_err(|e| e.to_string())?;
             if app.shot {
                 app.shot = false;
@@ -2726,6 +2774,7 @@ pub fn run(ctx: Ctx, resume: Option<serde_json::Value>) -> Result<(), String> {
                 return Ok(());
             }
             if let Some(provider) = app.login.take() {   // Claude login or an API key needs the plain terminal
+                painter.end(&mut std::io::stdout());       // the new alternate screen starts without the picture
                 let _ = execute!(std::io::stdout(), DisableMouseCapture, DisableBracketedPaste);
                 ratatui::restore();
                 match crate::auth::login(&provider) {
@@ -2804,6 +2853,10 @@ mod tests {
 
     fn press(app: &mut App, code: KeyCode) {
         app.key(KeyEvent::new(code, KeyModifiers::NONE));
+    }
+
+    fn ctrl_e(app: &mut App) {
+        app.key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL));
     }
 
     fn type_text(app: &mut App, text: &str) {
@@ -3131,9 +3184,63 @@ mod tests {
         ]);
         assert_eq!(a.model_choices("main"), vec!["deepseek-v4.1-flash".to_string(), "from-provider".to_string()]);
         assert_eq!(a.model_efforts("main", "from-provider"), vec!["low".to_string(), "high".to_string()]);
-        a.overlay = Overlay::Models { sel: 0, target: "main".into() };
-        press(&mut a, KeyCode::Char('e'));
+        a.overlay = Overlay::Models { sel: 0, target: "main".into(), filter: String::new() };
+        ctrl_e(&mut a);
         assert_eq!(a.ctx.cfg["main"]["effort"], serde_json::json!("high"));
+    }
+
+    fn two_provider_app() -> App {
+        let mut a = app();
+        a.ctx.cfg["main"] = serde_json::json!({"kind": "openai", "base_url": "https://opencode.ai/zen/go/v1", "model": "go-model-0"});
+        let info = |id: &str| crate::providers::ModelInfo { id: id.into(), label: id.into(), efforts: vec![] };
+        a.model_cache.insert("opencode".to_string(), (0..31).map(|i| info(&format!("go-model-{}", i))).collect());
+        a.model_cache.insert("ollama".to_string(), vec![info("qwen3:1.7b"), info("llama3:8b")]);
+        a.overlay = Overlay::Models { sel: 0, target: "main".into(), filter: String::new() };
+        a
+    }
+
+    fn picker_sel(a: &App) -> usize {
+        match &a.overlay { Overlay::Models { sel, .. } => *sel, _ => panic!("no picker") }
+    }
+
+    #[test]
+    fn the_picker_rows_hold_both_providers_in_groups_with_counts() {
+        let a = two_provider_app();
+        let rows = a.model_rows("main");
+        let groups = row_groups(&rows);
+        assert_eq!((groups[0].0.as_str(), groups[0].2), ("opencode", 31), "the own provider comes first");
+        assert!(groups.iter().any(|g| g.0 == "ollama" && g.2 == 2));
+        let summary = a.models_summary("main");
+        assert!(summary.starts_with(&format!("31 {}", provider_label("opencode"))) && summary.contains(&format!("2 {}", provider_label("ollama"))), "{}", summary);
+    }
+
+    #[test]
+    fn arrow_keys_walk_over_rows_only_and_left_right_jump_between_groups() {
+        let mut a = two_provider_app();
+        let groups = row_groups(&a.model_rows("main"));
+        let second = groups[1].1;
+        for _ in 0..second - 1 { press(&mut a, KeyCode::Down); }
+        assert_eq!(a.model_rows_filtered("main", "")[picker_sel(&a)].0, "opencode");
+        press(&mut a, KeyCode::Down);                       // the header of the next group is no row
+        assert_eq!(picker_sel(&a), second);
+        press(&mut a, KeyCode::Left);
+        assert_eq!(picker_sel(&a), 0);
+        press(&mut a, KeyCode::Right);
+        assert_eq!(picker_sel(&a), second);
+        for _ in 1..groups.len() { press(&mut a, KeyCode::Right); }
+        assert_eq!(picker_sel(&a), 0, "the jump wraps around");
+    }
+
+    #[test]
+    fn typing_filters_across_providers_and_enter_picks_the_match() {
+        let mut a = two_provider_app();
+        type_text(&mut a, "LLAMA");
+        assert_eq!(a.model_rows_filtered("main", "LLAMA"), vec![("ollama".to_string(), "llama3:8b".to_string())]);
+        press(&mut a, KeyCode::Backspace);
+        match &a.overlay { Overlay::Models { filter, .. } => assert_eq!(filter, "LLAM"), _ => panic!() }
+        press(&mut a, KeyCode::Enter);
+        assert_eq!(a.ctx.cfg["main"]["model"], serde_json::json!("llama3:8b"));
+        assert_eq!(a.provider_name("main"), "ollama");
     }
 
     #[test]
@@ -3151,7 +3258,7 @@ mod tests {
         assert_eq!(rows.first(), Some(&("opencode".to_string(), "deepseek-v4.1-flash".to_string())), "{:?}", rows);
         let at = rows.iter().position(|(p, m)| p == "ollama" && m == "qwen3:1.7b").expect("the local server is listed");
         assert!(a.connected_providers("main").iter().any(|p| p == "ollama"));
-        a.overlay = Overlay::Models { sel: at, target: "main".into() };
+        a.overlay = Overlay::Models { sel: at, target: "main".into(), filter: String::new() };
         press(&mut a, KeyCode::Enter);
         assert_eq!(a.ctx.cfg["main"]["base_url"], serde_json::json!("http://localhost:11434/v1"));
         assert_eq!(a.ctx.cfg["main"]["model"], serde_json::json!("qwen3:1.7b"));
@@ -3173,12 +3280,12 @@ mod tests {
         assert!(a.ctx.cfg["main"]["effort"].is_null());          // mimo-v2.6-flash has no effort field
         a.ctx.cfg["main"] = serde_json::json!({"kind": "openai", "base_url": "https://opencode.ai/zen/go/v1",
                                                "model": "deepseek-v4.1-flash", "effort": "low"});
-        a.overlay = Overlay::Models { sel: 0, target: "main".into() };
-        press(&mut a, KeyCode::Char('e'));
+        a.overlay = Overlay::Models { sel: 0, target: "main".into(), filter: String::new() };
+        ctrl_e(&mut a);
         assert_eq!(a.ctx.cfg["main"]["effort"], serde_json::json!("high"));      // low -> high for deepseek-v4.1-flash
-        press(&mut a, KeyCode::Char('e'));
+        ctrl_e(&mut a);
         assert_eq!(a.ctx.cfg["main"]["effort"], serde_json::json!("max"));
-        press(&mut a, KeyCode::Char('e'));
+        ctrl_e(&mut a);
         assert_eq!(a.ctx.cfg["main"]["effort"], serde_json::json!("low"));       // wraps to the first level
         a.select_provider("claude-cli", "main");
         assert_eq!((a.ctx.cfg["main"]["model"].as_str(), a.ctx.cfg["main"]["effort"].as_str()), (Some("claude-sonnet-5-5"), Some("high")));
@@ -3322,7 +3429,7 @@ mod tests {
     fn roles_have_models_and_opencode_and_claude_names_are_exact() {
         let mut a = app();
         a.command("/model");
-        press(&mut a, KeyCode::Char('r'));
+        a.key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
         assert!(matches!(a.overlay, Overlay::Roles { .. }));
         press(&mut a, KeyCode::Enter);
         match &a.overlay {
