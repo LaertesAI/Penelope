@@ -1717,9 +1717,11 @@ pub fn run_with(io: &dyn Io, st: &Settings, base: &Path, question: &str) -> Outc
         let ids: Vec<String> = tasks.iter().map(|t| t.sub.id.clone()).collect();
         // Sizes and licences from the model cards, for the tables whose rows link them.
         if !io.cancelled() && !(spec.filters.is_empty() && spec.rank_by.is_none()) {
+            // The same file read twice gives two tables; every one gets the card columns (the lookups are cached).
             for t in tables.iter_mut().filter(|t| t.primary) {
+                let n = add_cards(io, st, t);
                 if enriched.insert(t.source.clone()) {
-                    cards += add_cards(io, st, t);
+                    cards += n;
                 }
             }
         }

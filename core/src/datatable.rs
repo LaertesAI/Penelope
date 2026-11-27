@@ -628,7 +628,7 @@ pub fn select(t: &Table, spec: &Spec) -> Option<Selection> {
 
 /// The best selection over several tables: a primary source before a secondary one, then the one with most rows.
 pub fn best(tables: &[Table], spec: &Spec) -> Option<Selection> {
-    tables.iter().filter_map(|t| select(t, spec)).max_by_key(|s| (s.primary, s.kept))
+    tables.iter().filter_map(|t| select(t, spec)).max_by_key(|s| (s.primary, !s.note.is_empty(), s.kept))
 }
 
 impl Selection {
