@@ -3283,6 +3283,7 @@ mod tests {
         assert!(matches!(a.items.last(), Some(Item::Note { label: "drop", text, .. }) if text.contains("5 attached") && text.contains("2 left out")));
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_name_with_a_quote_is_pasted_as_text_with_a_note() {
         let mut a = app();

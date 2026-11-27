@@ -292,11 +292,16 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let big = dir.join("big.txt");
         fs::write(&big, vec![b'x'; 3 * 1024 * 1024]).unwrap();
-        let fifo = dir.join("pipe.fifo");
-        assert!(std::process::Command::new("mkfifo").arg(&fifo).status().map(|s| s.success()).unwrap_or(false));
-        let e = expand(&ctx, &format!("@{} @{}", big.display(), fifo.display()));
-        assert_eq!(e.notes.len(), 2, "{:?}", e.notes);
-        assert!(e.notes[0].contains("over the") && e.notes[1].contains("not a regular file"), "{:?}", e.notes);
+        let e = expand(&ctx, &format!("@{}", big.display()));
+        assert_eq!(e.notes.len(), 1, "{:?}", e.notes);
+        assert!(e.notes[0].contains("over the"), "{:?}", e.notes);
+        #[cfg(unix)]
+        {
+            let fifo = dir.join("pipe.fifo");
+            assert!(std::process::Command::new("mkfifo").arg(&fifo).status().map(|s| s.success()).unwrap_or(false));
+            let e = expand(&ctx, &format!("@{}", fifo.display()));
+            assert!(e.notes.len() == 1 && e.notes[0].contains("not a regular file"), "{:?}", e.notes);
+        }
     }
 
     use super::*;
