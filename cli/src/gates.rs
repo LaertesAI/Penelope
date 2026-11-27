@@ -851,6 +851,8 @@ pub fn risk(ctx: &Ctx, name: &str, args: &Value) -> Option<Risk> {
         "cursor" => (args["click"].as_bool() == Some(true)).then(|| Risk { class: "desktop", what: "a click on the screen".to_string() }),
         "computer" => Some(Risk { class: "desktop", what: format!("computer task \"{}\"", arg(args, "task").chars().take(80).collect::<String>()) }),
         "cluster_start" | "cluster_spawn" | "cluster_respawn" | "cluster_ask" => Some(Risk { class: "delegate", what: format!("{} with text from this session", name) }),
+        "hand_off" => Some(Risk { class: "delegate", what: format!("hand a task to mode {} with text from this session: {}", arg(args, "to_mode"),
+                                                                  arg(args, "task").chars().take(80).collect::<String>()) }),
         _ if is_forge(ctx, name) => shell(name, format!("run the forged tool {}", name)),
         _ => None,
     }
@@ -887,7 +889,7 @@ pub fn level_of(ctx: &Ctx, name: &str, args: &Value) -> u8 {
         }
         "grep" | "git_diff" => if level0_files(ctx).is_empty() { 1 } else { 0 },
         "run" => if crate::tools::is_safe(&arg(args, "command")) && level0_files(ctx).is_empty() { 1 } else { 0 },
-        "web_search" | "research" | "deep_research" | "skill" | "session_search" | "computer" | "agent" | "cluster_ask" | "cluster_dump" | "cluster_status"
+        "web_search" | "research" | "deep_research" | "skill" | "session_search" | "computer" | "agent" | "hand_off" | "cluster_ask" | "cluster_dump" | "cluster_status"
         | "mcp_servers" => 0,
         "clipboard" => if args["action"].as_str() == Some("read") { 0 } else { 1 },
         _ if is_forge(ctx, name) => 0,

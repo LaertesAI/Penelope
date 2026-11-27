@@ -62,6 +62,9 @@ fn tool_detail(input: &Value) -> String {
         let now = items.iter().find(|i| i["state"] == "doing").or_else(|| items.iter().find(|i| i["state"] == "pending"));
         return format!("{} of {} done{}", done, items.len(), now.and_then(|i| i["text"].as_str()).map(|t| format!(" · {}", t)).unwrap_or_default());
     }
+    if let (Some(to), Some(task)) = (input["to_mode"].as_str(), input["task"].as_str()) {          // a hand-off names its target
+        return format!("→ {}: {}", to, task.split_whitespace().collect::<Vec<_>>().join(" ")).chars().take(160).collect();
+    }
     for key in ["command", "url", "query", "task", "question", "path", "name", "text", "ref", "pattern"] {
         if let Some(s) = input[key].as_str().filter(|s| !s.is_empty()) {
             return s.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(160).collect();
@@ -136,13 +139,24 @@ pub struct Chat {
     route: crate::autoroute::RouteId,
     /// The first outside text of this chat (Kerkis gates). It stays while the history can hold that text.
     gate_taint: Option<String>,
+    /// The work mode of this chat (`modes.rs`): chat, work, agents or code. Empty runs without a mode.
+    pub mode: String,
 }
 
 impl Chat {
     pub fn new() -> Chat {
         Chat { session: None, history: Vec::new(), history_kind: String::new(), input_tokens: 0, output_tokens: 0, turns: 0,
                cancel: Arc::new(AtomicBool::new(false)), pid: Arc::new(AtomicU32::new(0)), trace: Vec::new(),
-               routed: false, context_tokens: 0, route: crate::autoroute::RouteId::new(), gate_taint: None }
+               routed: false, context_tokens: 0, route: crate::autoroute::RouteId::new(), gate_taint: None, mode: String::new() }
+    }
+
+    /// The outside text a hand-off carries into its sub-session.
+    pub fn set_taint(&mut self, source: Option<String>) {
+        self.gate_taint = source;
+    }
+
+    pub fn tainted(&self) -> bool {
+        self.gate_taint.is_some()
     }
 
     /// Goes on with a stored conversation. A conversation through an HTTP endpoint gets its message history back from disk.
@@ -168,6 +182,17 @@ impl Chat {
     /// turn runs on the weak or the main model (see `autoroute.rs`); a trigger during a weak turn adds one follow-up
     /// turn on the main model.
     pub fn turn_with(&mut self, ctx: &Ctx, user: &str, memory: &str, on: &mut dyn FnMut(Event)) -> Result<String, String> {
+        // A chat in a work mode runs on the settings of that mode: its model, effort, route and tool set.
+        let moded;
+        let ctx = if crate::modes::valid(&self.mode) {
+            let mut m = crate::modes::effective(ctx, &self.mode, crate::modes::depth(ctx));
+            m.cfg["_caller"] = serde_json::json!(self.route.id);
+            if let Some(id) = &self.session { m.cfg["_caller_session"] = serde_json::json!(id); }
+            moded = m;
+            &moded
+        } else {
+            ctx
+        };
         if !crate::autoroute::active(ctx) {
             return self.turn_once(ctx, user, memory, on);
         }
@@ -210,7 +235,8 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
         if masked > 0 {
             on(Event::Masked(masked));
         }
-        let mut system = if memory.is_empty() { rules(ctx) } else { format!("{}\n\nNotes from the memory map for this request:\n{}", rules(ctx), memory) };
+        let rules_text = crate::modes::compose(ctx, rules(ctx));
+        let mut system = if memory.is_empty() { rules_text } else { format!("{}\n\nNotes from the memory map for this request:\n{}", rules_text, memory) };
         let skills = crate::plugins::skill_index(ctx);
         if !skills.is_empty() {
             system.push_str(&format!("\n\nInstalled skills (read one with the tool skill before you use it):\n{}", skills));
@@ -251,7 +277,10 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
             on(e)
         };
         let out = match ctx.cfg["main"]["kind"].as_str().unwrap_or("claude-cli") {
-            kind if crate::llm::is_api(kind) => self.turn_api(ctx, user, &system, &mut watch),
+            kind if crate::llm::is_api(kind) => {
+                let cancel = self.cancel.clone();
+                crate::modes::with_cancel(&cancel, || self.turn_api(ctx, user, &system, &mut watch))
+            }
             _ => self.turn_claude(ctx, user, &system, &mut watch),
         };
         let checked = crate::checker::turn_note(ctx, &trace, crate::checker::turn_start());
@@ -312,7 +341,10 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
         }
         let mut allowed: Vec<String> = mcp::main_tools(ctx).iter().map(|t| format!("mcp__penelope__{}", t)).collect();
         for t in crate::forge::specs(ctx) {          // a tool Penelope wrote is offered to the claude command too
-            if let Some(name) = t["name"].as_str() { allowed.push(format!("mcp__penelope__{}", name)); }
+            if let Some(name) = t["name"].as_str().filter(|n| crate::modes::allows(ctx, n)) { allowed.push(format!("mcp__penelope__{}", name)); }
+        }
+        for (k, v) in crate::modes::env_for(ctx) {
+            servers["penelope"]["env"][k] = json!(v);        // the MCP server applies the same work mode
         }
         if let Some(obj) = crate::plugins::servers(ctx).as_object() {
             for (k, s) in obj {
