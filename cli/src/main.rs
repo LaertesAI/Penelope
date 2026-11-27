@@ -28,6 +28,9 @@ mod llm;
 mod lsp;
 mod mcp;
 mod mcpclient;
+mod mcpmem;
+mod mcpserv;
+mod mcpvet;
 mod mitos;
 mod memory;
 #[allow(dead_code)]
@@ -173,6 +176,8 @@ penelope plugin install LINK  clone a plugin from git, check its scripts and reg
 penelope plugin import        take over the plugins of other harnesses on this PC
 penelope acp                  serve the Agent Client Protocol to Zed or Neovim on stdin and stdout
 penelope mcp [--root DIR]     serve Penelope's tools as an MCP server on stdin and stdout
+penelope mcp serve kerkis [--allow-person]   serve the Kerkis memory (memory_search, memory_get, memory_add, memory_status)
+penelope mcp serve vet [--scan-root DIR]     serve the skill and plugin scanner (vet_scan_path, vet_scan_text)
 penelope mcp add NAME COMMAND [ARGS...] [--allow]
                               register a standalone MCP server
 penelope mcp remove NAME      remove a standalone MCP server
@@ -636,6 +641,12 @@ fn main() {
         }
         "mcp" if args.get(1).map(String::as_str) == Some("list") => {
             print!("{}", mcpclient::list(&ctx, args.iter().any(|a| a == "--probe")));
+        }
+        "mcp" if args.get(1).map(String::as_str) == Some("serve") => {
+            if let Err(e) = mcpserv::serve_named(&ctx, &args[2..]) {
+                eprintln!("{}", e);
+                std::process::exit(2);
+            }
         }
         "mcp" => mcp::serve(&ctx),
         "acp" => {
