@@ -1,8 +1,8 @@
 //! The shared core of Penelope.
 //!
 //! The core holds every rule that the command line and the desktop must agree on: settings, sessions, provider
-//! tables, model calls, the tool gate, clusters, memory, workflows, cost and the device paths. It draws nothing and
-//! imports no user interface crate. The command line keeps `main`, `tui`, `input` and `update`; a desktop frontend
+//! tables, model calls, the tool gate, clusters, memory, cost and the device paths. Workflows move here in a later
+//! change. It draws nothing and imports no user interface crate. The command line keeps `main`, `tui`, `input` and `update`; a desktop frontend
 //! talks to the same public functions over its own layer.
 //!
 //! The public surface is the modules below. Everything a frontend needs is a plain Rust function, a Serde type or a

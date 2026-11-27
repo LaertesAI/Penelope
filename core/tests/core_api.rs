@@ -150,3 +150,87 @@ fn a_provider_choice_survives_a_reload_and_a_key_is_never_returned() {
     assert!(api::set_provider(&mut ctx, "not-a-provider", "main", None, None, None).is_err());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_mode_saved_from_the_desktop_sets_the_same_policies_as_penelope_mode() {
+    let dir = std::env::temp_dir().join(format!("penelope-core-mode-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut ctx = api::load(&dir);
+    penelope_core::mode::apply(&mut ctx, "power").unwrap();
+    assert_eq!(ctx.cfg["edit_policy"], "all");
+    // A panel sends every field back: the old power policies must not survive the change to safe.
+    let patch = serde_json::json!({"mode": "safe", "edit_policy": "all", "run_policy": "all", "delegate": "auto"});
+    api::save_settings(&mut ctx, &patch).unwrap();
+    let reloaded = api::load(&dir);
+    for cfg in [&ctx.cfg, &reloaded.cfg] {
+        assert_eq!(cfg["mode"], "safe");
+        assert_eq!(cfg["edit_policy"], "never");
+        assert_eq!(cfg["run_policy"], "safe");
+        assert_eq!(cfg["delegate"], "off");
+    }
+    // An unchanged mode leaves a single policy edit alone.
+    api::save_settings(&mut ctx, &serde_json::json!({"mode": "safe", "run_policy": "all"})).unwrap();
+    assert_eq!(ctx.cfg["run_policy"], "all");
+    assert_eq!(ctx.cfg["edit_policy"], "never");
+    assert!(api::save_settings(&mut ctx, &serde_json::json!({"mode": "nope"})).is_err());
+    assert_eq!(ctx.cfg["mode"], "safe");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn budget_fields_are_stored_as_numbers_and_bad_values_change_nothing() {
+    let dir = std::env::temp_dir().join(format!("penelope-core-budget-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut ctx = api::load(&dir);
+    api::save_settings(
+        &mut ctx,
+        &serde_json::json!({"monthly_budget_eur": "50", "session_budget_eur": 2.5, "eur_per_usd": "0,9"}),
+    )
+    .unwrap();
+    let reloaded = api::load(&dir);
+    assert_eq!(reloaded.cfg["monthly_budget_eur"].as_f64(), Some(50.0));
+    assert_eq!(reloaded.cfg["session_budget_eur"].as_f64(), Some(2.5));
+    assert_eq!(reloaded.cfg["eur_per_usd"].as_f64(), Some(0.9));
+    for bad in [
+        serde_json::json!({"monthly_budget_eur": "fifty"}),
+        serde_json::json!({"monthly_budget_eur": -1}),
+        serde_json::json!({"eur_per_usd": -0.5}),
+        serde_json::json!({"eur_per_usd": 0}),
+        serde_json::json!({"session_budget_eur": true}),
+        serde_json::json!({"sandbox": 3, "monthly_budget_eur": 10}),
+    ] {
+        assert!(api::save_settings(&mut ctx, &bad).is_err(), "{}", bad);
+    }
+    let reloaded = api::load(&dir);
+    assert_eq!(reloaded.cfg["monthly_budget_eur"].as_f64(), Some(50.0));
+    assert_eq!(ctx.cfg["eur_per_usd"].as_f64(), Some(0.9));
+    api::save_settings(&mut ctx, &serde_json::json!({"monthly_budget_eur": ""})).unwrap();
+    assert!(ctx.cfg["monthly_budget_eur"].is_null());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_settings_snapshot_hides_keys_and_header_values() {
+    let dir = std::env::temp_dir().join(format!("penelope-core-redact-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut ctx = api::load(&dir);
+    ctx.cfg["main"]["headers"] = serde_json::json!({"Authorization": "Bearer sk-secret-header"});
+    ctx.cfg["main"]["api_key"] = serde_json::json!("sk-pasted-key");
+    ctx.cfg["weak"]["token"] = serde_json::json!("tok-weak");
+    ctx.cfg["roles"] = serde_json::json!({"coder": {"model": "m", "secret": "s3cr3t", "headers": {"X-Key": "k-role"}}});
+    let shown = api::settings_json(&ctx);
+    let text = shown.to_string();
+    for leaked in ["sk-secret-header", "sk-pasted-key", "tok-weak", "s3cr3t", "k-role"] {
+        assert!(!text.contains(leaked), "{} leaked", leaked);
+    }
+    assert_eq!(shown["main"]["headers"]["Authorization"], "(hidden)");
+    assert_eq!(shown["main"]["api_key_set"], true);
+    assert_eq!(shown["weak"]["token_set"], true);
+    assert_eq!(shown["roles"]["coder"]["secret_set"], true);
+    assert_eq!(shown["roles"]["coder"]["model"], "m");
+    assert_eq!(ctx.cfg["main"]["api_key"], "sk-pasted-key");
+    let _ = std::fs::remove_dir_all(&dir);
+}

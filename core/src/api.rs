@@ -121,12 +121,43 @@ pub fn key_rows(_ctx: &Ctx) -> Value {
     })).collect())
 }
 
-/// The settings the desktop may show and change.
+/// Field names in a role that hold a key. `settings_json` returns only whether one is set.
+const SECRET_FIELDS: [&str; 4] = ["api_key", "key", "token", "secret"];
+
+/// One role entry without its secrets. A key field becomes `"<field>_set": true`; every header value becomes
+/// `"(hidden)"`, because `llm.rs` sends the headers as they are and one may carry `Authorization`.
+fn redact_role(model: &Value) -> Value {
+    let mut out = model.clone();
+    if let Some(obj) = out.as_object_mut() {
+        for field in SECRET_FIELDS {
+            if obj.remove(field).is_some() {
+                obj.insert(format!("{}_set", field), json!(true));
+            }
+        }
+        if let Some(headers) = obj.get_mut("headers").and_then(Value::as_object_mut) {
+            for value in headers.values_mut() {
+                *value = json!("(hidden)");
+            }
+        }
+    }
+    out
+}
+
+/// The settings the desktop may show and change. No key and no header value is returned.
 pub fn settings_json(ctx: &Ctx) -> Value {
+    let roles = match ctx.cfg["roles"].as_object() {
+        Some(map) => Value::Object(
+            map.iter()
+                .map(|(name, model)| (name.clone(), redact_role(model)))
+                .collect(),
+        ),
+        None => ctx.cfg["roles"].clone(),
+    };
     json!({
         "root": ctx.root.display().to_string(),
-        "main": ctx.cfg["main"], "weak": ctx.cfg["weak"], "scout": ctx.cfg["scout"],
-        "roles": ctx.cfg["roles"], "route": ctx.cfg["route"].as_str().unwrap_or("fixed"),
+        "main": redact_role(&ctx.cfg["main"]), "weak": redact_role(&ctx.cfg["weak"]),
+        "scout": redact_role(&ctx.cfg["scout"]),
+        "roles": roles, "route": ctx.cfg["route"].as_str().unwrap_or("fixed"),
         "sandbox": ctx.cfg["sandbox"].as_str().unwrap_or("off"),
         "run_policy": ctx.cfg["run_policy"].as_str().unwrap_or("safe"),
         "edit_policy": ctx.cfg["edit_policy"].as_str().unwrap_or("ask"),
@@ -142,7 +173,38 @@ pub fn settings_json(ctx: &Ctx) -> Value {
     })
 }
 
+/// One euro field of the settings as a number. A number or a numeric string (the value of an HTML input) is
+/// accepted; an empty string or null clears the field. A negative value, or zero for `eur_per_usd`, is an error.
+fn number_field(key: &str, value: &Value) -> Result<Value, String> {
+    let n = match value {
+        Value::Null => return Ok(Value::Null),
+        Value::Number(n) => n.as_f64(),
+        Value::String(s) if s.trim().is_empty() => return Ok(Value::Null),
+        Value::String(s) => s.trim().replace(',', ".").parse::<f64>().ok(),
+        _ => None,
+    };
+    let n = n
+        .filter(|n| n.is_finite())
+        .ok_or_else(|| format!("{} must be a number", key))?;
+    if n < 0.0 || (key == "eur_per_usd" && n == 0.0) {
+        return Err(format!(
+            "{} must be {}",
+            key,
+            if key == "eur_per_usd" {
+                "above 0"
+            } else {
+                "0 or more"
+            }
+        ));
+    }
+    Ok(json!(n))
+}
+
 /// Writes the settings a desktop may change. Keys, paths and other fields stay out of this list.
+///
+/// A changed `mode` sets the same policies as `penelope mode NAME`, through `mode::preset`; the policy fields it
+/// sets are then not taken from the patch, so a panel that sends every field cannot keep `power` policies under
+/// `safe`. Nothing is written when one field is wrong.
 pub fn save_settings(ctx: &mut Ctx, patch: &Value) -> Result<(), String> {
     let allowed = [
         "sandbox",
@@ -151,22 +213,42 @@ pub fn save_settings(ctx: &mut Ctx, patch: &Value) -> Result<(), String> {
         "eurykleia",
         "delegate",
         "route",
-        "mode",
-        "monthly_budget_eur",
-        "session_budget_eur",
-        "eur_per_usd",
         "test_command",
     ];
+    let numbers = ["monthly_budget_eur", "session_budget_eur", "eur_per_usd"];
+    let mut cfg = ctx.cfg.clone();
+    let new_mode = match patch.get("mode") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(name)) => {
+            let name = name.trim().to_lowercase();
+            if name != crate::mode::current(ctx) || !crate::mode::names().contains(&name.as_str()) {
+                Some(crate::mode::preset(&mut cfg, &name)?)
+            } else {
+                None
+            }
+        }
+        Some(_) => return Err("mode must be a string".to_string()),
+    };
     for key in allowed {
+        if new_mode.is_some() && ["run_policy", "edit_policy", "delegate"].contains(&key) {
+            continue;
+        }
         if let Some(value) = patch.get(key) {
-            if value.is_string() || value.is_number() || value.is_null() {
-                ctx.cfg[key] = value.clone();
+            if value.is_string() || value.is_null() {
+                cfg[key] = value.clone();
+            } else {
+                return Err(format!("{} must be a string", key));
             }
         }
     }
+    for key in numbers {
+        if let Some(value) = patch.get(key) {
+            cfg[key] = number_field(key, value)?;
+        }
+    }
     if let Some(prices) = patch.get("prices").and_then(Value::as_object) {
-        if !ctx.cfg["prices"].is_object() {
-            ctx.cfg["prices"] = json!({});
+        if !cfg["prices"].is_object() {
+            cfg["prices"] = json!({});
         }
         for (name, price) in prices {
             let ok = price
@@ -183,14 +265,16 @@ pub fn save_settings(ctx: &mut Ctx, patch: &Value) -> Result<(), String> {
                     name
                 ));
             }
-            ctx.cfg["prices"][name.as_str()] = price.clone();
+            cfg["prices"][name.as_str()] = price.clone();
         }
     }
     std::fs::write(
         ctx.root.join("config.json"),
-        serde_json::to_string_pretty(&ctx.cfg).map_err(|e| e.to_string())?,
+        serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?,
     )
-    .map_err(|e| format!("cannot write config.json: {}", e))
+    .map_err(|e| format!("cannot write config.json: {}", e))?;
+    ctx.cfg = cfg;
+    Ok(())
 }
 
 /// The rows of `usage.json`, with the euro of each row at the prices in the settings.

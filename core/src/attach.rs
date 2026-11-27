@@ -850,7 +850,7 @@ pub fn compact_from_block(ctx: &Ctx, block: &Value, server: &str) -> Option<Stri
     Some(line_from(uri, &name, &clean_meta, Some(server)))
 }
 
-/// Every attachment in the store, newest first. A malformed sidecar is skipped. The origin is the tool name in front
+/// Every attachment in the store, sorted by name. A malformed sidecar is skipped. The origin is the tool name in front
 /// of the hash; a name without a dash keeps its whole prefix.
 pub fn list(ctx: &Ctx) -> Vec<Attachment> {
     let mut out = Vec::new();

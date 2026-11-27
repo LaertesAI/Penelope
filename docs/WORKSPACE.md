@@ -64,7 +64,7 @@ Der Kern gibt Serde-Typen und JSON aus. `backend::Event` trägt `#[derive(Serial
 - `eval_runs`, `last_eval`.
 - `attachments_json`.
 
-Ein Schlüssel wird nie zurückgegeben. `save_key` schreibt in den Secret Service oder in `~/.penelope/auth.json` mit Modus 0600. Die Antwort nennt nur den Ort.
+Ein Schlüssel wird nie zurückgegeben. `save_key` schreibt in den Secret Service oder in `~/.penelope/auth.json` mit Modus 0600. Die Antwort nennt nur den Ort. `settings_json` gibt statt `api_key`, `key`, `token` und `secret` einer Rolle nur `<feld>_set: true` zurück, und jeder Header-Wert erscheint als `(hidden)`.
 
 ## Rückfragen
 
@@ -74,9 +74,11 @@ Ein Schlüssel wird nie zurückgegeben. `save_key` schreibt in den Secret Servic
 
 ```sh
 cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy --workspace --all-targets --locked
 cargo build --release -p penelope-cli
 ```
+
+Clippy läuft wie in der CI ohne `-D warnings`; Warnungen brechen den Lauf nicht ab.
 
 Das Binary liegt dann unter `target/release/penelope`.
 
