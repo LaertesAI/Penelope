@@ -44,6 +44,8 @@ mod memory;
 mod notes;
 mod net;
 mod mode;
+mod timing;
+mod claudecli;
 mod mods;
 mod platform;
 mod plugins;
@@ -224,6 +226,7 @@ penelope work remove NAME     remove the worktree (--force discards changes)
 penelope doctor               check the programs and models Penelope needs";
 
 fn main() {
+    timing::start();
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let mut root_arg = None;
     if let Some(i) = args.iter().position(|a| a == "--root") {
@@ -265,7 +268,11 @@ fn main() {
         loom::say(&format!("saved: {}", root.join("config.json").display()));
         return;
     }
-    let mut ctx = config::load(&config::find_root(root_arg.as_deref()));
+    let mut ctx = {
+        let _t = timing::span("config load");
+        config::load(&config::find_root(root_arg.as_deref()))
+    };
+    claudecli::configure(&ctx.cfg);
     match cmd {
         "tools" => print!("{}", tools_table(&ctx)),
         "tool" => match args.get(1).map(String::as_str) {
@@ -762,6 +769,16 @@ fn main() {
                 answer(&ctx, &mut chat, &text);
             }
         }
+        // Hidden: N turns in one chat the way the TUI runs them, one line with the wall time of each. For timing runs.
+        "bench-turns" if args.len() >= 3 => {
+            let mut chat = backend::Chat::new();
+            for _ in 0..args[1].parse::<usize>().unwrap_or(1) {
+                let started = std::time::Instant::now();
+                let (notes, _, _) = tools::recall_all(&ctx, &args[2], 1600);
+                let out = chat.turn_with(&ctx, &args[2], &notes, &mut |_| {});
+                println!("turn {} ms: {}", started.elapsed().as_millis(), out.unwrap_or_else(|e| format!("ERROR {}", e)).chars().take(60).collect::<String>());
+            }
+        }
         "search" if args.get(1).map(String::as_str) == Some("fanout") => match args.get(2).map(String::as_str) {
             Some("on") => println!("{}", search::set_fanout(&ctx, true)),
             Some("off") => println!("{}", search::set_fanout(&ctx, false)),
@@ -1003,16 +1020,18 @@ fn answer(ctx: &config::Ctx, chat: &mut backend::Chat, text: &str) {
     if !expanded.refs.is_empty() {
         loom::say(&format!("context: {}", expanded.refs.iter().map(|r| format!("{} ({} bytes)", r.token, r.bytes)).collect::<Vec<_>>().join(", ")));
     }
-    let (notes, trail, cached) = tools::recall_all(ctx, &expanded.text, 1600);
+    let (notes, trail, cached) = { let _t = timing::span("memory recall"); tools::recall_all(ctx, &expanded.text, 1600) };
     if !trail.is_empty() {
         loom::say(&format!("memory: start / {}{}", trail.last().unwrap().replace('/', " / "), if cached { " (stored walk)" } else { "" }));
     }
     let mut masked = 0;
+    timing::mark("ask: request prepared", "");
     let result = chat.turn_with(ctx, &expanded.text, &notes, &mut |e| {
         if let backend::Event::MaskedAnswer(n) = e {
             masked += n;
         }
     });
+    timing::mark("ask: turn done", "");
     match result {
         Ok(a) => {
             if !trail.is_empty() {
@@ -1025,9 +1044,11 @@ fn answer(ctx: &config::Ctx, chat: &mut backend::Chat, text: &str) {
             loom::say(&format!("tokens so far: {} in, {} out", chat.input_tokens, chat.output_tokens));
             loom::say(&format!("tool calls of this turn: {}, {} of them failed or refused", chat.trace.len(), chat.trace.iter().filter(|c| tools::in_trouble(c)).count()));
             if ctx.cfg["auto_learn"].as_bool().unwrap_or(true) {
+                let _t = timing::span("post-turn: learn (weak model)");
                 for id in tools::learn(ctx, text, &a) {
                     loom::say(&format!("learned: {}", id));
                 }
+                let _t2 = timing::span("post-turn: learn_tools");
                 for id in tools::learn_tools(ctx, text, &chat.trace) {
                     loom::say(&format!("lesson from the tool calls: {}", id));
                 }

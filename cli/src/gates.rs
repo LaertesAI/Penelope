@@ -147,6 +147,59 @@ fn load_turn_from(path: &Path) {
     write_private(path, &json!({"taint": v["taint"]}).to_string());
 }
 
+/// The live turn file of a long-lived claude process: one file for the whole session. The chat writes a new `seq`, the
+/// user text and the taint before each message; the MCP server notices the new `seq` before its next call, starts a
+/// new turn (counters, lifted rules, the user text) and removes the user text from the file again.
+static LIVE: OnceLock<Option<PathBuf>> = OnceLock::new();
+static LIVE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// A new path for a live turn file, None when the gates are off.
+pub fn live_path(ctx: &Ctx) -> Option<PathBuf> {
+    if mode(ctx) == "off" || std::fs::create_dir_all(gates_dir(ctx)).is_err() {
+        return None;
+    }
+    let stamp = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    Some(gates_dir(ctx).join(format!("live-{}-{}.json", std::process::id(), stamp)))
+}
+
+/// The chat starts turn `seq`: the user text and the session taint go to the live file.
+pub fn write_live(path: &Path, seq: u64, user: &str, taint: Option<&str>) -> bool {
+    write_private(path, &json!({"seq": seq, "user": user.chars().take(4000).collect::<String>(), "taint": taint}).to_string())
+}
+
+/// The session taint the server left in the live file. The file stays.
+pub fn read_live_taint(path: &Path) -> Option<String> {
+    let v: Value = std::fs::read_to_string(path).ok().and_then(|s| serde_json::from_str(&s).ok())?;
+    v["taint"].as_str().map(str::to_string)
+}
+
+/// Server side, before each call: a new `seq` in the live file starts a new turn in this process.
+pub fn refresh_live() {
+    let path = LIVE.get_or_init(|| {
+        let path = std::env::var_os("PENELOPE_GATES_LIVE").map(PathBuf::from)?;
+        std::env::remove_var("PENELOPE_GATES_LIVE");
+        Some(path)
+    });
+    if let Some(path) = path {
+        apply_live(path);
+    }
+}
+
+fn apply_live(path: &Path) {
+    let Some(v) = std::fs::read_to_string(path).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok()) else { return };
+    let seq = v["seq"].as_u64().unwrap_or(0);
+    if seq == LIVE_SEQ.load(std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    LIVE_SEQ.store(seq, std::sync::atomic::Ordering::SeqCst);
+    crate::tools::begin_turn();
+    set_session(v["taint"].as_str().map(str::to_string));
+    if let Some(user) = v["user"].as_str() {
+        user_said(user);
+    }
+    write_private(path, &json!({"seq": seq, "taint": v["taint"]}).to_string());
+}
+
 /// Reads `PENELOPE_GATES_TURN` once, before the mode check, so the variable never reaches a command the server starts.
 fn load_turn() {
     TURN_FILE.get_or_init(|| {
@@ -918,6 +971,9 @@ pub fn observe(ctx: &Ctx, name: &str, args: &Value) {
     if let Some(Some(path)) = TURN_FILE.get() {
         write_private(path, &json!({"taint": source}).to_string());
     }
+    if let Some(Some(path)) = LIVE.get() {
+        write_private(path, &json!({"seq": LIVE_SEQ.load(std::sync::atomic::Ordering::SeqCst), "taint": source}).to_string());
+    }
 }
 
 /// Lifts the level-0 files to level 1 after the person allowed a runner to execute them.
@@ -1006,6 +1062,30 @@ mod bench;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_new_seq_in_the_live_file_starts_a_new_turn_in_a_long_lived_server() {
+        let dir = std::env::temp_dir().join(format!("penelope-live-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("live.json");
+        assert!(write_live(&path, 7, "Fix the typo in README", Some("fetch http://x")));
+        apply_live(&path);
+        assert_eq!(user_text(), "Fix the typo in README");
+        assert_eq!(snapshot().map(|t| t.source), Some("fetch http://x".to_string()));
+        let left: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(left["user"].is_null() && left["seq"] == 7, "the user text leaves the file once it is read: {}", left);
+        LIFTED.with(|l| l.set(true));
+        apply_live(&path);                                    // the same seq: nothing starts again
+        assert!(LIFTED.with(|l| l.get()));
+        assert!(write_live(&path, 8, "Run the tests", None));
+        apply_live(&path);                                    // a new seq: the lifted rule and the old text are gone
+        assert!(!LIFTED.with(|l| l.get()));
+        assert_eq!(user_text(), "Run the tests");
+        assert!(snapshot().is_none());
+        assert_eq!(read_live_taint(&path), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn ctx(tag: &str, mode: &str) -> (Ctx, PathBuf) {
         let project = std::env::temp_dir().join(format!("penelope-gates-{}-{}", tag, std::process::id()));
