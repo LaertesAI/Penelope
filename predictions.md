@@ -91,14 +91,3 @@ Claude Code allein, Haiku 5.5 mit `effort: low`, 28 Entwicklungsaufgaben: 9/28. 
 ## Ergebnis A1
 
 Preise neu: Haiku 5.5 0,10/0,50, Sonnet 5.5 2,00/10,00 USD je Mio. Auf den 28 Aufgaben: large 1,5065, cluster Basis 0,3138, K9 0,1446 EUR. Die alten Werte 2,2597, 2,5108, 1,1567 waren mit den Preisen von Haiku 4.5 und Sonnet 4.6 gerechnet.
-
-## Runde 8 A4/A5: 30 Mehrteil-Aufgaben
-
-Gebaut am 27.11.2026. 30 Aufgaben, je 3 unabhängige Bugs in 3 Modulen (`calc`, `text`, `data`) und ein versteckter Unittest für alle drei. 20 Entwicklung, 10 Hold-out. Hold-out per SHA-256 der Task-ID geteilt.
-
-- Hold-out-Datei: `cli/tests/data/eval/multipart/tasks_holdout10.jsonl`
-- Hold-out SHA-256: `c64cfd19546e0d16909379844e404361e6b17453db3707e5bc0179f133db2e18`
-- Hold-out-IDs: mp-30, mp-18, mp-11, mp-16, mp-06, mp-02, mp-10, mp-19, mp-04, mp-01.
-- Preflight: 30/30. Jede Aufgabe fällt mit den Bugs durch und besteht mit dem Gold-Fix.
-
-A4-Vorhersage auf den 20 Entwicklungsaufgaben: Sonnet-Planer, 3 Haiku-Ausführer parallel, Prüfer ist der selbst geschriebene Test je Teil, versteckter Test nur in der Eval. Treffer mindestens gleich Sonnet, EUR höchstens 70 %, Zeit höchstens 1,0-mal Sonnet. Abbruch: Zeit über 1,2-mal Sonnet.
