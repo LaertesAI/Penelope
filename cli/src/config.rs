@@ -136,7 +136,27 @@ pub fn load(root: &Path) -> Ctx {
     } else {
         let _ = fs::write(&path, serde_json::to_string_pretty(&cfg).unwrap());
     }
+    apply_policy_env(&mut cfg);
     Ctx { root: root.to_path_buf(), cfg }
+}
+
+/// A child process can be pinned to the policies of its parent. The claude-cli path starts a fresh
+/// `penelope mcp` that would otherwise read `run_policy: all` from disk and ignore the workflow's safe ctx.
+fn apply_policy_env(cfg: &mut Value) {
+    let run = std::env::var("PENELOPE_RUN_POLICY").ok();
+    let edit = std::env::var("PENELOPE_EDIT_POLICY").ok();
+    apply_policy(cfg, run.as_deref(), edit.as_deref());
+}
+
+fn apply_policy(cfg: &mut Value, run: Option<&str>, edit: Option<&str>) {
+    for (key, value, allowed) in [
+        ("run_policy", run, &["safe", "all"][..]),
+        ("edit_policy", edit, &["ask", "all", "never"][..]),
+    ] {
+        if let Some(value) = value.map(str::trim).filter(|v| allowed.contains(v)) {
+            cfg[key] = serde_json::json!(value);
+        }
+    }
 }
 
 /// The folder that holds Penelope's own files. A path that is a project (it has `.git` or a `.penelope` folder) and is
@@ -210,5 +230,15 @@ mod state_dir_tests {
         let _ = fs::remove_dir_all(&plain);
         assert_eq!(load(&plain).root, plain);
         assert_eq!(state_dir(&dir.join(".penelope")), dir.join(".penelope"));
+    }
+
+    #[test]
+    fn a_policy_env_pins_only_known_values() {
+        let mut cfg = default_config();
+        cfg["run_policy"] = serde_json::json!("all");
+        apply_policy(&mut cfg, Some("safe"), Some("ask"));
+        assert_eq!((cfg["run_policy"].as_str(), cfg["edit_policy"].as_str()), (Some("safe"), Some("ask")));
+        apply_policy(&mut cfg, Some("bogus"), Some("bogus"));
+        assert_eq!((cfg["run_policy"].as_str(), cfg["edit_policy"].as_str()), (Some("safe"), Some("ask")));
     }
 }

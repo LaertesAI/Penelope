@@ -550,11 +550,11 @@ pub fn confirm(ctx: &Ctx) -> String {
         return "nothing waits for a yes. /tools install N first.".to_string();
     };
     let head = format!("installing candidate {} {:?}\n", n, c.name);
-    head + &match c.install {
+    head + match c.install {
         Install::Package { command, args } if safe_argv(&command, &args) => crate::plugins::mcp_add_unvetted(ctx, &server_name(&c.name), &command, &args),
         Install::Repo(url) if valid_repo(&url) => crate::plugins::install(ctx, &url),
         _ => format!("{} cannot be installed.", c.name),
-    }
+    }.as_str()
 }
 
 #[cfg(test)]

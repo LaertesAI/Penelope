@@ -77,6 +77,7 @@ mod tui;
 mod update;
 mod vet;
 mod weak;
+mod workflows;
 mod work;
 
 use std::io::{BufRead, IsTerminal, Write};
@@ -290,6 +291,57 @@ fn main() {
                 }
             }
             _ => print!("{}", forge::list(&ctx)),
+        },
+        "workflow" => match args.get(1).map(String::as_str) {
+            Some("run") if args.len() >= 3 => {
+                let name = args[2].clone();
+                let yes = args.iter().any(|a| a == "--yes");
+                let resume = args.iter().position(|a| a == "--resume")
+                    .and_then(|i| args.get(i + 1)).cloned();
+                let ask = if yes { None } else {
+                    Some(Box::new(|questions: &[serde_json::Value]| {
+                        for q in questions {
+                            println!("{}", q["question"].as_str().unwrap_or("start?"));
+                        }
+                        let mut line = String::new();
+                        std::io::stdin().read_line(&mut line).map_err(|e| e.to_string())?;
+                        Ok(vec![serde_json::json!(line.trim().eq_ignore_ascii_case("y") || line.trim().eq_ignore_ascii_case("yes"))])
+                    }) as Box<dyn FnMut(&[serde_json::Value]) -> Result<Vec<serde_json::Value>, String>>)
+                };
+                let arg_json = match args.iter().position(|a| a == "--args") {
+                    Some(i) => {
+                        let raw = args.get(i + 1).cloned().unwrap_or_default();
+                        match serde_json::from_str::<serde_json::Value>(&raw) {
+                            Ok(v) if v.is_object() => v,
+                            Ok(_) => { loom::warn("--args needs a JSON object"); std::process::exit(2); }
+                            Err(e) => { loom::warn(&format!("--args is not JSON: {}", e)); std::process::exit(2); }
+                        }
+                    }
+                    None => serde_json::json!({}),
+                };
+                let options = workflows::RunOptions { confirm: !yes, ask, args: arg_json, resume_id: resume, ..Default::default() };
+                let path = std::path::Path::new(&name);
+                let out = if path.is_file() { workflows::run(&ctx, path, options) } else { workflows::run_named(&ctx, &name, options) };
+                match out {
+                    Ok(r) => println!("workflow {} done: {:.4} EUR, {} tokens, journal {}", r.id, r.eur, r.tokens, r.journal.display()),
+                    Err(e) => { loom::warn(&e); std::process::exit(2); }
+                }
+            }
+            Some("list") | None => {
+                for w in workflows::list(&ctx) { println!("{}", w); }
+            }
+            Some("runs") => {
+                for (id, state) in workflows::runs(&ctx) { println!("{}  {}", id, state); }
+            }
+            Some("status") if args.len() >= 3 => match workflows::status(&ctx, &args[2]) {
+                Ok(t) => print!("{}", t),
+                Err(e) => { loom::warn(&e); std::process::exit(2); }
+            },
+            Some("stop") if args.len() >= 3 => match workflows::stop(&ctx, &args[2]) {
+                Ok(t) => println!("{}", t),
+                Err(e) => { loom::warn(&e); std::process::exit(2); }
+            },
+            _ => println!("penelope workflow run NAME|FILE [--yes] [--resume ID] [--args JSON] | list | runs | status ID | stop ID"),
         },
         "route" => print!("{}", route_text(&ctx)),
         "mode" => {
