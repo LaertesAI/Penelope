@@ -404,6 +404,13 @@ fn eval_context(ctx: &Ctx, setup: &str) -> Ctx {
     run.cfg["auto_skills"] = json!(false);
     // Every search belongs to the model under test; no hidden scout on the weak model.
     run.cfg["delegate"] = json!("off");
+    if setup == "cluster" {
+        // The small model gets a low thinking budget. The baseline spent 94.8 % of its output on text that was not
+        // stored; this is the lever.
+        if run.cfg["weak"].is_object() {
+            run.cfg["weak"]["effort"] = json!("low");
+        }
+    }
     if setup == "large-subagents" {
         let main = run.cfg["main"].clone();
         let mut roles = run.cfg["roles"].clone();
@@ -938,6 +945,16 @@ mod tests {
     }
 
     #[test]
+    fn the_cluster_eval_lowers_the_weak_effort() {
+        let (ctx, d) = ctx("weak-effort");
+        let cluster = eval_context(&ctx, "cluster");
+        assert_eq!(cluster.cfg["weak"]["effort"].as_str(), Some("low"));
+        let large = eval_context(&ctx, "large");
+        assert_ne!(large.cfg["weak"]["effort"].as_str(), Some("low"));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
     fn an_eval_runs_unattended_in_the_sandbox_without_changing_the_caller() {
         let (ctx, d) = ctx("unattended");
         let run = eval_context(&ctx, "large");
@@ -972,6 +989,9 @@ mod tests {
         let systems: Vec<String> = seen.iter().map(|s| s.body["messages"][0]["content"].as_str().unwrap_or("").to_string()).collect();
         assert!(systems.iter().any(|s| s.contains("part of the Penelope cluster")), "{:?}", systems);
         assert!(!systems.iter().any(|s| s.contains("validator part")), "the one-worker profile with no retry must skip the validator: {:?}", systems);
+        let names: Vec<String> = seen[0].body["tools"].as_array().unwrap().iter()
+            .map(|t| t["name"].as_str().unwrap_or("").to_string()).collect();
+        assert!(names.windows(2).all(|w| w[0] <= w[1]), "the tool list must be sorted for the cache prefix: {:?}", names);
         let _ = fs::remove_dir_all(&d);
     }
 

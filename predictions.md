@@ -180,3 +180,21 @@ Der Loop stoppt bei Erfolg (cluster +3 Aufgaben, ≤60 % EUR, ≤large Zeit), na
 ### Preflight vor dem Basislauf
 
 Drei Entwicklungsaufgaben, je ein anderes Repo, mit dem Gold-Patch und ohne Modell. Die Prüfung muss PASS geben. Sonst ist die Umgebung falsch, nicht das Modell. Der Preflight kostet keine API. Er braucht die Repos und die Umgebungen. Ergebnis 26.11.2026: 3 von 3 bestanden, django, sympy, pytest.
+
+## Cluster-Kommunikation, Runde K9: Denkbudget des kleinen Modells
+
+Vor dem Lauf. Der Basislauf hat 465.745 Ausgabetokens, davon 94,8 % nicht gespeicherter Modelltext. Das kleine Modell läuft mit `effort: high`. Change: `eval.rs` setzt für den Cluster `weak.effort = low`; der Claude-CLI-Teil bekommt `--effort low`.
+
+Vorhersage: Ausgabe 465.745 auf etwa 280.000 (-40 %), Zeit 5.119 s auf etwa 3.800 s (-26 %), Treffer 8/28 gleich oder 7 (-1), EUR 2,5108 auf etwa 2,0. Behalten, wenn die Treffer gleich bleiben und EUR oder Zeit um mindestens 15 % fallen, oder wenn die Treffer steigen. Abbruch: Treffer 6 oder weniger, oder EUR/Zeit steigen.
+
+## Runde K4: fester Präfix für den Cache
+
+Vor dem Lauf. Systemprompt, sortierte Werkzeugliste und Memory-Schnappschuss bytegleich vorne. Der API-Teil sortiert die Werkzeuge (`clusters.rs`); der Claude-CLI-Teil bekommt die Werkzeugliste vom MCP-Server, dessen Reihenfolge und Mitos-Index liegen in `mcp.rs` und damit bei Claude. Vorhersage: -30 % EUR bei gleichen Tokens. Der Claude-Teil kann den Werkzeuglisten-Teil erst nach der Server-Änderung messen; der System-/Task-Präfix ist bereits stabil. Abbruch: EUR nicht mindestens 15 % tiefer oder Treffer schlechter.
+
+## Runde K3: Mitos-Index im Cluster
+
+Vor dem Lauf. Die Werkzeugliste ist 18,7 % der Eingabe (22.552 Byte, etwa 5.638 Tokens je Aufruf). Vorhersage: -20 % Eingabetokens, EUR und Zeit entsprechend. Der Claude-CLI-Teil bekommt die Werkzeuge vom `penelope mcp`-Server; der Server liefert die vollen Schemas. Der Mitos-Index braucht eine Server-Änderung in `mcp.rs`/`main.rs` (Claude) oder einen API-Teil. Blockiert für den aktuellen Claude-CLI-Cluster.
+
+## K7: ein Teil geht direkt an large
+
+Vor dem Lauf. Die 28 Entwicklungsaufgaben haben 1 unabhängigen Teil. Regel: ein Teil geht direkt an large; der Cluster erst ab 3 Teilen. Die Eval-Route `cluster` prüft die Worker-Zahl des Profils und ruft bei weniger als 3 den large-Pfad. Kein neuer bezahlter Lauf: der large-Basislauf ist die Messung.
