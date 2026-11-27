@@ -55,6 +55,7 @@ mod privacy_bench;
 mod providers;
 mod research;
 mod deepresearch;
+mod datatable;
 mod route;
 mod scout;
 mod scrape;
