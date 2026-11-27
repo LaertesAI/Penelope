@@ -23,8 +23,29 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Test
-        working-directory: cli
-        run: cargo test --locked
+        run: cargo test --workspace --locked
+
+  clippy:
+    name: cargo clippy (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            experimental: false
+          - os: windows-latest
+            experimental: true
+          - os: macos-latest
+            experimental: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked
 
   audit:
     name: cargo audit
@@ -33,5 +54,4 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo install cargo-audit --locked
-      - working-directory: cli
-        run: cargo audit
+      - run: cargo audit

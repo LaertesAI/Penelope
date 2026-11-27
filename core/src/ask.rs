@@ -10,7 +10,6 @@
 //! a terminal and the same state machine can run in another front end.
 
 use crate::config::Ctx;
-use ratatui::crossterm::event::KeyCode;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
@@ -302,6 +301,25 @@ pub fn reply_text(qs: &[Question], reply: &Reply) -> String {
     }
 }
 
+/// One key of the dialog, without a terminal crate. Each frontend maps its own key event to this.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Key {
+    Esc,
+    Tab,
+    BackTab,
+    Left,
+    Right,
+    Up,
+    Down,
+    Enter,
+    Backspace,
+    PageUp,
+    PageDown,
+    Char(char),
+    /// A key the dialog does not use.
+    Other,
+}
+
 /// What a person sees as the state of the dialog.
 #[derive(Debug, PartialEq)]
 pub enum Outcome {
@@ -383,25 +401,28 @@ impl Dialog {
     }
 
     /// One key. Esc always closes the whole dialog.
-    pub fn key(&mut self, code: KeyCode) -> Outcome {
-        if code == KeyCode::Esc {
+    pub fn key(&mut self, code: Key) -> Outcome {
+        if code == Key::Other {
+            return Outcome::Continue;
+        }
+        if code == Key::Esc {
             return Outcome::Close;
         }
         match code {
-            KeyCode::PageDown => { self.scroll += 3; return Outcome::Continue; }
-            KeyCode::PageUp => { self.scroll = self.scroll.saturating_sub(3); return Outcome::Continue; }
+            Key::PageDown => { self.scroll += 3; return Outcome::Continue; }
+            Key::PageUp => { self.scroll = self.scroll.saturating_sub(3); return Outcome::Continue; }
             _ => {}
         }
         if self.on_summary() {
             match code {
-                KeyCode::Enter => match (0..self.qs.len()).find(|i| !self.answered(*i)) {
+                Key::Enter => match (0..self.qs.len()).find(|i| !self.answered(*i)) {
                     None => return Outcome::Send(self.answers()),
                     Some(i) => {
                         self.go(i);
                         self.warn = format!("question {} has no answer yet", i + 1);
                     }
                 },
-                KeyCode::Left | KeyCode::BackTab | KeyCode::Up => self.go(self.tab.saturating_sub(1)),
+                Key::Left | Key::BackTab | Key::Up => self.go(self.tab.saturating_sub(1)),
                 _ => {}
             }
             return Outcome::Continue;
@@ -410,15 +431,15 @@ impl Dialog {
         let n_opts = self.qs[i].options.len();
         let text_row = self.qs[i].allow_text.then_some(n_opts);
         match code {
-            KeyCode::Tab => { self.go(self.tab + 1); return Outcome::Continue; }
-            KeyCode::BackTab => { self.go(self.tab.saturating_sub(1)); return Outcome::Continue; }
+            Key::Tab => { self.go(self.tab + 1); return Outcome::Continue; }
+            Key::BackTab => { self.go(self.tab.saturating_sub(1)); return Outcome::Continue; }
             _ => {}
         }
         if self.typing {
             match code {
-                KeyCode::Char(c) => { self.text[i].push(c); if !self.qs[i].multi_select { self.picked[i].iter_mut().for_each(|p| *p = false); } }
-                KeyCode::Backspace => { self.text[i].pop(); }
-                KeyCode::Enter => {
+                Key::Char(c) => { self.text[i].push(c); if !self.qs[i].multi_select { self.picked[i].iter_mut().for_each(|p| *p = false); } }
+                Key::Backspace => { self.text[i].pop(); }
+                Key::Enter => {
                     self.typing = false;
                     if self.text[i].trim().is_empty() {
                         self.warn = "type an answer or choose one of the options".to_string();
@@ -426,27 +447,27 @@ impl Dialog {
                         self.go(self.tab + 1);
                     }
                 }
-                KeyCode::Up => { self.typing = false; self.cursor[i] = n_opts.saturating_sub(1); }
-                KeyCode::Down => self.typing = false,
+                Key::Up => { self.typing = false; self.cursor[i] = n_opts.saturating_sub(1); }
+                Key::Down => self.typing = false,
                 _ => {}
             }
             return Outcome::Continue;
         }
         self.warn.clear();
         match code {
-            KeyCode::Up => self.cursor[i] = self.cursor[i].saturating_sub(1),
-            KeyCode::Down => self.cursor[i] = (self.cursor[i] + 1).min(self.rows(i) - 1),
-            KeyCode::Right => self.go(self.tab + 1),
-            KeyCode::Left => self.go(self.tab.saturating_sub(1)),
-            KeyCode::Char(c) if c.is_ascii_digit() && c != '0' && (c as usize - '0' as usize) <= n_opts && Some(self.cursor[i]) != text_row => {
+            Key::Up => self.cursor[i] = self.cursor[i].saturating_sub(1),
+            Key::Down => self.cursor[i] = (self.cursor[i] + 1).min(self.rows(i) - 1),
+            Key::Right => self.go(self.tab + 1),
+            Key::Left => self.go(self.tab.saturating_sub(1)),
+            Key::Char(c) if c.is_ascii_digit() && c != '0' && (c as usize - '0' as usize) <= n_opts && Some(self.cursor[i]) != text_row => {
                 let k = c as usize - '1' as usize;
                 self.pick(i, k);
                 if !self.qs[i].multi_select { self.go(self.tab + 1); }
             }
-            KeyCode::Char(' ') => {
+            Key::Char(' ') => {
                 if Some(self.cursor[i]) == text_row { self.typing = true; } else { let k = self.cursor[i]; self.pick(i, k); }
             }
-            KeyCode::Enter => {
+            Key::Enter => {
                 if Some(self.cursor[i]) == text_row {
                     self.typing = true;
                 } else if self.qs[i].multi_select {
@@ -461,7 +482,7 @@ impl Dialog {
                     self.go(self.tab + 1);
                 }
             }
-            KeyCode::Char(c) if text_row.is_some() && !c.is_control() => {
+            Key::Char(c) if text_row.is_some() && !c.is_control() => {
                 // A letter starts the free answer.
                 self.cursor[i] = n_opts;
                 self.typing = true;
@@ -512,12 +533,12 @@ mod tests {
     #[test]
     fn a_single_choice_advances_and_the_summary_sends() {
         let mut d = dialog(false);
-        assert_eq!(d.key(KeyCode::Char('2')), Outcome::Continue);
+        assert_eq!(d.key(Key::Char('2')), Outcome::Continue);
         assert_eq!(d.tab, 1);
-        assert_eq!(d.key(KeyCode::Down), Outcome::Continue);
-        assert_eq!(d.key(KeyCode::Enter), Outcome::Continue);
+        assert_eq!(d.key(Key::Down), Outcome::Continue);
+        assert_eq!(d.key(Key::Enter), Outcome::Continue);
         assert!(d.on_summary());
-        match d.key(KeyCode::Enter) {
+        match d.key(Key::Enter) {
             Outcome::Send(a) => assert_eq!(a, vec![Answer::chosen("beta"), Answer::chosen("beta")]),
             other => panic!("{:?}", other),
         }
@@ -526,17 +547,17 @@ mod tests {
     #[test]
     fn multi_select_toggles_with_space_and_needs_one_pick() {
         let mut d = dialog(true);
-        d.key(KeyCode::Enter);
+        d.key(Key::Enter);
         assert_eq!(d.tab, 0, "nothing picked yet");
         assert!(d.warn.contains("at least one"));
-        d.key(KeyCode::Char(' '));
-        d.key(KeyCode::Down);
-        d.key(KeyCode::Down);
-        d.key(KeyCode::Char(' '));
-        d.key(KeyCode::Char('1'));
+        d.key(Key::Char(' '));
+        d.key(Key::Down);
+        d.key(Key::Down);
+        d.key(Key::Char(' '));
+        d.key(Key::Char('1'));
         assert_eq!(d.answers()[0].labels, vec!["gamma"]);
-        d.key(KeyCode::Char('1'));
-        d.key(KeyCode::Enter);
+        d.key(Key::Char('1'));
+        d.key(Key::Enter);
         assert_eq!(d.tab, 1);
         assert_eq!(d.answers()[0].labels, vec!["alpha", "gamma"]);
     }
@@ -544,18 +565,18 @@ mod tests {
     #[test]
     fn a_free_text_answer_replaces_the_choice_and_enter_confirms_it() {
         let mut d = dialog(false);
-        d.key(KeyCode::Char('1'));
-        d.key(KeyCode::Left);
+        d.key(Key::Char('1'));
+        d.key(Key::Left);
         assert!(d.answers()[0].labels == vec!["alpha"]);
-        d.key(KeyCode::Down);
-        d.key(KeyCode::Down);
-        d.key(KeyCode::Down);
-        d.key(KeyCode::Enter);
+        d.key(Key::Down);
+        d.key(Key::Down);
+        d.key(Key::Down);
+        d.key(Key::Enter);
         assert!(d.typing);
-        for c in "two weeks".chars() { d.key(KeyCode::Char(c)); }
-        d.key(KeyCode::Backspace);
-        d.key(KeyCode::Char('s'));
-        assert_eq!(d.key(KeyCode::Enter), Outcome::Continue);
+        for c in "two weeks".chars() { d.key(Key::Char(c)); }
+        d.key(Key::Backspace);
+        d.key(Key::Char('s'));
+        assert_eq!(d.key(Key::Enter), Outcome::Continue);
         assert_eq!(d.tab, 1);
         let a = d.answers();
         assert_eq!(a[0], Answer::typed("two weeks"));
@@ -564,21 +585,21 @@ mod tests {
     #[test]
     fn a_letter_starts_the_free_answer_and_a_question_without_text_row_ignores_it() {
         let mut d = dialog(false);
-        d.key(KeyCode::Char('x'));
+        d.key(Key::Char('x'));
         assert!(d.typing && d.text[0] == "x");
-        d.key(KeyCode::Enter);
+        d.key(Key::Enter);
         d.go(1);
-        d.key(KeyCode::Char('x'));
+        d.key(Key::Char('x'));
         assert!(!d.typing && d.text[1].is_empty());
     }
 
     #[test]
     fn the_summary_refuses_an_unanswered_question_and_jumps_to_it() {
         let mut d = dialog(false);
-        d.key(KeyCode::Char('1'));
-        d.key(KeyCode::Tab);
+        d.key(Key::Char('1'));
+        d.key(Key::Tab);
         assert!(d.on_summary());
-        assert_eq!(d.key(KeyCode::Enter), Outcome::Continue);
+        assert_eq!(d.key(Key::Enter), Outcome::Continue);
         assert_eq!(d.tab, 1);
         assert!(d.warn.contains("question 2"));
     }
@@ -586,26 +607,26 @@ mod tests {
     #[test]
     fn escape_closes_the_whole_dialog_anywhere() {
         let mut d = dialog(false);
-        assert_eq!(d.key(KeyCode::Esc), Outcome::Close);
-        d.key(KeyCode::Char('x'));
-        assert_eq!(d.key(KeyCode::Esc), Outcome::Close);
+        assert_eq!(d.key(Key::Esc), Outcome::Close);
+        d.key(Key::Char('x'));
+        assert_eq!(d.key(Key::Esc), Outcome::Close);
         d.go(2);
-        assert_eq!(d.key(KeyCode::Esc), Outcome::Close);
+        assert_eq!(d.key(Key::Esc), Outcome::Close);
     }
 
     #[test]
     fn digits_type_once_the_text_row_is_active_and_still_choose_on_an_option_row() {
         let mut d = Dialog::new(parse_questions(&json!([q(1, false, true)])).unwrap(), now_secs() + 100);
-        for _ in 0..3 { d.key(KeyCode::Down); }
+        for _ in 0..3 { d.key(Key::Down); }
         assert_eq!(d.cursor[0], 3);
-        d.key(KeyCode::Char('2'));
+        d.key(Key::Char('2'));
         assert!(d.typing && d.text[0] == "2", "a digit on the text row starts the free answer");
-        for c in "0 days".chars() { d.key(KeyCode::Char(c)); }
+        for c in "0 days".chars() { d.key(Key::Char(c)); }
         assert_eq!(d.text[0], "20 days");
-        d.key(KeyCode::Enter);
+        d.key(Key::Enter);
         assert_eq!(d.answers()[0], Answer::typed("20 days"));
         let mut e = Dialog::new(parse_questions(&json!([q(1, false, true)])).unwrap(), now_secs() + 100);
-        e.key(KeyCode::Char('2'));
+        e.key(Key::Char('2'));
         assert_eq!(e.answers()[0], Answer::chosen("beta"), "on an option row a digit still chooses");
     }
 
@@ -634,10 +655,10 @@ mod tests {
     #[test]
     fn a_long_question_text_scrolls_and_the_page_keys_never_answer() {
         let mut d = dialog(false);
-        d.key(KeyCode::PageDown);
+        d.key(Key::PageDown);
         assert_eq!(d.scroll, 3);
-        d.key(KeyCode::PageUp);
-        d.key(KeyCode::PageUp);
+        d.key(Key::PageUp);
+        d.key(Key::PageUp);
         assert_eq!(d.scroll, 0);
         assert!(!d.answered(0));
     }

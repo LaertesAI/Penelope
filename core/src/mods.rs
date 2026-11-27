@@ -8,8 +8,7 @@
 //! The interface reads the settings through `Mod`; the picture is loaded by `tui::picture` when the mod goes on.
 
 use crate::config::Ctx;
-use crate::tui::art::{self, Rgb};
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crate::theme::Rgb;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -254,8 +253,8 @@ pub fn parse(folder: &str, dir: &Path, text: &str) -> Result<Mod, String> {
         None | Some(Value::Null) => {}
         Some(Value::Object(map)) => {
             for (key, value) in map {
-                if !art::NAMES.contains(&key.as_str()) {
-                    return Err(format!("theme colour \"{}\" is not one of {}", key, art::NAMES.join(", ")));
+                if !crate::theme::NAMES.contains(&key.as_str()) {
+                    return Err(format!("theme colour \"{}\" is not one of {}", key, crate::theme::NAMES.join(", ")));
                 }
                 let raw = value.as_str().ok_or_else(|| format!("theme.{} must be a hex colour such as #E8825A", key))?;
                 let rgb = parse_hex(raw).ok_or_else(|| format!("theme.{} = {} is not a hex colour such as #E8825A", key, raw))?;
@@ -353,24 +352,6 @@ pub fn normalize_key(raw: &str) -> Result<String, String> {
     if alt { out.push_str("alt+"); }
     out.push_str(base);
     Ok(out)
-}
-
-/// The name of a pressed key in the language of a manifest. Only bindable keys have a name.
-pub fn key_name(event: &KeyEvent) -> Option<String> {
-    let ctrl = event.modifiers.contains(KeyModifiers::CONTROL);
-    let alt = event.modifiers.contains(KeyModifiers::ALT);
-    let base = match event.code {
-        KeyCode::Char(c) if c.is_ascii_alphanumeric() => c.to_ascii_lowercase().to_string(),
-        KeyCode::F(n) if (1..=12).contains(&n) => format!("f{}", n),
-        KeyCode::Left if alt => "left".to_string(),
-        KeyCode::Right if alt => "right".to_string(),
-        _ => return None,
-    };
-    let mut out = String::new();
-    if ctrl { out.push_str("ctrl+"); }
-    if alt { out.push_str("alt+"); }
-    out.push_str(&base);
-    Some(out)
 }
 
 /// One row of `/mod list`.
@@ -488,7 +469,7 @@ pub fn new_request(ctx: &Ctx, request: &str) -> (String, String) {
     let name = available_name(ctx, &suggest_name(request));
     let dir = mods_dir(ctx).join(&name);
     let _ = fs::create_dir_all(&dir);
-    let colors = art::NAMES.join(", ");
+    let colors = crate::theme::NAMES.join(", ");
     let actions = action_names();
     let prompt = format!(
         "Write a Penelope mod for this request: \"{request}\"\n\n\
@@ -549,7 +530,7 @@ mod tests {
         assert_eq!(m.keys, vec![(Action::CopyLast, "alt+1".to_string()), (Action::Sidebar, "ctrl+y".to_string())]);
         assert_eq!(m.startup, "welcome");
         assert!(m.picture.as_ref().unwrap().is_file());
-        let palette = art::Palette::DEFAULT.with(&m.theme).unwrap();
+        let palette = crate::theme::Palette::DEFAULT.with(&m.theme).unwrap();
         assert_eq!((palette.ink, palette.clay), ((1, 2, 3), (255, 0, 0)));
     }
 

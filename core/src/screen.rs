@@ -65,7 +65,7 @@ fn spawn(ctx: &Ctx) -> Result<Bridge, String> {
     // A Wayland desktop without ydotool can use the small uinput helper. Only when input is already on.
     let mut input_cmd = ctx.cfg["screencodec"]["input_cmd"].as_str().unwrap_or("").to_string();
     if input_cmd.is_empty() && desktop_input != "off" && std::env::var("WAYLAND_DISPLAY").is_ok() && crate::config::which("ydotool").is_none() {
-        let helper = crate::input::binary();
+        let helper = crate::platform::input_binary();
         if helper.is_file() {
             input_cmd = helper.to_string_lossy().to_string();
         }

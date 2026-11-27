@@ -3,6 +3,7 @@
 
 use crate::config::{which, Ctx};
 use crate::mcp;
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
@@ -10,6 +11,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
 /// What happens inside one turn, reported while it runs.
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum Event {
     /// A few characters of text, as the main model writes them.
     Delta(String),
@@ -677,7 +680,7 @@ mod tests {
         items.push(json!({"reply": answer, "error": failed}));
         let id = chat.session.clone().unwrap();
         crate::sessions::save_transcript(&ctx, &id, &items);
-        let screen = format!("{}{}{}{}", names(&events), crate::providers::list(&ctx), crate::doctor_text(&ctx), set);
+        let screen = format!("{}{}{}{}", names(&events), crate::providers::list(&ctx), crate::doctor::text(&ctx), set);
         assert!(!screen.contains(KEY) && screen.contains("PENELOPE_TEST_KEY_STORE") && screen.contains("text Your key is [key]."), "{}", screen);
         // Every request carried the key in its header and nowhere in its body.
         let seen = seen.lock().unwrap();

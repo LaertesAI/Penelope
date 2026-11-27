@@ -850,6 +850,59 @@ pub fn compact_from_block(ctx: &Ctx, block: &Value, server: &str) -> Option<Stri
     Some(line_from(uri, &name, &clean_meta, Some(server)))
 }
 
+/// Every attachment in the store, newest first. A malformed sidecar is skipped. The origin is the tool name in front
+/// of the hash; a name without a dash keeps its whole prefix.
+pub fn list(ctx: &Ctx) -> Vec<Attachment> {
+    let mut out = Vec::new();
+    let Ok(top) = fs::read_dir(dir_of(ctx)) else {
+        return out;
+    };
+    for shard in top.flatten().filter(|e| e.path().is_dir()) {
+        let Ok(entries) = fs::read_dir(shard.path()) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let Some(sha) = name.strip_suffix(".json") else {
+                continue;
+            };
+            if !is_sha(sha) {
+                continue;
+            }
+            if let Some(att) = read_sidecar(ctx, sha) {
+                out.push(att);
+            }
+        }
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
+}
+
+/// The tool or server that produced an attachment: the part of the name before the 8 hex characters of the hash.
+pub fn origin(att: &Attachment) -> String {
+    match att.name.rsplit_once('-') {
+        Some((head, tail)) if tail.len() == 8 && tail.chars().all(|c| c.is_ascii_hexdigit()) => {
+            head.to_string()
+        }
+        _ => att.name.clone(),
+    }
+}
+
+/// The bytes of one attachment, after the hash check. `None` when the file is gone.
+pub fn read(ctx: &Ctx, sha: &str) -> Option<Vec<u8>> {
+    if !is_sha(sha) {
+        return None;
+    }
+    let data = fs::read(data_path(ctx, sha)).ok()?;
+    if crate::brief::sha256_hex(&data) != sha {
+        return None;
+    }
+    Some(data)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

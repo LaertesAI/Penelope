@@ -15,6 +15,11 @@ pub fn home_str() -> String {
     home().display().to_string()
 }
 
+/// The native pointer helper of a Wayland desktop without ydotool. The command line installs it, ScreenCodec calls it.
+pub fn input_binary() -> PathBuf {
+    home().join(".local").join("bin").join("penelope-uinput")
+}
+
 /// A shell command that runs one line. Unix uses `sh -c`, Windows `cmd /S /C "line"`.
 ///
 /// On Windows the line goes to cmd unchanged. `Command::arg` would escape inner quotes as `\"`, which cmd does not

@@ -693,6 +693,69 @@ pub fn outline(ctx: &Ctx, path: &str, cwd: &str) -> String {
             if hits.len() > 200 { ", the first 200 follow" } else { "" }, shown)
 }
 
+/// One row of a folder listing for a frontend: name, path, kind, size and the last change.
+pub fn listing(dir: &Path) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    let Ok(read) = fs::read_dir(dir) else {
+        return out;
+    };
+    for entry in read.flatten() {
+        let path = entry.path();
+        let Ok(meta) = entry.metadata() else { continue };
+        let modified = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        out.push(serde_json::json!({
+            "name": entry.file_name().to_string_lossy(),
+            "path": path.display().to_string(),
+            "dir": meta.is_dir(),
+            "size": meta.len(),
+            "modified": modified,
+            "ext": path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase(),
+        }));
+    }
+    out.sort_by(|a, b| {
+        b["dir"]
+            .as_bool()
+            .unwrap_or(false)
+            .cmp(&a["dir"].as_bool().unwrap_or(false))
+            .then_with(|| {
+                a["name"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_lowercase()
+                    .cmp(&b["name"].as_str().unwrap_or("").to_lowercase())
+            })
+    });
+    out
+}
+
+/// A file as text for an editor. Refuses a binary file and a file over `limit` bytes.
+pub fn read_plain(path: &Path, limit: u64) -> Result<String, String> {
+    let meta = fs::metadata(path).map_err(|e| format!("cannot read {}: {}", show(path), e))?;
+    if meta.is_dir() {
+        return Err(format!("{} is a folder", show(path)));
+    }
+    if meta.len() > limit {
+        return Err(format!(
+            "{} is {} bytes, over the {} byte limit of the editor",
+            show(path),
+            meta.len(),
+            limit
+        ));
+    }
+    let data = fs::read(path).map_err(|e| format!("cannot read {}: {}", show(path), e))?;
+    String::from_utf8(data).map_err(|_| {
+        format!(
+            "{} is not UTF-8 text, the editor opens text only",
+            show(path)
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
