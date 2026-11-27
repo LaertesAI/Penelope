@@ -7,6 +7,7 @@ mod agents;
 mod apps;
 mod audit;
 mod auth;
+mod autoroute;
 mod backend;
 mod brain;
 mod brief;

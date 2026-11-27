@@ -14,6 +14,8 @@ pub fn default_config() -> Value {
     json!({
         "main": {"kind": "claude-cli", "model": "sonnet", "effort": "high"},
         "weak": {"kind": "claude-cli", "model": "haiku", "effort": "high"},
+        "route": "fixed",
+        "route_context_limit": 100000,
         "run_policy": "safe",
         "sandbox": "off",
         "edit_policy": "ask",

@@ -490,6 +490,7 @@ fn after_edit(ctx: &Ctx, role: &str, name: &str, args: &serde_json::Value, text:
         format!("tests FAILED on attempt {} of {}.", before + 1, attempts)
     });
     out.push_str(&format!("\n{}", detail));
+    crate::autoroute::note_test(ctx, passed);
     if passed {
         return (out, ok);
     }
