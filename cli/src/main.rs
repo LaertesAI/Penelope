@@ -10,6 +10,7 @@ mod auth;
 mod backend;
 mod brain;
 mod brief;
+mod checker;
 mod loom;
 mod config;
 mod clusters;
@@ -123,6 +124,8 @@ penelope provider use NAME [--role main|weak|scout] [--model MODEL] [--workspace
                               write one model setting from the table to config.json
 penelope sessions             list the stored sessions, newest first
 penelope crew                 the eight model families and what does each job today
+penelope check [TEST [--run CMD] [--module CMD]] | check best TEST [N] [--files a,b] -- ISSUE | check gate|report|off
+                              run a reproduction test on the original code and on the change; best-of-N picks the smallest passing fix
 penelope memory map           show the memory map
 penelope memory go QUERY      follow the map to a waypoint and print the notes on the way
 penelope memory note [--path a/b] TEXT
@@ -505,6 +508,18 @@ fn main() {
             _ => print!("{}", auth::status(&ctx)),
         },
         "audit" => print!("{}", audit::run(&ctx)),
+        "check" => match args.get(1).map(String::as_str) {
+            Some(word @ ("gate" | "report" | "off" | "on")) => {
+                let mut ctx = ctx.clone();
+                ctx.cfg["check"]["mode"] = serde_json::json!(if word == "on" { "gate" } else { word });
+                let _ = std::fs::write(ctx.root.join("config.json"), serde_json::to_string_pretty(&ctx.cfg).unwrap_or_default());
+                print!("{}", checker::status(&ctx));
+            }
+            _ => {
+                let line: Vec<String> = args[1..].iter().map(|a| if a.contains(char::is_whitespace) { format!("\"{}\"", a) } else { a.clone() }).collect();
+                println!("{}", checker::command(&ctx, &line.join(" ")).trim_end());
+            }
+        },
         "eval" => {
             let mut file = None;
             let mut setup = None;

@@ -112,7 +112,7 @@ above it holds a repository. Paths are relative to it, and ~ stands for the home
 8. A rule that binds every later session goes to the shared memory: memory_note with scope global. A fact of this project stays in the project. \
 9. When a fixed command would save steps next time, write it as a tool with tool_new; a call runs through run and asks like run. \
 10. After a change, hand the claim and the command output to check. Report what passed and what is still open. \
-11. Answer briefly. Today is {today} (UTC).", look, cwd = cwd, tests = tests,
+11. Answer briefly. Today is {today} (UTC).{check}", look, cwd = cwd, tests = tests, check = crate::checker::rule(ctx),
             today = &crate::sessions::stamp(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0))[..10])
 }
 
@@ -209,7 +209,12 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
             kind if crate::llm::is_api(kind) => self.turn_api(ctx, user, &system, &mut watch),
             _ => self.turn_claude(ctx, user, &system, &mut watch),
         };
+        let checked = crate::checker::turn_note(ctx, &trace, crate::checker::turn_start());
         self.trace = trace;
+        let out = out.map(|answer| match checked {
+            Some(line) => format!("{}\n\n{}", answer, line),
+            None => answer,
+        });
         let out = out.map(|answer| {
             let (shown, hits) = answers.block(ctx, &answer);
             if hits > 0 {

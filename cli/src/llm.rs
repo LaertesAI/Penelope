@@ -387,6 +387,10 @@ pub fn run_loop_with(model: &Value, system: &str, history: &mut Vec<Value>, tool
             continue;
         }
         if reply.calls.is_empty() {
+            if let Some(reminder) = crate::checker::before_final() {   // a code edit without a check gets one reminder
+                history.push(user_message(&reminder));
+                continue;
+            }
             return Ok(reply.text);
         }
         if !reply.text.is_empty() {

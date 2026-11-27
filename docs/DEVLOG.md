@@ -1873,3 +1873,18 @@ Open:
 - Strikes are counted per thread. A scout thread starts at zero and has no turn reset.
 - `route::validate` still runs after the watcher and says `NOT called.` for the cases the watcher misses, such as an
   empty required string inside a nested object.
+
+## Executable checker for code tasks (branch `feat/exec-checker`)
+
+`checker.rs` runs the code that Eurykleia only shapes. The tool `verify_fix` takes a reproduction test, runs it in a
+detached git worktree at HEAD (it must fail), applies the working-tree change (it must pass) and runs the module tests
+(they must pass, or must already fail on HEAD). Best-of-N asks the candidate models for SEARCH/REPLACE fixes, sorts all
+candidates by diff size and returns the first that passes. `check.mode` `gate` sends one reminder when the lead model
+answers after a code edit without a check; every code turn ends with a verdict line, and unverified turns are counted
+in `.penelope/check/log.jsonl`. Hypotheses with numbers in `docs/CHECKER.md`. Tests: 14 new, `cargo test` 476 passed
+in the binary, 1 ignored; the one failure is the known clusters test under the custom TMPDIR, which passes without it.
+
+Open:
+- No live run yet. H1 (unnoticed failures 20 of 20 down to at most 8 of 28 tasks) needs one eval run with `gate`.
+- The winner of best-of-N is written to `winner.diff`, not applied.
+- Module tests are the configured command; there is no test selection as in Agentless.
