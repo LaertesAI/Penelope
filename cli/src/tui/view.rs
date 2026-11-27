@@ -138,7 +138,12 @@ fn footer(f: &mut Frame, app: &App, area: Rect) {
     let right = format!("penelope {}", env!("CARGO_PKG_VERSION"));
     put(f, area, area.x + 2, area.y, &clip(&cwd, (area.width as usize).saturating_sub(width(&right) + 6)), fg(DIM));
     put(f, area, area.right().saturating_sub(width(&right) as u16 + 2), area.y, &right, fg(DIM));
-    let _ = app;
+    // The model and its effort sit left of the version, so an effort change shows at once.
+    let model = app.model_label();
+    let at = area.right().saturating_sub((width(&right) + width(&model) + 6) as u16);
+    if at > area.x + 2 + width(&cwd).min(12) as u16 {
+        put(f, area, at, area.y, &model, fg(SEA));
+    }
 }
 
 /// The input box with its lower edge on `bottom`. Returns the row above the box.

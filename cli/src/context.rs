@@ -109,6 +109,17 @@ fn tokens(text: &str) -> Vec<(usize, usize, String)> {
     while i < chars.len() {
         if chars[i] == '@' && (i == 0 || chars[i - 1].is_whitespace() || matches!(chars[i - 1], '(' | '[' | '"' | '\'')) {
             let start = i;
+            if chars.get(i + 1) == Some(&'"') {
+                // A quoted token holds any character, for a dropped path with spaces or umlauts.
+                if let Some(len) = chars[i + 2..].iter().position(|c| *c == '"') {
+                    let token: String = chars[i + 2..i + 2 + len].iter().collect();
+                    if !token.is_empty() {
+                        out.push((start, i + 3 + len, token));
+                    }
+                    i += 3 + len;
+                    continue;
+                }
+            }
             let mut j = i + 1;
             while j < chars.len() && is_path_char(chars[j]) {
                 j += 1;
@@ -125,6 +136,11 @@ fn tokens(text: &str) -> Vec<(usize, usize, String)> {
         }
     }
     out
+}
+
+/// The `@` token for a path: plain if every character is allowed in a bare token, else quoted as `@"..."`.
+pub fn token_for(path: &str) -> String {
+    if !path.is_empty() && path.chars().all(is_path_char) { format!("@{}", path) } else { format!("@\"{}\"", path.replace('"', "")) }
 }
 
 fn byte_index(chars: &[char], at: usize) -> usize {
@@ -220,6 +236,15 @@ pub fn memory_index(ctx: &Ctx, max: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_quoted_token_holds_spaces_and_a_dropped_path_round_trips() {
+        let list = tokens("read @\"/tmp/my dir/Größe.txt\" and @src/main.rs");
+        assert_eq!(list.iter().map(|t| t.2.as_str()).collect::<Vec<_>>(), vec!["/tmp/my dir/Größe.txt", "src/main.rs"]);
+        assert_eq!(token_for("/tmp/plain.txt"), "@/tmp/plain.txt");
+        assert_eq!(token_for("/tmp/a b.txt"), "@\"/tmp/a b.txt\"");
+        assert_eq!(tokens(&token_for("/tmp/a b/ü.txt"))[0].2, "/tmp/a b/ü.txt");
+    }
+
     use super::*;
     use std::fs;
 

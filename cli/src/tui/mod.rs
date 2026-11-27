@@ -4,6 +4,7 @@
 
 pub(crate) mod art;
 pub(crate) mod picture;
+mod paths;
 mod text;
 mod view;
 
@@ -92,6 +93,8 @@ pub struct Cmd {
 pub const COMMANDS: &[Cmd] = &[
     Cmd { name: "/new", help: "start a new session", key: "ctrl+n", takes_text: false },
     Cmd { name: "/model", help: "choose the model of the main or the weaker setting", key: "ctrl+o", takes_text: false },
+    Cmd { name: "/effort", help: "effort of the main model: /effort shows the levels, /effort LEVEL sets one", key: "alt+e", takes_text: true },
+    Cmd { name: "/folder", help: "the workspace folder: /folder shows it, /folder PATH changes it", key: "", takes_text: true },
     Cmd { name: "/mode", help: "auto, manual, safe, review, privacy or power", key: "", takes_text: false },
     Cmd { name: "/sessions", help: "list the stored sessions and open one", key: "f2", takes_text: false },
     Cmd { name: "/setup", help: "answer the setup questions again", key: "", takes_text: false },
@@ -687,6 +690,136 @@ impl App {
         self.toast(format!("{} · effort {}", model, next));
     }
 
+    /// The model of the main role and its effort levels. The levels are empty for a model without an effort field.
+    pub fn main_effort(&self) -> (String, Vec<String>, String) {
+        let model = self.ctx.cfg["main"]["model"].as_str().unwrap_or("").to_string();
+        let levels = self.model_efforts("main", &model);
+        let current = self.ctx.cfg["main"]["effort"].as_str().unwrap_or("").to_string();
+        (model, levels, current)
+    }
+
+    /// The model and effort of the main role for the footer: `sonnet · high`, or `haiku · no effort`.
+    pub fn model_label(&self) -> String {
+        let (model, levels, current) = self.main_effort();
+        if levels.is_empty() { format!("{} · no effort", model) } else { format!("{} · {}", model, if current.is_empty() { &levels[0] } else { &current }) }
+    }
+
+    /// Stores one effort level of the main model. The next request of the running session reads it from the config.
+    fn store_main_effort(&mut self, level: &str) {
+        self.ctx.cfg["main"]["effort"] = serde_json::json!(level);
+        save_config(&self.ctx);
+        let model = self.ctx.cfg["main"]["model"].as_str().unwrap_or("").to_string();
+        self.toast(format!("{} · effort {} · applies to the next request", model, level));
+    }
+
+    /// Alt+E in the chat view: the next level of the main model, from the highest back to the lowest.
+    fn cycle_main_effort(&mut self) {
+        let (model, levels, current) = self.main_effort();
+        if levels.is_empty() {
+            self.toast(format!("{} has no effort field; nothing is sent.", model));
+            return;
+        }
+        let at = levels.iter().position(|e| *e == current).unwrap_or(levels.len() - 1);
+        let next = levels[(at + 1) % levels.len()].clone();
+        self.store_main_effort(&next);
+    }
+
+    /// `/effort` shows the level and the choices, `/effort LEVEL` sets one.
+    fn effort_command(&mut self, rest: &str) {
+        let (model, levels, current) = self.main_effort();
+        if levels.is_empty() {
+            self.toast(format!("{} has no effort field; nothing is sent.", model));
+            return;
+        }
+        let level = rest.trim().to_lowercase();
+        if level.is_empty() {
+            let shown = if current.is_empty() { "unset".to_string() } else { current };
+            self.note("◆", "effort", format!("{} · {} · levels: {} · alt+e cycles", model, shown, levels.join(", ")), art::SEA);
+        } else if levels.contains(&level) {
+            self.store_main_effort(&level);
+        } else {
+            self.toast(format!("unknown effort {}; {} has: {}", level, model, levels.join(", ")));
+        }
+    }
+
+    /// `/folder` shows the workspace, `/folder PATH` moves into another folder.
+    fn change_folder(&mut self, rest: &str) {
+        let cwd = std::env::current_dir().unwrap_or_default();
+        if rest.trim().is_empty() {
+            self.note("◆", "folder", crate::files::show(&cwd), art::SEA);
+            return;
+        }
+        if self.busy.is_some() {
+            self.toast("a turn is running. Stop it with esc before you change the folder".to_string());
+            return;
+        }
+        let target = match paths::resolve_folder(rest, &cwd, &crate::platform::home_str()) {
+            Ok(p) => p,
+            Err(e) => return self.toast(e),
+        };
+        if let Err(e) = std::env::set_current_dir(&target) {
+            return self.toast(format!("cannot enter {}: {}", target.display(), e));
+        }
+        self.save_session();
+        self.reload_workspace();
+        let shown = crate::files::show(&target);
+        let root = crate::files::show(&self.ctx.root);
+        self.note("◆", "folder", format!("{} · settings, memory and sessions from {}", shown, root), art::SEA);
+    }
+
+    /// Reads again what depends on the working folder: the nearest `.penelope` with its config, memory, rules and
+    /// sessions, the history, the approval folder and the side panel. The transcript starts empty.
+    fn reload_workspace(&mut self) {
+        let models = std::mem::take(&mut self.model_cache);
+        self.ctx = crate::config::load(&crate::config::find_root(None));
+        self.model_cache = models;
+        self.approve_dir = self.ctx.root.join("approvals");
+        let _ = fs::remove_dir_all(&self.approve_dir);
+        let _ = fs::create_dir_all(&self.approve_dir);
+        std::env::set_var("PENELOPE_APPROVE_DIR", &self.approve_dir);
+        self.history = fs::read_to_string(self.ctx.root.join("history.jsonl")).unwrap_or_default().lines()
+            .filter_map(|l| serde_json::from_str::<String>(l).ok()).collect();
+        self.history = self.history[self.history.len().saturating_sub(200)..].to_vec();
+        self.hist_at = None;
+        self.items.clear();
+        self.session_id = None;
+        self.chat = Some(Chat::new());
+        self.tokens = (0, 0);
+        self.turns = 0;
+        self.tool_calls = 0;
+        self.trail.clear();
+        self.learned.clear();
+        self.context_refs.clear();
+        self.scroll = 0;
+        self.refresh_tabs();
+        self.refresh_side();
+    }
+
+    /// Tab after `/folder `: completes the folder name as far as it is clear.
+    fn complete_folder_input(&mut self) -> bool {
+        let text = self.input_text();
+        let Some(arg) = text.strip_prefix("/folder ") else { return false };
+        let cwd = std::env::current_dir().unwrap_or_default();
+        if let Some(done) = paths::complete_folder(arg, &cwd, &crate::platform::home_str()) {
+            self.set_input(&format!("/folder {}", done));
+        }
+        true
+    }
+
+    /// A drop: the pasted text names only existing files or folders. They become `@` tokens in the input, so the
+    /// existing context rules apply (at most 5 references, 6000 characters, a long file as its outline).
+    fn drop_paths(&mut self, text: &str) -> bool {
+        let Some(list) = paths::dropped(text, &crate::platform::home_str()) else { return false };
+        let mut names = Vec::new();
+        for p in &list {
+            self.insert(&format!("{} ", crate::context::token_for(&p.display().to_string())));
+            names.push(format!("{}{}", p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| p.display().to_string()), if p.is_dir() { "/" } else { "" }));
+        }
+        let limit = if list.len() > 5 { " · only the first 5 are sent" } else { "" };
+        self.note("◆", "drop", format!("{} attached · {}{} · sent with the next request", list.len(), names.join(", "), limit), art::SEA);
+        true
+    }
+
     /// The indices of the plugins that match the filter. A command name matches too, so typing `fix` finds the plugin
     /// that owns it.
     pub fn plugin_matches(&self, filter: &str, mode: u8) -> Vec<usize> {
@@ -835,6 +968,9 @@ impl App {
             }
             Overlay::None => prompt = true,
             _ => {}
+        }
+        if prompt && self.drop_paths(&clean) {
+            return;
         }
         if prompt {
             self.insert(&clean);
@@ -1229,6 +1365,8 @@ impl App {
                     Err(e) => self.items.push(Item::Error(e)),
                 }
             }
+            "/effort" => self.effort_command(rest),
+            "/folder" => self.change_folder(rest),
             "/mode" => self.pager("Modes", crate::mode::report(&self.ctx)),
             "/map" => self.pager("Memory map", tools::memory_map(&self.ctx)),
             "/go" if !rest.is_empty() => self.pager("Memory map: the way", tools::memory_go(&self.ctx, rest)),
@@ -2352,6 +2490,7 @@ impl App {
             KeyCode::F(5) => self.command("/new"),
             KeyCode::F(6) => self.arm_delete_session(),
             KeyCode::F(7) => self.command("/app"),
+            KeyCode::Char('e') if alt && !ctrl => self.cycle_main_effort(),
             KeyCode::Char(c) if alt && c.is_ascii_digit() && c != '0' => self.open_tab(c as usize - '1' as usize),
             KeyCode::Esc => {
                 if self.busy.is_some() {
@@ -2366,6 +2505,7 @@ impl App {
                 let cmd = slash[self.slash_sel.min(slash.len() - 1)];
                 self.set_input(&format!("{}{}", cmd.name, if cmd.takes_text { " " } else { "" }));
             }
+            KeyCode::Tab if slash.is_empty() && self.input_text().starts_with("/folder ") => { self.complete_folder_input(); }
             KeyCode::Enter if !slash.is_empty() && !alt => {
                 let cmd = slash[self.slash_sel.min(slash.len() - 1)];
                 self.run_cmd(cmd);
@@ -2432,6 +2572,8 @@ fn help_text() -> String {
     let mut out = String::from("Keys\n\
         enter            send the request\n\
         alt+enter        new line in the request (also ctrl+j)\n\
+        alt+e            next effort level of the main model (ctrl+e stays end of line)\n\
+        drop a file      a dropped file or folder is attached like @path\n\
         up, down         earlier and later requests\n\
         page up, down    scroll the transcript (also the mouse wheel)\n\
         esc              stop the running turn, or empty the input\n\
@@ -2935,6 +3077,60 @@ mod tests {
         assert_eq!(a.ctx.cfg["main"]["effort"], serde_json::json!("low"));       // wraps to the first level
         a.select_provider("claude-cli", "main");
         assert_eq!((a.ctx.cfg["main"]["model"].as_str(), a.ctx.cfg["main"]["effort"].as_str()), (Some("claude-sonnet-5-5"), Some("high")));
+    }
+
+    #[test]
+    fn alt_e_and_the_effort_command_change_the_main_effort_in_the_chat() {
+        let mut a = app();
+        a.ctx.cfg["main"] = serde_json::json!({"kind": "openai", "base_url": "https://opencode.ai/zen/go/v1",
+                                               "model": "deepseek-v4.1-flash", "effort": "low"});
+        let alt_e = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::ALT);
+        a.key(alt_e);
+        assert_eq!(a.ctx.cfg["main"]["effort"], serde_json::json!("high"));
+        a.key(alt_e);
+        a.key(alt_e);
+        assert_eq!(a.ctx.cfg["main"]["effort"], serde_json::json!("low"));       // wraps from the highest to the lowest
+        press(&mut a, KeyCode::Char('e'));
+        assert_eq!(a.input_text(), "e");                                         // plain e stays a letter
+        a.key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL));
+        assert_eq!(a.cursor, 1);                                                 // ctrl+e stays end of line
+        a.command("/effort max");
+        assert_eq!(a.ctx.cfg["main"]["effort"], serde_json::json!("max"));
+        a.command("/effort turbo");
+        assert_eq!(a.ctx.cfg["main"]["effort"], serde_json::json!("max"));
+        assert!(a.toast.as_ref().unwrap().0.contains("low, high, max"));
+        assert!(a.model_label().ends_with("deepseek-v4.1-flash · max"), "{}", a.model_label());
+        assert!(screen(&mut a, 120, 30).contains("deepseek-v4.1-flash · max"));
+        a.command("/effort");
+        assert!(matches!(a.items.last(), Some(Item::Note { label: "effort", .. })));
+    }
+
+    #[test]
+    fn a_model_without_effort_levels_says_so() {
+        let mut a = app();
+        a.ctx.cfg["main"] = serde_json::json!({"kind": "openai", "base_url": "https://opencode.ai/zen/go/v1", "model": "mimo-v2.6-flash"});
+        assert!(a.model_label().ends_with("no effort"));
+        a.key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::ALT));
+        assert!(a.toast.as_ref().unwrap().0.contains("no effort field"));
+        assert!(a.ctx.cfg["main"]["effort"].is_null());
+    }
+
+    #[test]
+    fn a_paste_of_existing_paths_attaches_them_and_other_text_stays_text() {
+        let mut a = app();
+        let dir = std::env::temp_dir().join(format!("penelope-paste-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("two words.txt"), "hi").unwrap();
+        a.paste(&format!("'{}/two words.txt'", dir.display()));
+        assert!(a.input_text().starts_with("@\""), "{}", a.input_text());
+        assert!(matches!(a.items.last(), Some(Item::Note { label: "drop", text, .. }) if text.contains("1 attached") && text.contains("two words.txt")));
+        a.set_input("");
+        a.paste("just some words");
+        assert_eq!(a.input_text(), "just some words");
+        a.overlay = Overlay::Palette { query: String::new(), sel: 0 };
+        a.paste(&format!("{}/two words.txt", dir.display()));
+        assert!(matches!(&a.overlay, Overlay::Palette { query, .. } if query.contains("two words")));
     }
 
     #[test]
