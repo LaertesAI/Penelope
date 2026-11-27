@@ -1611,7 +1611,9 @@ fn run_model(ctx: &Ctx, c: &Cluster, part: &Part, system: &str, task: &str, max_
     }
     let kind = crate::llm::kind_of(&model).to_string();
     if crate::llm::is_api(&kind) {
-        let tools: Vec<Value> = crate::mcp::tool_specs_for(ctx, &part.role).as_array().cloned().unwrap_or_default();
+        let mut tools: Vec<Value> = crate::mcp::tool_specs_for(ctx, &part.role).as_array().cloned().unwrap_or_default();
+        // A stable order keeps the prompt prefix byte-identical for the provider cache.
+        tools.sort_by(|a, b| a["name"].as_str().unwrap_or("").cmp(b["name"].as_str().unwrap_or("")));
         let mut history = vec![crate::llm::user_message(task)];
         let mut usage = crate::llm::Usage::default();
         let role = part.role.clone();
@@ -1717,7 +1719,7 @@ fn run_model(ctx: &Ctx, c: &Cluster, part: &Part, system: &str, task: &str, max_
     let tokens_out = v["usage"]["output_tokens"].as_u64().unwrap_or(0);
     crate::cost::record(ctx, &format!("cluster:{}", c.name), model["model"].as_str().unwrap_or(""), tokens_in, tokens_out);
     let checks = checks_from_log(&log);
-    let _ = fs::remove_file(&log);
+    // The tool log stays for the offline checker (Eurykleia). It holds the real arguments and results.
     if let Some(stop) = limits.over(ctx) { return Err(stop); }
     if let Some(cause) = watch.lock().unwrap_or_else(|e| e.into_inner()).note_checks(ctx, c, part, &checks) {
         return Err(format!("STUCK: {}", cause));
@@ -3716,6 +3718,21 @@ mod tests {
         let line = fs::read_to_string(cluster_dir(&ctx, &c.id).join("report.txt")).unwrap();
         let r = crate::proof::parse(&line).unwrap();
         assert!(crate::proof::accept(&r).is_err(), "{}", line);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_tool_log_survives_the_checks() {
+        let (ctx, dir) = ctx();
+        let p = profile(&ctx, "solo").unwrap();
+        let c = new_cluster(&ctx, &p, "tool-log", "do the task", None, Vec::new(), 0).unwrap();
+        let log = cluster_dir(&ctx, &c.id).join("tools-coder.jsonl");
+        fs::create_dir_all(cluster_dir(&ctx, &c.id)).unwrap();
+        fs::write(&log, "{\"name\":\"run\",\"args\":{\"command\":\"true\"},\"result\":\"exit code 0\",\"ok\":true}\n").unwrap();
+        let checks = checks_from_log(&log);
+        assert_eq!(checks.len(), 1);
+        assert!(checks[0].ok);
+        assert!(log.is_file(), "the offline checker needs the real arguments and results");
         let _ = fs::remove_dir_all(&dir);
     }
 
