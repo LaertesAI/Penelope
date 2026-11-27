@@ -137,6 +137,7 @@ fn call_raw_inner(ctx: &Ctx, name: &str, a: &Value) -> Result<String, String> {
         "memory_note" => Ok(tools::memory_note_scope(ctx, &s("path"), &s("text"), &s("scope"))),
         "memory_forget" => Ok(tools::guard(ctx, &tools::memory_forget(ctx, &s("text"), &s("scope")))),
         "memory_map" => Ok(tools::guard(ctx, &tools::memory_map(ctx))),
+        "memory_find" => Ok(tools::guard(ctx, &crate::graph::find_text(ctx, &s("query"), a["limit"].as_u64().unwrap_or(8) as usize))),
         "skill" => Ok(tools::guard(ctx, &crate::plugins::skill_body(ctx, &s("name")))),
         "skill_new" => crate::skills::write(ctx, &s("name"), &s("description"), &s("body")),
         "git_commit" => Ok(tools::git_commit(ctx, &a["files"], &s("message"), &s("cwd"))),
