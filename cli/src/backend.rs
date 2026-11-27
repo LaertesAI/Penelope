@@ -244,6 +244,7 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
         if let Ok(dir) = std::env::var("PENELOPE_APPROVE_DIR") {
             servers["penelope"]["env"]["PENELOPE_APPROVE_DIR"] = json!(dir);       // the interface answers questions about unsafe commands
         }
+        servers["penelope"]["env"]["PENELOPE_CHECK_SESSION"] = json!(crate::checker::session());   // the checker keys its record per session
         let mut allowed: Vec<String> = mcp::main_tools(ctx).iter().map(|t| format!("mcp__penelope__{}", t)).collect();
         for t in crate::forge::specs(ctx) {          // a tool Penelope wrote is offered to the claude command too
             if let Some(name) = t["name"].as_str() { allowed.push(format!("mcp__penelope__{}", name)); }

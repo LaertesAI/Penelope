@@ -356,7 +356,7 @@ pub fn run_loop_with(model: &Value, system: &str, history: &mut Vec<Value>, tool
                      tick: &mut dyn FnMut(&Usage) -> Option<String>,
                      exec: &mut dyn FnMut(&ToolCall) -> (String, bool), on_text: &mut dyn FnMut(&str)) -> Result<String, String> {
     let kind = kind_of(model).to_string();
-    for _ in 0..rounds {
+    for round in 0..rounds {
         if cancel.map(|c| c.load(Ordering::SeqCst)).unwrap_or(false) {
             return Err("stopped".to_string());
         }
@@ -387,9 +387,12 @@ pub fn run_loop_with(model: &Value, system: &str, history: &mut Vec<Value>, tool
             continue;
         }
         if reply.calls.is_empty() {
-            if let Some(reminder) = crate::checker::before_final() {   // a code edit without a check gets one reminder
-                history.push(user_message(&reminder));
-                continue;
+            // A code edit without a check gets one reminder, but only while a round is left for the answer to it.
+            if round + 1 < rounds {
+                if let Some(reminder) = crate::checker::before_final() {
+                    history.push(user_message(&reminder));
+                    continue;
+                }
             }
             return Ok(reply.text);
         }

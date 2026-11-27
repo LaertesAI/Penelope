@@ -127,7 +127,7 @@ penelope provider use NAME [--role main|weak|scout] [--model MODEL] [--workspace
 penelope sessions             list the stored sessions, newest first
 penelope crew                 the eight model families and what does each job today
 penelope check [TEST [--run CMD] [--module CMD]] | check best TEST [N] [--files a,b] -- ISSUE | check gate|report|off
-                              run a reproduction test on the original code and on the change; best-of-N picks the smallest passing fix
+                              run a reproduction test on the original code and on the change; best-of-N tries your change first, then the smallest passing model fix
 penelope memory map           show the memory map
 penelope memory go QUERY      follow the map to a waypoint and print the notes on the way
 penelope memory note [--path a/b] TEXT

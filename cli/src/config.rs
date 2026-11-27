@@ -20,7 +20,7 @@ pub fn default_config() -> Value {
         "test_command": "",
         "test_attempts": 3,
         "eurykleia": "on",
-        "check": {"mode": "gate", "module_tests": "", "run": "", "candidates": 3, "models": ["weak"], "timeout": 300, "nudges": 1},
+        "check": {"mode": "gate", "module_tests": "", "run": "", "candidates": 3, "models": ["weak"], "timeout": 300, "budget": 1200, "nudges": 1},
         "delegate": "auto",
         "search": {"kind": "auto", "url": "", "api_key_env": "BRAVE_API_KEY", "tavily_api_key_env": "TAVILY_API_KEY",
                    "exa_api_key_env": "EXA_API_KEY", "firecrawl_api_key_env": "FIRECRAWL_API_KEY", "fanout": true,
