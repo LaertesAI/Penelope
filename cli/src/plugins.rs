@@ -312,6 +312,13 @@ fn scan_prose(dir: &Path, out: &mut Check) {
                                              line: at, text: line.chars().take(240).collect() });
                 return;
             }
+            // Descriptions, arguments and env values of the server object: the tool rules of `vet.rs`.
+            let vetted = crate::vet::scan_server_entry(&file, &name, &server);
+            if vetted.finding.is_some() {
+                out.finding = vetted.finding;
+                return;
+            }
+            out.warnings.extend(vetted.warnings);
         }
     }
 }

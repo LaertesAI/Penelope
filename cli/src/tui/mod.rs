@@ -1733,7 +1733,8 @@ impl App {
             "/cost" => self.pager("Cost in euro", crate::cost::report(&self.ctx)),
             "/route" => self.route_command(rest),
             "/escalate" => self.escalate_command(),
-            "/tools" => self.pager("Tool contracts", crate::route::table(&self.ctx)),
+            // Bare /tools shows the contracts; /tools search, install, yes and no go to tools_command below.
+            "/tools" if rest.is_empty() => self.pager("Tool contracts", crate::route::table(&self.ctx)),
             "/consolidate" => {
                 let users: Vec<String> = self.items.iter().filter_map(|i| if let Item::User(t) = i { Some(t.clone()) } else { None }).collect();
                 let ids = tools::consolidate(&self.ctx, &users);
@@ -1788,12 +1789,24 @@ impl App {
                         let allow = parts.iter().any(|p| *p == "--allow");
                         let extra: Vec<String> = parts[2..].iter().filter(|p| **p != "--allow").map(|p| p.to_string()).collect();
                         let report = crate::plugins::mcp_add(&self.ctx, parts[0], parts[1], &extra, allow);
-                        self.pager("MCP servers", report);
+                        if allow && !report.starts_with("NOT") {
+                            let name = parts[0].to_string();
+                            self.start_bg(move |ctx| Ok(crate::toolscan::after_allow(&ctx, &name, &report)));
+                        } else {
+                            self.pager("MCP servers", report);
+                        }
                     }
                 } else if rest.starts_with("remove ") {
                     self.pager("MCP servers", crate::plugins::mcp_remove(&self.ctx, rest[7..].trim()));
                 } else if rest.starts_with("allow ") {
-                    self.pager("MCP servers", crate::plugins::mcp_set_allow(&self.ctx, rest[6..].trim(), true));
+                    let name = rest[6..].trim().to_string();
+                    let said = crate::plugins::mcp_set_allow(&self.ctx, &name, true);
+                    self.start_bg(move |ctx| Ok(crate::toolscan::after_allow(&ctx, &name, &said)));
+                } else if rest.starts_with("scan ") {
+                    let name = rest[5..].trim().to_string();
+                    self.start_bg(move |ctx| Ok(crate::toolscan::report(&ctx, &name)));
+                } else if rest.starts_with("trust ") {
+                    self.pager("MCP servers", crate::toolscan::trust(&self.ctx, rest[6..].trim()));
                 } else if rest.starts_with("deny ") {
                     self.pager("MCP servers", crate::plugins::mcp_set_allow(&self.ctx, rest[5..].trim(), false));
                 } else {
