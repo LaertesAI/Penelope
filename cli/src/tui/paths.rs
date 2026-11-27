@@ -76,6 +76,12 @@ pub fn dropped(text: &str, home: &str) -> Option<Vec<PathBuf>> {
     Some(out)
 }
 
+/// True if the text looks like a drop: quoted, escaped or a `file://` URI. A plain typed path is not.
+pub fn drop_form(text: &str) -> bool {
+    let t = text.trim();
+    t.starts_with('\'') || t.starts_with('"') || t.starts_with("file://") || t.contains('\\')
+}
+
 /// The folder that `/folder ARG` names: absolute, `~`, or relative to the current folder. It must be an existing folder.
 pub fn resolve_folder(arg: &str, cwd: &Path, home: &str) -> Result<PathBuf, String> {
     let raw = arg.trim();

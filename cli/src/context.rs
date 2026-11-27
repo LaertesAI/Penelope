@@ -113,7 +113,8 @@ fn tokens(text: &str) -> Vec<(usize, usize, String)> {
                 // A quoted token holds any character, for a dropped path with spaces or umlauts.
                 if let Some(len) = chars[i + 2..].iter().position(|c| *c == '"') {
                     let token: String = chars[i + 2..i + 2 + len].iter().collect();
-                    if !token.is_empty() {
+                    // Same filter as a bare token, so prose like @"Hello there" stays text.
+                    if token.contains('/') || token.contains('.') {
                         out.push((start, i + 3 + len, token));
                     }
                     i += 3 + len;
@@ -139,8 +140,28 @@ fn tokens(text: &str) -> Vec<(usize, usize, String)> {
 }
 
 /// The `@` token for a path: plain if every character is allowed in a bare token, else quoted as `@"..."`.
-pub fn token_for(path: &str) -> String {
-    if !path.is_empty() && path.chars().all(is_path_char) { format!("@{}", path) } else { format!("@\"{}\"", path.replace('"', "")) }
+/// A path with a `"` has no token, because the quoted form cannot hold it.
+pub fn token_for(path: &str) -> Option<String> {
+    if path.is_empty() || path.contains('"') { return None; }
+    Some(if path.chars().all(is_path_char) { format!("@{}", path) } else { format!("@\"{}\"", path) })
+}
+
+/// Files above this size are not read for a context block; the budget holds 6000 characters anyway.
+const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
+
+/// Why a path must not be read as a file: a device, a pipe, a socket, a kernel file or a file that is too large.
+fn unreadable(p: &std::path::Path) -> Option<String> {
+    if p.starts_with("/proc") || p.starts_with("/sys") || p.starts_with("/dev") {
+        return Some("a system path".to_string());
+    }
+    let meta = fs::metadata(p).ok()?;
+    if !meta.is_file() {
+        return Some("not a regular file".to_string());
+    }
+    if meta.len() > MAX_FILE_BYTES {
+        return Some(format!("{} bytes, over the {} byte limit", meta.len(), MAX_FILE_BYTES));
+    }
+    None
 }
 
 fn byte_index(chars: &[char], at: usize) -> usize {
@@ -158,8 +179,8 @@ pub fn expand(ctx: &Ctx, text: &str) -> Expanded {
     let mut notes = Vec::new();
     let mut block = String::new();
     let mut room = 6000usize;
-    // Replace from the end so that earlier positions stay valid.
-    for (start, end, token) in list.iter().rev().take(5) {
+    // Replace from the end so that earlier positions stay valid. Only the first 5 are read, so only they are rewritten.
+    for (start, end, token) in list.iter().take(5).rev() {
         let (from, to) = (byte_index(&chars, *start), byte_index(&chars, *end));
         if to > noun.len() || from >= to {
             continue;
@@ -176,6 +197,9 @@ pub fn expand(ctx: &Ctx, text: &str) -> Expanded {
             let p = crate::files::resolve(token, "");
             if p.is_dir() {
                 format!("[folder @{}]\n{}\n", token, crate::files::tree(&p.display().to_string(), 1, "").lines().take(24).collect::<Vec<_>>().join("\n"))
+            } else if let Some(why) = p.exists().then(|| unreadable(&p)).flatten() {
+                notes.push(format!("@{} was not read: {}", token, why));
+                format!("[file @{} was not read: {}]\n", token, why)
             } else if p.is_file() {
                 match fs::read_to_string(&p) {
                     Ok(content) => {
@@ -240,9 +264,39 @@ mod tests {
     fn a_quoted_token_holds_spaces_and_a_dropped_path_round_trips() {
         let list = tokens("read @\"/tmp/my dir/Größe.txt\" and @src/main.rs");
         assert_eq!(list.iter().map(|t| t.2.as_str()).collect::<Vec<_>>(), vec!["/tmp/my dir/Größe.txt", "src/main.rs"]);
-        assert_eq!(token_for("/tmp/plain.txt"), "@/tmp/plain.txt");
-        assert_eq!(token_for("/tmp/a b.txt"), "@\"/tmp/a b.txt\"");
-        assert_eq!(tokens(&token_for("/tmp/a b/ü.txt"))[0].2, "/tmp/a b/ü.txt");
+        assert_eq!(token_for("/tmp/plain.txt").unwrap(), "@/tmp/plain.txt");
+        assert_eq!(token_for("/tmp/a b.txt").unwrap(), "@\"/tmp/a b.txt\"");
+        assert_eq!(tokens(&token_for("/tmp/a b/ü.txt").unwrap())[0].2, "/tmp/a b/ü.txt");
+    }
+
+    #[test]
+    fn prose_in_quotes_is_no_token_and_a_name_with_a_quote_has_none() {
+        assert!(tokens("he said @\"Hello there\" to me").is_empty());
+        assert_eq!(token_for("/tmp/a\"b.txt"), None);
+    }
+
+    #[test]
+    fn more_than_five_tokens_rewrite_and_read_the_same_first_five() {
+        let ctx = Ctx { root: std::env::temp_dir().join("penelope-ctx-five"), cfg: serde_json::json!({}) };
+        let text = (1..=7).map(|i| format!("@/nonexistent/f{}.txt", i)).collect::<Vec<_>>().join(" ");
+        let e = expand(&ctx, &text);
+        assert_eq!(e.refs.len(), 5);
+        assert!(e.text.starts_with("[@/nonexistent/f1.txt]") && e.text.contains("[@/nonexistent/f5.txt] @/nonexistent/f6.txt"), "{}", e.text);
+    }
+
+    #[test]
+    fn a_pipe_and_a_large_file_are_not_read() {
+        let ctx = Ctx { root: std::env::temp_dir().join("penelope-ctx-big"), cfg: serde_json::json!({}) };
+        let dir = std::env::temp_dir().join(format!("penelope-ctx-files-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let big = dir.join("big.txt");
+        fs::write(&big, vec![b'x'; 3 * 1024 * 1024]).unwrap();
+        let fifo = dir.join("pipe.fifo");
+        assert!(std::process::Command::new("mkfifo").arg(&fifo).status().map(|s| s.success()).unwrap_or(false));
+        let e = expand(&ctx, &format!("@{} @{}", big.display(), fifo.display()));
+        assert_eq!(e.notes.len(), 2, "{:?}", e.notes);
+        assert!(e.notes[0].contains("over the") && e.notes[1].contains("not a regular file"), "{:?}", e.notes);
     }
 
     use super::*;

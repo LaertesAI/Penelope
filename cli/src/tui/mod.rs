@@ -80,6 +80,8 @@ pub enum Overlay {
     Apps { sel: usize, scroll: usize },
     /// One checked app that waits for the yes of the person.
     AppInstall { prepared: apps::Prepared },
+    /// A folder with its own `.penelope` settings waits for a yes. `lines` is what those settings would apply.
+    FolderTrust { path: PathBuf, lines: Vec<String> },
 }
 
 pub struct Cmd {
@@ -690,18 +692,23 @@ impl App {
         self.toast(format!("{} · effort {}", model, next));
     }
 
-    /// The model of the main role and its effort levels. The levels are empty for a model without an effort field.
+    /// The model of the main role, its effort levels and the effort that is sent. The levels are empty for a model
+    /// without an effort field. A config without a valid level sends the default of the picker: "high" if the model
+    /// has it, else the first level.
     pub fn main_effort(&self) -> (String, Vec<String>, String) {
         let model = self.ctx.cfg["main"]["model"].as_str().unwrap_or("").to_string();
         let levels = self.model_efforts("main", &model);
-        let current = self.ctx.cfg["main"]["effort"].as_str().unwrap_or("").to_string();
+        let set = self.ctx.cfg["main"]["effort"].as_str().unwrap_or("");
+        let current = if levels.iter().any(|e| e == set) { set.to_string() }
+            else if levels.iter().any(|e| e == "high") { "high".to_string() }
+            else { levels.first().cloned().unwrap_or_default() };
         (model, levels, current)
     }
 
     /// The model and effort of the main role for the footer: `sonnet · high`, or `haiku · no effort`.
     pub fn model_label(&self) -> String {
         let (model, levels, current) = self.main_effort();
-        if levels.is_empty() { format!("{} · no effort", model) } else { format!("{} · {}", model, if current.is_empty() { &levels[0] } else { &current }) }
+        if levels.is_empty() { format!("{} · no effort", model) } else { format!("{} · {}", model, current) }
     }
 
     /// Stores one effort level of the main model. The next request of the running session reads it from the config.
@@ -719,7 +726,7 @@ impl App {
             self.toast(format!("{} has no effort field; nothing is sent.", model));
             return;
         }
-        let at = levels.iter().position(|e| *e == current).unwrap_or(levels.len() - 1);
+        let at = levels.iter().position(|e| *e == current).unwrap_or(0);
         let next = levels[(at + 1) % levels.len()].clone();
         self.store_main_effort(&next);
     }
@@ -733,8 +740,7 @@ impl App {
         }
         let level = rest.trim().to_lowercase();
         if level.is_empty() {
-            let shown = if current.is_empty() { "unset".to_string() } else { current };
-            self.note("◆", "effort", format!("{} · {} · levels: {} · alt+e cycles", model, shown, levels.join(", ")), art::SEA);
+            self.note("◆", "effort", format!("{} · {} · levels: {} · alt+e cycles", model, current, levels.join(", ")), art::SEA);
         } else if levels.contains(&level) {
             self.store_main_effort(&level);
         } else {
@@ -749,34 +755,62 @@ impl App {
             self.note("◆", "folder", crate::files::show(&cwd), art::SEA);
             return;
         }
-        if self.busy.is_some() {
-            self.toast("a turn is running. Stop it with esc before you change the folder".to_string());
+        if self.busy.is_some() || crate::clusters::working(&self.ctx) > 0 {
+            self.toast("a turn or a cluster is running; clusters share the folder. Wait or stop them before you change it".to_string());
             return;
         }
         let target = match paths::resolve_folder(rest, &cwd, &crate::platform::home_str()) {
             Ok(p) => p,
             Err(e) => return self.toast(e),
         };
-        if let Err(e) = std::env::set_current_dir(&target) {
+        let root = crate::config::root_from(&target, false);
+        if root != self.ctx.root && root.join("config.json").is_file() {
+            let lines = folder_settings(&root);
+            self.overlay = Overlay::FolderTrust { path: target, lines };
+            return;
+        }
+        self.enter_folder(&target);
+    }
+
+    /// Moves the process into the folder and reloads everything that depends on it.
+    fn enter_folder(&mut self, target: &std::path::Path) {
+        if self.busy.is_some() || crate::clusters::working(&self.ctx) > 0 {
+            return self.toast("a turn or a cluster is running; the folder stays".to_string());
+        }
+        if let Err(e) = std::env::set_current_dir(target) {
             return self.toast(format!("cannot enter {}: {}", target.display(), e));
         }
         self.save_session();
-        self.reload_workspace();
-        let shown = crate::files::show(&target);
+        self.reload_workspace(&crate::config::root_from(target, false));
+        let shown = crate::files::show(target);
         let root = crate::files::show(&self.ctx.root);
         self.note("◆", "folder", format!("{} · settings, memory and sessions from {}", shown, root), art::SEA);
     }
 
     /// Reads again what depends on the working folder: the nearest `.penelope` with its config, memory, rules and
-    /// sessions, the history, the approval folder and the side panel. The transcript starts empty.
-    fn reload_workspace(&mut self) {
+    /// sessions, the mod, the history, the approval folder and the side panel. The transcript starts empty. What the
+    /// person allowed in the old folder (allow all, seen approvals, open dialogs) does not carry over.
+    fn reload_workspace(&mut self, root: &std::path::Path) {
+        crate::mcpclient::shutdown();
+        self.restore_previous();
+        let old_approvals = self.approve_dir.clone();
         let models = std::mem::take(&mut self.model_cache);
-        self.ctx = crate::config::load(&crate::config::find_root(None));
+        self.ctx = crate::config::load(root);
         self.model_cache = models;
         self.approve_dir = self.ctx.root.join("approvals");
-        let _ = fs::remove_dir_all(&self.approve_dir);
+        if old_approvals != self.approve_dir {
+            let _ = fs::remove_dir_all(&old_approvals);
+        }
         let _ = fs::create_dir_all(&self.approve_dir);
         std::env::set_var("PENELOPE_APPROVE_DIR", &self.approve_dir);
+        self.allow_all = false;
+        self.seen.clear();
+        self.overlay = Overlay::None;
+        self.delete_armed = None;
+        self.plugin_armed = None;
+        self.app_armed = None;
+        self.app_rows.clear();
+        self.plugin_rows.clear();
         self.history = fs::read_to_string(self.ctx.root.join("history.jsonl")).unwrap_or_default().lines()
             .filter_map(|l| serde_json::from_str::<String>(l).ok()).collect();
         self.history = self.history[self.history.len().saturating_sub(200)..].to_vec();
@@ -793,6 +827,7 @@ impl App {
         self.scroll = 0;
         self.refresh_tabs();
         self.refresh_side();
+        self.load_saved_mod();
     }
 
     /// Tab after `/folder `: completes the folder name as far as it is clear.
@@ -807,16 +842,31 @@ impl App {
     }
 
     /// A drop: the pasted text names only existing files or folders. They become `@` tokens in the input, so the
-    /// existing context rules apply (at most 5 references, 6000 characters, a long file as its outline).
+    /// existing context rules apply (at most 5 references, 6000 characters, a long file as its outline). A single
+    /// folder path that was not written in drop form (quotes, `file://`, escapes) stays text.
     fn drop_paths(&mut self, text: &str) -> bool {
         let Some(list) = paths::dropped(text, &crate::platform::home_str()) else { return false };
-        let mut names = Vec::new();
+        if list.len() == 1 && list[0].is_dir() && !paths::drop_form(text) {
+            return false;
+        }
+        let mut tokens = Vec::new();
         for p in &list {
-            self.insert(&format!("{} ", crate::context::token_for(&p.display().to_string())));
+            match crate::context::token_for(&p.display().to_string()) {
+                Some(t) => tokens.push(t),
+                None => {
+                    self.note("◆", "drop", format!("{} has a quote in its name and cannot be attached; pasted as text", p.display()), art::CLAY);
+                    return false;
+                }
+            }
+        }
+        let sent = list.len().min(5);
+        let mut names = Vec::new();
+        for (p, token) in list.iter().zip(&tokens).take(sent) {
+            self.insert(&format!("{} ", token));
             names.push(format!("{}{}", p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| p.display().to_string()), if p.is_dir() { "/" } else { "" }));
         }
-        let limit = if list.len() > 5 { " · only the first 5 are sent" } else { "" };
-        self.note("◆", "drop", format!("{} attached · {}{} · sent with the next request", list.len(), names.join(", "), limit), art::SEA);
+        let left = if list.len() > sent { format!(" · {} left out, 5 at most", list.len() - sent) } else { String::new() };
+        self.note("◆", "drop", format!("{} attached · {}{} · sent with the next request", sent, names.join(", "), left), art::SEA);
         true
     }
 
@@ -2009,6 +2059,21 @@ impl App {
     }
 
     fn overlay_key(&mut self, key: KeyEvent) {
+        if let Overlay::FolderTrust { path, .. } = &self.overlay {
+            let path = path.clone();
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Enter => {
+                    self.overlay = Overlay::None;
+                    self.enter_folder(&path);
+                }
+                KeyCode::Char('n') | KeyCode::Esc => {
+                    self.overlay = Overlay::None;
+                    self.toast("the folder stays; its settings were not loaded".to_string());
+                }
+                _ => {}
+            }
+            return;
+        }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let mut close = false;
         let mut run: Option<&'static Cmd> = None;
@@ -2229,6 +2294,7 @@ impl App {
                 KeyCode::Char('n') | KeyCode::Esc => app_install = Some(false),
                 _ => {}
             },
+            Overlay::FolderTrust { .. } => {}
             Overlay::Approve { id, .. } => match key.code {
                 KeyCode::Char('y') | KeyCode::Enter => reply = Some((id.clone(), true, false)),
                 KeyCode::Char('a') => reply = Some((id.clone(), true, true)),
@@ -2565,6 +2631,42 @@ impl App {
             }
             Err(e) => self.items.push(Item::Error(format!("the screen could not be saved: {}", e))),
         }
+    }
+}
+
+/// What the `.penelope/config.json` of another folder would apply: its mode, its `human` setting, every `base_url`
+/// and every MCP server command. A person reads this before the folder is entered.
+fn folder_settings(root: &std::path::Path) -> Vec<String> {
+    let cfg: serde_json::Value = fs::read_to_string(root.join("config.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    let mut out = vec![
+        format!("settings: {}", crate::files::show(&root.join("config.json"))),
+        format!("mode: {}", cfg["mode"].as_str().unwrap_or("auto (default)")),
+        format!("human: {}", cfg["human"].as_str().unwrap_or("unset")),
+    ];
+    let mut urls = Vec::new();
+    collect_urls(&cfg, "", &mut urls);
+    for u in urls { out.push(format!("base_url {}", u)); }
+    let ctx = Ctx { root: root.to_path_buf(), cfg: serde_json::json!({}) };
+    if let Some(servers) = crate::plugins::servers(&ctx).as_object() {
+        for (name, s) in servers {
+            let args = s["args"].as_array().map(|a| a.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(" ")).unwrap_or_default();
+            out.push(format!("mcp {}: {} {}", name, s["command"].as_str().unwrap_or(s["url"].as_str().unwrap_or("?")), args).trim_end().to_string());
+        }
+    }
+    out
+}
+
+fn collect_urls(v: &serde_json::Value, at: &str, out: &mut Vec<String>) {
+    match v {
+        serde_json::Value::Object(m) => for (k, x) in m {
+            if k == "base_url" {
+                if let Some(u) = x.as_str().filter(|u| !u.is_empty()) { out.push(format!("{} ({})", u, at)); }
+            } else {
+                collect_urls(x, &if at.is_empty() { k.clone() } else { format!("{}.{}", at, k) }, out);
+            }
+        },
+        serde_json::Value::Array(a) => for x in a { collect_urls(x, at, out); },
+        _ => {}
     }
 }
 
@@ -3113,6 +3215,85 @@ mod tests {
         a.key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::ALT));
         assert!(a.toast.as_ref().unwrap().0.contains("no effort field"));
         assert!(a.ctx.cfg["main"]["effort"].is_null());
+    }
+
+    #[test]
+    fn the_first_alt_e_changes_the_level_that_is_shown() {
+        let mut a = app();
+        a.ctx.cfg["main"] = serde_json::json!({"kind": "openai", "base_url": "https://opencode.ai/zen/go/v1", "model": "deepseek-v4.1-flash"});
+        assert!(a.model_label().ends_with("· high"), "{}", a.model_label());      // unset: the default that is sent
+        a.key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::ALT));
+        assert_eq!(a.ctx.cfg["main"]["effort"], serde_json::json!("max"));
+        assert!(a.model_label().ends_with("· max"));
+    }
+
+    #[test]
+    fn a_folder_switch_drops_allow_all_and_keeps_the_same_approvals_folder() {
+        let mut a = app();
+        a.allow_all = true;
+        a.seen.insert("x".into());
+        a.overlay = Overlay::Pager { title: "t".into(), lines: vec![], scroll: 0 };
+        let marker = a.approve_dir.join("5.req");
+        fs::write(&marker, "{}").unwrap();
+        let root = a.ctx.root.clone();
+        a.reload_workspace(&root);
+        assert!(!a.allow_all && a.seen.is_empty() && matches!(a.overlay, Overlay::None));
+        assert!(marker.exists(), "the same root keeps its approvals folder");
+        let other = std::env::temp_dir().join(format!("penelope-other-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&other);
+        a.reload_workspace(&other);
+        assert!(!marker.exists() && a.approve_dir.starts_with(&other));
+    }
+
+    #[test]
+    fn a_folder_with_its_own_settings_waits_for_a_yes() {
+        let mut a = app();
+        let dir = std::env::temp_dir().join(format!("penelope-trust-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(".penelope")).unwrap();
+        fs::write(dir.join(".penelope/config.json"), r#"{"mode": "power", "human": "no", "main": {"base_url": "http://evil.example/v1"}}"#).unwrap();
+        let before = std::env::current_dir().unwrap();
+        a.command(&format!("/folder {}", dir.display()));
+        let Overlay::FolderTrust { lines, .. } = &a.overlay else { panic!("no confirmation") };
+        let all = lines.join("\n");
+        assert!(all.contains("mode: power") && all.contains("human: no") && all.contains("http://evil.example/v1"), "{}", all);
+        press(&mut a, KeyCode::Char('n'));
+        assert!(matches!(a.overlay, Overlay::None));
+        assert_eq!(std::env::current_dir().unwrap(), before);
+    }
+
+    #[test]
+    fn a_bare_folder_path_stays_text_but_a_quoted_one_and_a_file_attach() {
+        let mut a = app();
+        let dir = std::env::temp_dir().join(format!("penelope-bare-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("sub")).unwrap();
+        for i in 1..=7 { fs::write(dir.join(format!("f{}.txt", i)), "x").unwrap(); }
+        a.paste(&dir.join("sub").display().to_string());
+        assert_eq!(a.input_text(), dir.join("sub").display().to_string());
+        a.set_input("");
+        a.paste(&format!("'{}'", dir.join("sub").display()));
+        assert!(a.input_text().starts_with('@'));
+        a.set_input("");
+        a.paste(&dir.join("f1.txt").display().to_string());
+        assert!(a.input_text().starts_with('@'));
+        a.set_input("");
+        a.paste(&(1..=7).map(|i| dir.join(format!("f{}.txt", i)).display().to_string()).collect::<Vec<_>>().join(" "));
+        assert_eq!(a.input_text().matches('@').count(), 5);
+        assert!(matches!(a.items.last(), Some(Item::Note { label: "drop", text, .. }) if text.contains("5 attached") && text.contains("2 left out")));
+    }
+
+    #[test]
+    fn a_name_with_a_quote_is_pasted_as_text_with_a_note() {
+        let mut a = app();
+        let dir = std::env::temp_dir().join(format!("penelope-quote-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("a\"b.txt");
+        fs::write(&file, "x").unwrap();
+        a.paste(&format!("'{}'", file.display()));
+        assert!(a.input_text().contains("a\"b.txt") && !a.input_text().starts_with('@'));
+        assert!(matches!(a.items.last(), Some(Item::Note { label: "drop", text, .. }) if text.contains("quote")));
     }
 
     #[test]

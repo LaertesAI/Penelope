@@ -57,20 +57,28 @@ pub fn find_root(explicit: Option<&str>) -> PathBuf {
     if let Some(p) = explicit {
         return PathBuf::from(p);
     }
-    let mut dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    root_from(&std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")), true)
+}
+
+/// The same search from a given folder. With `rename` false an old `.strix` or `.kate` folder is left alone, so a
+/// folder switch never changes files on disk.
+pub fn root_from(start: &Path, rename: bool) -> PathBuf {
+    let mut dir = start.to_path_buf();
     loop {
         if dir.join(".penelope").is_dir() {
             return dir.join(".penelope");
         }
-        if let Some(old) = adopt(&dir) {
-            return old;
+        if rename {
+            if let Some(old) = adopt(&dir) {
+                return old;
+            }
         }
         if !dir.pop() {
             break;
         }
     }
     let home = crate::platform::home();
-    if !home.join(".penelope").is_dir() {
+    if !home.join(".penelope").is_dir() && rename {
         if let Some(old) = adopt(&home) {
             return old;
         }

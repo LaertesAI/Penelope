@@ -863,6 +863,15 @@ fn overlay(f: &mut Frame, app: &App, area: Rect) {
         Overlay::PluginCommands { plugin, sel, scroll } => plugin_commands_dialog(f, app, area, plugin, *sel, *scroll),
         Overlay::Apps { sel, scroll } => apps_dialog(f, app, area, *sel, *scroll),
         Overlay::AppInstall { prepared } => app_install_dialog(f, area, prepared),
+        Overlay::FolderTrust { path, lines, .. } => {
+            let inner = dialog(f, area, "Enter folder", 96, 20);
+            put(f, inner, inner.x, inner.y, &clip(&format!("{} has its own settings. They would apply:", tilde(&path.display().to_string())), inner.width as usize), on(PAPER, RAISED).add_modifier(Modifier::BOLD));
+            let room = inner.height.saturating_sub(5) as usize;
+            for (i, line) in lines.iter().take(room).enumerate() {
+                put(f, inner, inner.x, inner.y + 2 + i as u16, &clip(line, inner.width as usize), on(ASH, RAISED));
+            }
+            put(f, inner, inner.x, inner.bottom().saturating_sub(1), "y or enter loads them and enters · n or esc stays", on(CLAY, RAISED));
+        }
         Overlay::ApiKey { label, input, cursor, error, .. } => api_key_dialog(f, app, area, label, input, *cursor, error),
         Overlay::None => {}
         Overlay::Palette { query, sel } => {
