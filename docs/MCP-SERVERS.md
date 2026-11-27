@@ -15,9 +15,9 @@ Errors follow JSON-RPC. A line that is not JSON gets -32700. A request without a
 
 It reads the `memory.log` files that clusters write under `.penelope/clusters/ID/` and appends new entries to them.
 
-A log line is one JSON object: `t` (seconds), `C` (cluster id), `L` (origin level) and `text`. This is the format `clusters.rs` writes. An entry from `memory_add` stores four lines in `text`: `ENT`, `ATT`, `VAL` and `SRC`. An entry written by a cluster has no such lines, so its `ENT`, `ATT` and `VAL` are `null` in the answer. `memory_add` writes `memory.md` and `memory.log` the same way `clusters::mem_put` does. That function is private to `clusters.rs`, so the server repeats its two appends. Values lose control characters, so a value cannot add a field or a log line.
+A log line is one JSON object: `t` (seconds), `C` (cluster id), `L` (origin level) and `text`. This is the format `clusters.rs` writes. An entry from `memory_add` stores four lines in `text`: `ENT`, `ATT`, `VAL` and `SRC`. An entry written by a cluster has no such lines, so its `ENT`, `ATT` and `VAL` are `null` in the answer. `memory_add` writes `memory.md` and `memory.log` the same way `clusters::mem_put` does. That function needs a full cluster record and takes no file lock, so the server repeats its two appends under a lock file (`memory.lock`, created atomically, removed after 30 seconds if its owner died). The id is the line number counted under the lock, so two writers never share one. A torn last line is closed with a newline before the new entry. Values lose control characters, so a value cannot add a field or a log line.
 
-Origin levels: 0 outside data, 1 agent, 2 checked tool, 3 person. Every result carries `_meta["laertes/mitos"].l`. For `memory_search` it is the lowest level among the returned entries, so a gate that stops level 0 text sees it. Each entry also carries its own `_meta`. `memory_status` and an empty search answer with level 2.
+Origin levels: 0 outside data, 1 agent, 2 checked tool, 3 person. The caller states the level of an entry, so the server does not trust it: `memory_add` caps it at 1, writes `SRC: mcp`, and keeps the caller's source in `REF`. Only a person's entry reaches 3, and only with `--allow-person`. No entry written through MCP is level 2. `memory_status` reports level 1, because an agent wrote the line. Every result carries `_meta["laertes/mitos"].l`. For `memory_search` it is the lowest level among the returned entries, so a gate that stops level 0 text sees it. Each entry also carries its own `_meta`. 
 
 An entry id is `CLUSTER:LINE`, for example `kerkis-memory:3`.
 
@@ -30,7 +30,7 @@ An entry id is `CLUSTER:LINE`, for example `kerkis-memory:3`.
 | `memory_add` | `ENT`, `ATT`, `VAL`, `level` (0 to 3), `source`, optional `cluster` (default `kerkis-memory`) | the new entry with its id |
 | `memory_status` | optional `cluster` | the newest `KRK:1` line from `report.krk`, parsed and rendered again, or `no KRK:1 status line yet` |
 
-`memory_add` with `level` 3 marks the claim as written by a person. It is refused with `NOT added` unless the server was started with `--allow-person`. A cluster id with a leading dot is refused with -32602, so an id cannot leave the `clusters` folder.
+`memory_add` with `level` 2 is stored as 1. `memory_add` with `level` 3 marks the claim as written by a person. It is refused with `NOT added` unless the server was started with `--allow-person`. A cluster id with a leading dot is refused with -32602, so an id cannot leave the `clusters` folder.
 
 ### Claude Code
 
@@ -57,11 +57,11 @@ Run the command in the project folder, or add `--root /path/to/project/.penelope
 
 ### Mitos byte savings
 
-Compact JSON of the `tools/list` result, same method as `MITOS.md` (`mcpmem::tests::the_index_is_smaller_than_the_full_list`):
+Compact JSON of the `tools/list` result, same method as `MITOS.md` (`mcpmem::tests::the_index_is_smaller_than_the_full_list`).
 
 | Tools | Full list | Index | Saved |
 |---|---|---|---|
-| 4 | 1,927 bytes | 728 bytes | 62.2 % |
+| 4 | 2,042 bytes | 728 bytes | 64.3 % |
 
 ## vet server
 
@@ -69,7 +69,7 @@ It runs the prose rules of `vet.rs` over `SKILL.md`, `skills/*.md`, `commands/*.
 
 The server is read-only. It reads files and compares text. It never installs a plugin, runs a script or follows a link, and it opens no network connection.
 
-A path must lie inside the folder the server started in, or inside a folder given with `--scan-root DIR` (repeatable). The server resolves the path first, so `..` and a symlink that points out of the allowed folders are refused with `NOT scanned`. A `--scan-root` that does not exist stops the start. The option is called `--scan-root` because `--root` already names the `.penelope` folder.
+The folder the server starts in is the workspace only when it is a project: it, or a parent below the home folder, holds `.git` or `.penelope`. Started in the home folder, in `/` or in a plain folder, the server refuses to start unless `--scan-root` names a folder; then only the named folders are allowed. A path must lie inside the workspace or inside a folder given with `--scan-root DIR` (repeatable). The server resolves the path first, so `..` and a symlink that points out of the allowed folders are refused with `NOT scanned`. A `--scan-root` that does not exist stops the start. The option is called `--scan-root` because `--root` already names the `.penelope` folder.
 
 The findings quote lines of the scanned text, so every result has origin level 0.
 
@@ -77,7 +77,7 @@ The findings quote lines of the scanned text, so every result has origin level 0
 
 | Tool | Arguments | Answer |
 |---|---|---|
-| `vet_scan_path` | `path`: a folder or a file | `blocked`, `blocking` (at most one, the first match), `warnings` (first 100), `warnings_total`, `prose_files`; each finding has `rule`, `file`, `line`, `text` |
+| `vet_scan_path` | `path`: a folder or a file | `blocked`, `blocking` (at most one, the first match), `warnings` (first 100), `warnings_total`, `prose_files`; each finding has `rule`, `file`, `line` and `text` (at most 120 characters of the line) |
 | `vet_scan_text` | `text` (at most 512 KiB), optional `name` (a label, default `SKILL.md`) | the same fields |
 
 A file that is binary or larger than 512 KiB is reported as a warning, not skipped silently.

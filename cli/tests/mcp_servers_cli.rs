@@ -79,3 +79,19 @@ fn an_unknown_profile_or_option_exits_with_code_2() {
     }
     let _ = std::fs::remove_dir_all(&cwd);
 }
+
+#[test]
+fn the_vet_server_refuses_to_start_outside_a_project_without_a_scan_root() {
+    let cwd = temp("vet-plain");
+    let config = temp("vet-plain-config");
+    let start = |extra: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_penelope")).args(["--root", config.join(".penelope").to_str().unwrap(), "mcp", "serve", "vet"]).args(extra)
+            .current_dir(&cwd).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).output().unwrap()
+    };
+    let refused = start(&[]);
+    assert_eq!(refused.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("--scan-root"));
+    assert_eq!(start(&["--scan-root", cwd.to_str().unwrap()]).status.code(), Some(0));
+    let _ = std::fs::remove_dir_all(&cwd);
+    let _ = std::fs::remove_dir_all(&config);
+}

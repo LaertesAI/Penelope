@@ -87,14 +87,22 @@ fn error(id: &Value, code: i64, message: &str) -> Value {
 }
 
 /// The JSON-RPC loop. Reads lines from `input`, writes one line per request to `out`, stops at the end of input.
-pub fn run<R: BufRead, W: Write>(profile: &Profile, input: R, out: &mut W) {
+pub fn run<R: BufRead, W: Write>(profile: &Profile, mut input: R, out: &mut W) {
     let mut mitos_on = false;
-    for line in input.lines() {
-        let Ok(line) = line else { break };
-        if line.trim().is_empty() {
-            continue;
+    let mut raw: Vec<u8> = Vec::new();
+    loop {
+        raw.clear();
+        match input.read_until(b'\n', &mut raw) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
         }
-        if let Some(answer) = handle(profile, &mut mitos_on, line.trim()) {
+        // A line that is not UTF-8 is a parse error for that line, not the end of the server.
+        let answer = match std::str::from_utf8(&raw) {
+            Ok(line) if line.trim().is_empty() => continue,
+            Ok(line) => handle(profile, &mut mitos_on, line.trim()),
+            Err(_) => Some(error(&Value::Null, -32700, "parse error: the line is not valid UTF-8")),
+        };
+        if let Some(answer) = answer {
             if writeln!(out, "{}", answer).is_err() || out.flush().is_err() {
                 break;
             }
@@ -180,7 +188,10 @@ pub mod testing {
 
     /// Sends the requests in order and returns the answers, one per request that has an id.
     pub fn exchange(profile: &Profile, lines: &[String]) -> Vec<Value> {
-        let input = lines.join("\n") + "\n";
+        exchange_bytes(profile, (lines.join("\n") + "\n").into_bytes())
+    }
+
+    pub fn exchange_bytes(profile: &Profile, input: Vec<u8>) -> Vec<Value> {
         let mut out: Vec<u8> = Vec::new();
         run(profile, std::io::Cursor::new(input), &mut out);
         String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect()
@@ -197,5 +208,24 @@ pub mod testing {
     pub fn mitos_init() -> String {
         request(1, "initialize", json!({"protocolVersion": "2025-06-18",
             "capabilities": {"experimental": {mitos::EXTENSION_ID: mitos::manifest()}}}))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::testing::*;
+    use super::*;
+
+    #[test]
+    fn a_line_with_invalid_utf8_gets_a_parse_error_and_the_server_keeps_running() {
+        let profile = Profile { name: "t", instructions: "", specs: Vec::new(), call: Box::new(|_, _| Err(Fail::Refused("x".into()))) };
+        let mut input = b"\xff\xfe{\"jsonrpc\"\n".to_vec();
+        input.extend_from_slice(request(7, "ping", json!({})).as_bytes());
+        input.push(b'\n');
+        let out = exchange_bytes(&profile, input);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0]["error"]["code"], -32700);
+        assert_eq!(out[1]["id"], 7);
+        assert!(out[1]["result"].is_object());
     }
 }
