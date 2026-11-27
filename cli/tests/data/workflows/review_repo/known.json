@@ -1,0 +1,1 @@
+{"bugs": ["calc.add subtracts instead of adding", "calc.mean divides by len+1", "calc.clamp ignores hi", "text.slugify uses underscore", "text.truncate has no ellipsis", "text.word_count counts characters", "data.parse_pairs splits on colon", "data.group_by keeps one item per key", "data.merge_dicts lets the first dict win", "numbers.is_even is inverted"]}

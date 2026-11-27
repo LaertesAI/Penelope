@@ -219,7 +219,10 @@ Setup details:
 - `large`: `backend::Chat`, model `claude-sonnet-5-5`, one model with the Penelope tools.
 - `large-subagents`: `agents::run`, `claude-sonnet-5-5` for lead, worker and judge, no cluster profile.
 - `cluster`: `clusters::orchestrate`, profile `eval-small`, worker slot `small` and validator slot `small-check`, both `haiku`. G2 and round 1 use the validator; round 2 sets `single_model: true` and runs one model.
-- The eval root is separate: `edit_policy: all`, `run_policy: all`, `sandbox: bwrap`. The root config is restored when the run returns.
+- The eval context sets `edit_policy: all`, `auto_learn: false`, `auto_skills: false` and `delegate: off` in every run.
+- G2 (`4389032`) keeps `run_policy` at the shipped default `safe` and uses no sandbox.
+- From `1f005b2` on, the eval root is separate and adds `run_policy: all` and `sandbox: bwrap`. The root config is restored when the run returns.
+- All 50 tasks ran once per setup. The wall column is the sum of the per-task wall times.
 
 ## Eval run 2026-11-26 18:54 · large
 

@@ -67,17 +67,17 @@ pub fn set_image(bytes: Vec<u8>) -> Result<(), String> {
 
 /// Loads a picture from a mod folder. A missing or unreadable file is an error, and the caller keeps the old picture.
 pub fn set_path(path: &Path) -> Result<(), String> {
-    let size = fs::metadata(path).map(|m| m.len()).map_err(|e| format!("{} cannot be read: {}", crate::files::show(path), e))?;
+    let size = fs::metadata(path).map(|m| m.len()).map_err(|e| format!("{} cannot be read: {}", penelope_core::files::show(path), e))?;
     if size > MAX_BYTES {
-        return Err(format!("{} is larger than {} MB", crate::files::show(path), MAX_BYTES / (1024 * 1024)));
+        return Err(format!("{} is larger than {} MB", penelope_core::files::show(path), MAX_BYTES / (1024 * 1024)));
     }
-    let bytes = fs::read(path).map_err(|e| format!("{} cannot be read: {}", crate::files::show(path), e))?;
+    let bytes = fs::read(path).map_err(|e| format!("{} cannot be read: {}", penelope_core::files::show(path), e))?;
     let png = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         bytes
     } else if bytes.starts_with(&[0xFF, 0xD8]) {
         jpeg_to_png(&bytes)?
     } else {
-        return Err(format!("{} is not a PNG or JPEG", crate::files::show(path)));
+        return Err(format!("{} is not a PNG or JPEG", penelope_core::files::show(path)));
     };
     set_image(png)
 }
@@ -91,7 +91,7 @@ fn jpeg_to_png(bytes: &[u8]) -> Result<Vec<u8>, String> {
     fs::write(&jpg, bytes).map_err(|e| format!("the JPEG could not be written for conversion: {}", e))?;
     let mut tried = false;
     for program in ["ffmpeg", "magick"] {
-        if crate::config::which(program).is_none() {
+        if penelope_core::config::which(program).is_none() {
             continue;
         }
         tried = true;
