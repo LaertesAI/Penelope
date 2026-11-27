@@ -246,22 +246,30 @@ struct Lock(PathBuf);
 impl Lock {
     fn take(dir: &std::path::Path) -> Result<Lock, String> {
         let path = dir.join("memory.lock");
-        for _ in 0..1000 {
+        // On Windows a lock file that another thread is deleting answers PermissionDenied, and a new one can fail with
+        // AlreadyExists for a moment; both mean "try again". The wait ends after 10 seconds.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut pause = 1u64;
+        loop {
             match fs::OpenOptions::new().write(true).create_new(true).open(&path) {
                 Ok(_) => return Ok(Lock(path)),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                Err(e) if matches!(e.kind(), std::io::ErrorKind::AlreadyExists | std::io::ErrorKind::PermissionDenied) => {
+                    // An age that cannot be read (the file is gone or locked) is not stale.
                     let stale = fs::metadata(&path).and_then(|m| m.modified()).ok()
-                        .and_then(|t| t.elapsed().ok()).map(|age| age.as_secs() > 30).unwrap_or(false);
+                        .and_then(|t| std::time::SystemTime::now().duration_since(t).ok()).map(|age| age.as_secs() > 30).unwrap_or(false);
                     if stale {
                         let _ = fs::remove_file(&path);
                     } else {
-                        std::thread::sleep(std::time::Duration::from_millis(5));
+                        std::thread::sleep(std::time::Duration::from_millis(pause));
+                        pause = (pause * 2).min(20);
                     }
                 }
                 Err(e) => return Err(format!("cannot lock {}: {}", path.display(), e)),
             }
+            if std::time::Instant::now() >= deadline {
+                return Err(format!("{} stayed locked for 10 seconds", path.display()));
+            }
         }
-        Err(format!("{} stayed locked for 5 seconds", path.display()))
     }
 }
 

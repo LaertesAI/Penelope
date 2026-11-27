@@ -1018,6 +1018,15 @@ pub fn update(ctx: &Ctx, name: &str, unattended: bool) -> Result<String, String>
 
 /// The command line behind `penelope app ...`. A terminal gets the rights and a yes question; a pipe needs `--yes`
 /// and the agreement in `config.json`.
+/// A target that is neither a link nor an existing folder or file is refused before any question about a yes.
+pub fn check_install_target(target: &str) -> Result<(), String> {
+    let target = target.trim().trim_matches(|c| c == '"' || c == '\'');
+    if !is_remote(target) && !std::path::Path::new(target).exists() {
+        return Err(format!("NOT installed. {} is no folder, no ZIP and no link.", target));
+    }
+    Ok(())
+}
+
 pub fn cli(ctx: &Ctx, args: &[String]) -> Result<String, String> {
     let verb = args.first().map(String::as_str).unwrap_or("");
     match verb {
@@ -1035,6 +1044,7 @@ pub fn cli(ctx: &Ctx, args: &[String]) -> Result<String, String> {
             if target.is_empty() {
                 return Err("usage: penelope app install LINK|DIR|ZIP [--yes]".to_string());
             }
+            check_install_target(&target)?;
             if unattended {
                 return install(ctx, &target, true);
             }
@@ -1066,6 +1076,9 @@ pub fn cli(ctx: &Ctx, args: &[String]) -> Result<String, String> {
             }
             if name.is_empty() {
                 return Err("usage: penelope app update NAME [--yes]".to_string());
+            }
+            if !installed(ctx).iter().any(|a| a.name == name) {
+                return Err(format!("no app named {}. penelope app list shows the names.", name));
             }
             if unattended {
                 return update(ctx, &name, true);
@@ -1119,6 +1132,13 @@ pub fn cli(ctx: &Ctx, args: &[String]) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_install_target_that_does_not_exist_is_refused_before_any_question() {
+        assert!(check_install_target("/nonexistent/penelope-app").unwrap_err().starts_with("NOT installed."));
+        assert!(check_install_target(&std::env::temp_dir().display().to_string()).is_ok());
+        assert!(check_install_target("https://example.invalid/app.git").is_ok());
+    }
+
     use super::*;
 
     fn temp(tag: &str) -> (PathBuf, Ctx) {

@@ -207,7 +207,7 @@ fn permit(ctx: &Ctx, what: &str, cwd: &str, diff: &str) -> Option<String> {
         return None;
     }
     match crate::tools::ask_person(what, cwd, "file", diff) {
-        Some(true) => None,
+        Some(true) => { crate::gates::diff_approved(); None }
         Some(false) => Some("NOT changed. The user declined this change.".to_string()),
         None => Some("NOT changed. Outside the full screen interface nobody can answer the question. The user can allow every change \
                       with \"edit_policy\": \"all\" in .penelope/config.json.".to_string()),
@@ -402,12 +402,13 @@ pub fn unzip(ctx: &Ctx, archive: &str, into: &str, cwd: &str) -> String {
     }
     match extract_zip(&file, &target) {
         Ok(u) => {
+            crate::gates::note_tree(ctx, &u.target, &file);
             let names: Vec<String> = plan.names.iter().take(5).cloned().collect();
             let size = if u.bytes >= 1024 { format!("{} KB", u.bytes / 1024) } else { format!("{} bytes", u.bytes) };
             format!("unpacked {} files, {} folders ({}) into {}{}", u.files, u.folders, size, show(&u.target),
                     if names.is_empty() { String::new() } else { format!(" · {}", names.join(", ")) })
         }
-        Err(e) => e,
+        Err(e) => { crate::gates::diff_cancel(); e }
     }
 }
 
@@ -433,8 +434,8 @@ pub fn write(ctx: &Ctx, path: &str, text: &str, cwd: &str) -> String {
         let _ = fs::create_dir_all(dir);
     }
     match fs::write(&p, text) {
-        Ok(()) => { crate::clusters::note_file(ctx, &p, crate::clusters::current_level()); format!("done: {}", what) }
-        Err(e) => format!("cannot write {}: {}", show(&p), e),
+        Ok(()) => { crate::gates::note(ctx, &p, crate::gates::writer_level()); format!("done: {}", what) }
+        Err(e) => { crate::gates::diff_cancel(); format!("cannot write {}: {}", show(&p), e) }
     }
 }
 
@@ -482,8 +483,9 @@ pub fn edit(ctx: &Ctx, path: &str, replacements: &[Replacement], cwd: &str) -> S
         return refusal;
     }
     keep_for_undo(ctx, &p, &what);
+    let level = crate::gates::edit_level(ctx, &p);
     match fs::write(&p, after) {
-        Ok(()) => { crate::clusters::note_file(ctx, &p, crate::clusters::current_level()); format!("done: {}", what) }
+        Ok(()) => { crate::gates::note(ctx, &p, level); format!("done: {}", what) }
         Err(e) => format!("cannot write {}: {}", show(&p), e),
     }
 }
