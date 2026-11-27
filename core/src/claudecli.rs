@@ -250,8 +250,8 @@ mod tests {
         let removed: Vec<String> = cmd.get_envs().filter(|(_, v)| v.is_none()).map(|(k, _)| k.to_string_lossy().to_string()).collect();
         assert!(removed.contains(&"ANTHROPIC_API_KEY".to_string()) && removed.contains(&"ANTHROPIC_AUTH_TOKEN".to_string()));
         assert!(cmd.get_args().any(|a| a == "--setting-sources"));
-        // no other file starts the command by hand (clusters.rs is outside this change)
-        for (name, text) in [("agents.rs", include_str!("agents.rs")), ("scout.rs", include_str!("scout.rs")), ("weak.rs", include_str!("weak.rs")), ("backend.rs", include_str!("backend.rs"))] {
+        // no other file starts the command by hand
+        for (name, text) in [("agents.rs", include_str!("agents.rs")), ("scout.rs", include_str!("scout.rs")), ("weak.rs", include_str!("weak.rs")), ("backend.rs", include_str!("backend.rs")), ("clusters.rs", include_str!("clusters.rs"))] {
             let code = text.split("#[cfg(test)]").next().unwrap();
             assert!(!code.contains("Command::new(\"claude\")"), "{} starts claude without the helper", name);
         }

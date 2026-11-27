@@ -1703,7 +1703,7 @@ fn run_model(ctx: &Ctx, c: &Cluster, part: &Part, system: &str, task: &str, max_
     env["PENELOPE_TOOL_LOG"] = json!(log.to_string_lossy());
     let cfg = json!({"mcpServers": {"penelope": {"command": exe.to_string_lossy(), "args": ["mcp", "--root", ctx.root.to_string_lossy()], "env": env}}}).to_string();
     let allowed: Vec<String> = crate::route::allowed_for(&part.role).iter().map(|t| format!("mcp__penelope__{}", t)).collect();
-    let mut cmd = Command::new("claude");
+    let mut cmd = crate::claudecli::print_command(&ctx.cfg);
     cmd.args(["-p", task, "--output-format", "json", "--model", model["model"].as_str().unwrap_or("sonnet"),
               "--append-system-prompt", system, "--strict-mcp-config", "--mcp-config", &cfg, "--tools", "", "--allowedTools", &allowed.join(",")]);
     if let Some(level) = crate::llm::effort(&model) { cmd.args(["--effort", level]); }
