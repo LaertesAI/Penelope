@@ -39,6 +39,46 @@ def copy_extensions(build: Path, repo: Path):
                 shutil.copy2(f, dest)
 
 
+def patch_paths(patch):
+    """Every file the test patch names, old and new side, without /dev/null."""
+    paths = []
+    for line in patch.splitlines():
+        for prefix in ("--- a/", "+++ b/"):
+            if line.startswith(prefix):
+                path = line[len(prefix):].split("\t")[0].strip()
+                if path and path not in paths:
+                    paths.append(path)
+    return paths
+
+
+def reset_test_files(repo, paths):
+    """Like the SWE-bench harness: the test files go back to the base commit before the test patch applies.
+
+    A model may have edited or added a test file the patch touches. Its version is saved and restored afterwards,
+    so the check never loses work and never counts that case as infra."""
+    saved = {}
+    for rel in paths:
+        f = repo / rel
+        saved[rel] = f.read_bytes() if f.is_file() else None
+        tracked = run(["git", "cat-file", "-e", "HEAD:" + rel], repo).returncode == 0
+        if tracked:
+            run(["git", "checkout", "HEAD", "--", rel], repo)
+        elif f.is_file():
+            f.unlink()
+    return saved
+
+
+def restore_test_files(repo, saved):
+    for rel, data in saved.items():
+        f = repo / rel
+        if data is None:
+            if f.is_file():
+                f.unlink()
+        else:
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_bytes(data)
+
+
 def directive(test, repo):
     """Django lists a unittest as `test_name (module.Class)`; runtests.py wants `module.Class.test_name`."""
     if repo == "django/django" and " (" in test and test.rstrip().endswith(")"):
@@ -78,8 +118,10 @@ def main():
     if spec["repo"] == "sphinx-doc/sphinx":
         cmd = "pytest -rA"
     patch = spec["test_patch"]
+    saved = reset_test_files(repo, patch_paths(patch))
     applied = run(["git", "apply", "--whitespace=nowarn", "-"], repo, text=patch)
     if applied.returncode != 0:
+        restore_test_files(repo, saved)
         print("infra: the test patch did not apply")
         print(applied.stderr[-1200:])
         return 2
@@ -102,6 +144,7 @@ def main():
                 failed.append(("pass_to_pass", (r.stdout + r.stderr)[-800:]))
     finally:
         run(["git", "apply", "-R", "--whitespace=nowarn", "-"], repo, text=patch)
+        restore_test_files(repo, saved)
     if failed:
         print("FAIL: {} of {} test groups failed".format(len(failed), len(spec.get("fail_to_pass", [])) + 1))
         for test, out in failed[:3]:

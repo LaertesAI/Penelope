@@ -49,12 +49,7 @@ pub fn default_config() -> Value {
         "eur_per_usd": 0.92,
         "monthly_budget_eur": 0.0,
         "session_budget_eur": 0.0,
-        // Anthropic list prices, read 2026-11-27: https://platform.claude.com/docs/en/about-claude/pricing
-        // Haiku 5.5 up to 100K prompt $0.10/$0.50, Sonnet 5.5 $2/$10, Opus 5.5 $4/$20.
-        "prices": {"opus": [4.0, 20.0], "sonnet": [2.0, 10.0], "haiku": [0.1, 0.5],
-                   "claude-sonnet-5-5": [2.0, 10.0], "claude-haiku-5-5": [0.1, 0.5],
-                   "deepseek-v4.1": [0.15, 0.6], "mimo-v2.6": [0.14, 0.28],
-                   "glm-5.3": [0.2, 0.8], "qwen3.8": [0.2, 0.6], "kimi-k3": [0.6, 2.5]},
+        "prices": default_prices(),
         "plugin_dirs": null,
         "plugin_home": null,
         "brief": {"hosts": [], "roots": []},
@@ -65,6 +60,20 @@ pub fn default_config() -> Value {
         "clipboard": {"read": "", "write": ""},
         "ask": {"timeout_secs": 900}
     })
+}
+
+/// List prices in dollars per million tokens, input then output. The longest name in a model name wins, so an older
+/// family keeps its own price. Anthropic list, read 2026-11-27: https://platform.claude.com/docs/en/about-claude/pricing
+/// Haiku 5.5 up to 100K prompt $0.10/$0.50, Sonnet 5.5 $2/$10, Opus 5.5 $4/$20.
+fn default_prices() -> Value {
+    json!({"opus": [4.0, 20.0], "sonnet": [2.0, 10.0], "haiku": [0.1, 0.5],
+           "claude-sonnet-5-5": [2.0, 10.0], "claude-haiku-5-5": [0.1, 0.5],
+           "claude-opus-5-5": [4.0, 20.0], "claude-opus-5": [5.0, 25.0], "claude-opus-4-5": [5.0, 25.0],
+           "claude-opus-4-6": [5.0, 25.0], "claude-opus-4-7": [5.0, 25.0], "claude-opus-4-8": [5.0, 25.0],
+           "claude-opus-4": [15.0, 75.0],
+           "claude-sonnet-5": [2.0, 10.0], "claude-sonnet-4": [3.0, 15.0], "claude-haiku-4": [1.0, 5.0],
+           "deepseek-v4.1": [0.15, 0.6], "mimo-v2.6": [0.14, 0.28],
+           "glm-5.3": [0.2, 0.8], "qwen3.8": [0.2, 0.6], "kimi-k3": [0.6, 2.5]})
 }
 
 /// The nearest `.penelope` folder upwards from the working directory, else `~/.penelope`.

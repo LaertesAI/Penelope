@@ -27,9 +27,6 @@ pub const SETUPS: &[&str] = &["large", "large-subagents", "cluster"];
 /// The profile the cluster setup writes. It is small on purpose: one worker, one validator, the weak model.
 const CLUSTER_PROFILE: &str = "eval-small";
 
-/// The cluster starts at three independent parts. A one-part task goes straight to the large model.
-const MIN_CLUSTER_WORKERS: usize = 3;
-
 /// Tools replay may call. Everything else is refused before it reaches a handler, so replay cannot run a command or
 /// change a file. `run_detail` is left out because it reads logs of earlier commands, not the project.
 const REPLAY_TOOLS: &[&str] = &["read", "find", "grep", "tree", "outline", "json_query"];
@@ -300,6 +297,19 @@ here and then stop.\n\nTask: {}",
             workdir.display(), workdir.display(), check, task.prompt)
 }
 
+/// The source folder a task check reaches as `$PENELOPE_ROOT`. The caller's environment wins. Without it, the build
+/// folder is used only when it still exists, so a release binary never points a check at the path of its CI build.
+fn penelope_root(from_env: Option<std::ffi::OsString>) -> Option<PathBuf> {
+    penelope_root_from(from_env, Path::new(env!("CARGO_MANIFEST_DIR")).parent()?)
+}
+
+fn penelope_root_from(from_env: Option<std::ffi::OsString>, built: &Path) -> Option<PathBuf> {
+    if let Some(v) = from_env.filter(|v| !v.is_empty()) {
+        return Some(PathBuf::from(v));
+    }
+    built.join("cli").join("Cargo.toml").is_file().then(|| built.to_path_buf())
+}
+
 #[derive(Default)]
 struct CheckRun {
     passed: bool,
@@ -319,8 +329,9 @@ fn run_check(ctx: &Ctx, run_id: &str, task: &Task, dir: &Path) -> CheckRun {
         Err(e) => return CheckRun { passed: false, output: format!("cannot write the check log: {}", e) },
     };
     let mut cmd = crate::platform::shell(&task.check);
-    let penelope_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap_or(std::path::Path::new("."));
-    cmd.env("PENELOPE_ROOT", penelope_root);
+    if let Some(root) = penelope_root(std::env::var_os("PENELOPE_ROOT")) {
+        cmd.env("PENELOPE_ROOT", root);
+    }
     cmd.current_dir(dir).stdin(Stdio::null()).stdout(Stdio::from(out)).stderr(Stdio::from(err));
     // The check gets its own process group. `kill_tree` then reaches pytest and every process the check started;
     // without this, only the shell died and a hung check ran for hours (sympy-18698).
@@ -443,19 +454,6 @@ fn setup_model(ctx: &Ctx, setup: &str) -> String {
     model["model"].as_str().unwrap_or("?").to_string()
 }
 
-/// The number of workers in the eval cluster profile.
-fn eval_profile_workers(ctx: &Ctx) -> Result<usize, String> {
-    let path = ctx.root.join("clusters").join("profiles").join(format!("{}.json", CLUSTER_PROFILE));
-    let text = fs::read_to_string(&path).map_err(|e| format!("cannot read {}: {}", path.display(), e))?;
-    let profile: Value = serde_json::from_str(&text).map_err(|e| format!("cannot read {}: {}", path.display(), e))?;
-    Ok(profile["workers"].as_array().map_or(0, Vec::len))
-}
-
-/// One-part tasks go straight to the large model. The cluster only starts at three parts.
-fn route_setup<'a>(setup: &'a str, workers: usize) -> &'a str {
-    if setup == "cluster" && workers < MIN_CLUSTER_WORKERS { "large" } else { setup }
-}
-
 fn ensure_cluster_profile(ctx: &Ctx) -> Result<(), String> {
     let dir = ctx.root.join("clusters").join("profiles");
     fs::create_dir_all(&dir).map_err(|e| format!("cannot make {}: {}", dir.display(), e))?;
@@ -514,9 +512,9 @@ fn run_setup(ctx: &Ctx, tasks_path: &str, setup: &str, tasks: &[Task]) -> Result
     if setup == "cluster" {
         ensure_cluster_profile(ctx)?;
     }
-    // A cluster only pays off with at least three independent parts. The eval profile has one worker, so the
-    // one-part tasks in this runner go down the large path and the cluster arm measures that route.
-    let route = if setup == "cluster" { route_setup(setup, eval_profile_workers(ctx)?) } else { setup };
+    // The cluster arm runs the eval-small profile: one weak worker at low effort (K9). A routing rule by the number of
+    // parts (K7) needs the part count of a plan; a fixed one-worker profile would send every task to the large model.
+    let route = setup;
     let run_id = next_run_id(ctx, setup);
     let run_ctx = eval_context(ctx, route);
     let model = setup_model(&run_ctx, route);
@@ -1024,41 +1022,41 @@ mod tests {
     }
 
     #[test]
-    fn a_one_part_cluster_setup_uses_the_large_model() {
-        let (mut ctx, d) = ctx("cluster-large");
+    fn the_cluster_setup_runs_the_weak_model() {
+        let (mut ctx, d) = ctx("cluster-weak");
         let repo = repo(&d);
         let file = tasks(&d, &repo, "test -f README.md", "Say what the project is.");
-        let (address, seen) = crate::llm::fake::serve(vec![reply("the task is done", 30, 3)]);
+        let (address, seen) = crate::llm::fake::serve(vec![reply("the task is done", 30, 3), reply("PASS: done", 10, 1),
+                                                          reply("PASS: done", 10, 1)]);
         endpoint(&mut ctx, &address, "main");
-        ctx.cfg["prices"] = json!({"test-model": [1.0, 2.0]});
+        endpoint(&mut ctx, &address, "weak");
+        ctx.cfg["main"]["model"] = json!("main-model");
+        ctx.cfg["weak"]["model"] = json!("weak-model");
         let parsed = parse_tasks(&file).unwrap();
         let result = run_setup(&ctx, file.to_str().unwrap(), "cluster", &parsed).unwrap();
-        assert_eq!((result.passed(), result.tokens()), (1, (30, 3)));
-        assert_eq!(result.model, "test-model");
-        assert_eq!(eval_profile_workers(&ctx).unwrap(), 1);
-        assert!(ctx.root.join("clusters/profiles").join(format!("{}.json", CLUSTER_PROFILE)).is_file());
+        assert_eq!(result.model, "weak-model");
+        assert_eq!(result.passed(), 1);
         let profile: Value = serde_json::from_str(&fs::read_to_string(ctx.root.join("clusters/profiles").join(format!("{}.json", CLUSTER_PROFILE))).unwrap()).unwrap();
         assert_eq!(profile["single_model"], true);
         let run: Value = serde_json::from_str(&fs::read_to_string(ctx.root.join("eval/runs").join(format!("{}.json", result.run_id))).unwrap()).unwrap();
-        assert_eq!((run["setup"].as_str(), run["route"].as_str()), (Some("cluster"), Some("large")));
+        assert_eq!((run["setup"].as_str(), run["route"].as_str()), (Some("cluster"), Some("cluster")));
         let seen = seen.lock().unwrap();
-        assert_eq!(seen.len(), 1, "a one-part task must make one model call, not a cluster");
-        let systems: Vec<String> = seen.iter().map(|s| s.body["messages"][0]["content"].as_str().unwrap_or("").to_string()).collect();
-        assert!(systems.iter().all(|s| !s.contains("part of the Penelope cluster")), "a one-part task must not start a cluster: {:?}", systems);
+        assert!(!seen.is_empty());
+        assert!(seen.iter().all(|s| s.body["model"] == "weak-model"), "the cluster arm must not call the main model: {:?}",
+                seen.iter().map(|s| s.body["model"].clone()).collect::<Vec<_>>());
+        assert!(seen.iter().any(|s| s.body["messages"][0]["content"].as_str().unwrap_or("").contains("part of the Penelope cluster")),
+                "the cluster arm must start the cluster");
         let _ = fs::remove_dir_all(&d);
     }
 
     #[test]
-    fn the_eval_profile_worker_count_builds_the_route() {
-        let (ctx, d) = ctx("profile-workers");
-        fs::create_dir_all(ctx.root.join("clusters/profiles")).unwrap();
-        let path = ctx.root.join("clusters/profiles").join(format!("{}.json", CLUSTER_PROFILE));
-        fs::write(&path, json!({"workers": [{"name": "a"}, {"name": "b"}, {"name": "c"}]}).to_string()).unwrap();
-        assert_eq!(eval_profile_workers(&ctx).unwrap(), 3);
-        assert_eq!(route_setup("cluster", 3), "cluster");
-        assert_eq!(route_setup("cluster", 2), "large");
-        assert_eq!(route_setup("large", 1), "large");
-        let _ = fs::remove_dir_all(&d);
+    fn the_check_root_comes_from_the_environment_first() {
+        assert_eq!(penelope_root(Some("/opt/penelope".into())), Some(PathBuf::from("/opt/penelope")));
+        let built = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf();
+        assert_eq!(penelope_root(None), Some(built.clone()), "a test build still finds its own source folder");
+        assert_eq!(penelope_root(Some("".into())), Some(built));
+        let gone = std::env::temp_dir().join(format!("penelope-no-build-{}", std::process::id()));
+        assert_eq!(penelope_root_from(None, &gone), None, "a release binary must not name its CI build folder");
     }
 
     #[test]

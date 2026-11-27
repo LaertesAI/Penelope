@@ -9,6 +9,7 @@ import argparse
 import json
 import os
 import shutil
+import signal
 import subprocess
 import time
 from pathlib import Path
@@ -23,14 +24,30 @@ SPECS = Path("/home/rene/.cache/penelope/swebench/specs.json")
 ENVS = Path("/home/rene/.cache/penelope/swebench/envs.json")
 
 
+def as_text(data):
+    """TimeoutExpired carries bytes even with text=True; a row must stay JSON text."""
+    if data is None:
+        return ""
+    if isinstance(data, bytes):
+        return data.decode("utf-8", errors="replace")
+    return data
+
+
 def run(cmd, cwd, timeout, env=None):
+    """Runs one command in its own session. On a timeout the whole group goes, pytest and tool processes too."""
     start = time.time()
+    p = subprocess.Popen(cmd, cwd=str(cwd), text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         env={**os.environ, **(env or {})}, start_new_session=True)
     try:
-        p = subprocess.run(cmd, cwd=str(cwd), text=True, capture_output=True, timeout=timeout,
-                           env={**os.environ, **(env or {})})
-        return p.returncode, p.stdout, p.stderr, time.time() - start
+        out, err = p.communicate(timeout=timeout)
+        return p.returncode, out, err, time.time() - start
     except subprocess.TimeoutExpired as e:
-        return 124, e.stdout or "", e.stderr or "", time.time() - start
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            p.kill()
+        out, err = p.communicate()
+        return 124, as_text(out or e.stdout), as_text(err or e.stderr), time.time() - start
 
 
 def worktree(repo, commit, dest):
