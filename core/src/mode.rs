@@ -25,28 +25,41 @@ pub fn current(ctx: &Ctx) -> String {
     if names().contains(&name.as_str()) { name } else { "auto".to_string() }
 }
 
-/// The settings of one mode. `mode` itself is stored as well, so `penelope mode` can show it after a restart.
-pub fn apply(ctx: &mut Ctx, name: &str) -> Result<String, String> {
-    let name = name.trim().to_lowercase();
-    if !names().contains(&name.as_str()) {
-        return Err(format!("NOT set. {} is no mode. The modes are: {}.", name, names().join(", ")));
-    }
-    let (delegate, run, edit, learn, privacy, verify) = match name.as_str() {
+/// The fields one mode sets, as (delegate, run_policy, edit_policy, auto_learn, privacy, agent_verify).
+fn fields(name: &str) -> (&'static str, &'static str, &'static str, bool, &'static str, bool) {
+    match name {
         "manual" => ("off", "safe", "ask", true, "rules", true),
         "safe" => ("off", "safe", "never", false, "rules", true),
         "review" => ("auto", "safe", "ask", true, "rules", true),
         "privacy" => ("off", "safe", "ask", false, "pii", true),
         "power" => ("auto", "all", "all", true, "rules", false),
         _ => ("auto", "safe", "ask", true, "rules", true),
-    };
-    ctx.cfg["mode"] = json!(name);
-    ctx.cfg["delegate"] = json!(delegate);
-    ctx.cfg["run_policy"] = json!(run);
-    ctx.cfg["edit_policy"] = json!(edit);
-    ctx.cfg["auto_learn"] = json!(learn);
-    ctx.cfg["privacy"] = json!(privacy);
-    ctx.cfg["privacy_answers"] = json!(privacy != "off");
-    ctx.cfg["agent_verify"] = json!(verify);
+    }
+}
+
+/// Writes the fields of one mode into the settings in memory, without saving. The name must be one of `MODES`.
+/// `api::save_settings` and `apply` both use it, so a mode set from the desktop sets the same policies.
+pub fn preset(cfg: &mut serde_json::Value, name: &str) -> Result<String, String> {
+    let name = name.trim().to_lowercase();
+    if !names().contains(&name.as_str()) {
+        return Err(format!("NOT set. {} is no mode. The modes are: {}.", name, names().join(", ")));
+    }
+    let (delegate, run, edit, learn, privacy, verify) = fields(&name);
+    cfg["mode"] = json!(name);
+    cfg["delegate"] = json!(delegate);
+    cfg["run_policy"] = json!(run);
+    cfg["edit_policy"] = json!(edit);
+    cfg["auto_learn"] = json!(learn);
+    cfg["privacy"] = json!(privacy);
+    cfg["privacy_answers"] = json!(privacy != "off");
+    cfg["agent_verify"] = json!(verify);
+    Ok(name)
+}
+
+/// The settings of one mode. `mode` itself is stored as well, so `penelope mode` can show it after a restart.
+pub fn apply(ctx: &mut Ctx, name: &str) -> Result<String, String> {
+    let name = preset(&mut ctx.cfg, name)?;
+    let (delegate, run, edit, _, _, _) = fields(&name);
     if let Err(e) = std::fs::write(ctx.root.join("config.json"), serde_json::to_string_pretty(&ctx.cfg).unwrap()) {
         return Err(format!("NOT saved. {}", e));
     }

@@ -91,7 +91,7 @@ fn platform_move(ctx: &Ctx, x: i64, y: i64, click: bool) -> Result<(i64, i64), S
 fn click_at(x: i64, y: i64) -> Result<(), String> {
     // Wayland without ydotool can use the uinput helper; X11 uses xdotool.
     if std::env::var("WAYLAND_DISPLAY").is_ok() && crate::config::which("ydotool").is_none() {
-        let helper = crate::input::binary();
+        let helper = crate::platform::input_binary();
         if helper.is_file() {
             let out = Command::new(helper).args([x.to_string(), y.to_string(), "1".to_string()]).output().map_err(|e| e.to_string())?;
             return if out.status.success() { Ok(()) } else { Err("the uinput helper failed".to_string()) };

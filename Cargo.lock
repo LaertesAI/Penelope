@@ -1209,15 +1209,26 @@ dependencies = [
 ]
 
 [[package]]
-name = "penelope"
+name = "penelope-cli"
+version = "0.11.0"
+dependencies = [
+ "penelope-core",
+ "ratatui",
+ "serde_json",
+ "unicode-width",
+ "ureq",
+ "zip",
+]
+
+[[package]]
+name = "penelope-core"
 version = "0.11.0"
 dependencies = [
  "jsonschema",
- "ratatui",
  "regex",
  "rhai",
+ "serde",
  "serde_json",
- "unicode-width",
  "ureq",
  "zip",
 ]

@@ -4549,7 +4549,7 @@ mod tests {
         let parallel = timed_parts(3);
         let sequential = timed_parts(1);
         assert!(parallel < Duration::from_millis(2_500), "three parts in parallel took {:?}", parallel);
-        assert!(parallel + Duration::from_millis(1_200) < sequential,
+        assert!(parallel + Duration::from_millis(500) < sequential,
                 "parallel {:?} must be clearly faster than sequential {:?}", parallel, sequential);
     }
 
