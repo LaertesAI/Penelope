@@ -352,8 +352,18 @@ pub fn parse_spec(v: &Value) -> Spec {
             "=" | "==" => Op::Eq,
             _ => return None,
         };
-        let value = f["value"].as_f64().or_else(|| f["value"].as_str().and_then(parse_number))?;
-        let unit = f["unit"].as_str().unwrap_or("").trim().to_uppercase();
+        // The value may come as 2, "2", "2B" or 2000000000 with or without a unit.
+        let (value, written_unit) = match f["value"].as_f64() {
+            Some(v) => (v, String::new()),
+            None => {
+                let t = num_tokens(f["value"].as_str()?).into_iter().next()?;
+                (t.value, match t.scale { Some(s) if s >= 1e9 => "B", Some(s) if s >= 1e6 => "M", Some(_) => "K", None => "" }.to_string())
+            }
+        };
+        let unit = match f["unit"].as_str().unwrap_or("").trim().to_uppercase() {
+            u if u.is_empty() => written_unit,
+            u => u,
+        };
         if column.is_empty() { None } else { Some(Filter { column, op, value, unit }) }
     }).collect()).unwrap_or_default();
     Spec { filters, rank_by: v["rank_by"].as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()), descending: v["descending"].as_bool().unwrap_or(true) }
@@ -405,6 +415,8 @@ pub struct Selection {
     pub kept: usize,
     pub rank_col: String,
     pub criteria: String,
+    /// Filters whose column the table lacks; they were not applied.
+    pub unchecked: Vec<String>,
 }
 
 fn pass(op: Op, a: f64, b: f64) -> bool {
@@ -442,11 +454,21 @@ pub fn select(t: &Table, spec: &Spec) -> Option<Selection> {
     if rank_i == name_i {
         return None;
     }
-    let cols: Vec<Option<usize>> = spec.filters.iter().map(|f| find_col(&t.header, &f.column)).collect();
-    // A filter column the table lacks is read from the model name when it is a size.
-    if spec.filters.iter().zip(&cols).any(|(f, c)| c.is_none() && !param_like(&f.column)) {
-        return None;
+    // A filter column the table lacks is read from the model name when it is a size. Any other missing column cannot be
+    // checked on this table; the caption says so.
+    let mut unchecked: Vec<String> = Vec::new();
+    let mut filters: Vec<Filter> = Vec::new();
+    let mut cols: Vec<Option<usize>> = Vec::new();
+    for f in &spec.filters {
+        let c = find_col(&t.header, &f.column);
+        if c.is_none() && !param_like(&f.column) {
+            unchecked.push(f.column.clone());
+        } else {
+            filters.push(f.clone());
+            cols.push(c);
+        }
     }
+    let spec = &Spec { filters, ..spec.clone() };
     let mut kept: Vec<(f64, String, Vec<String>)> = Vec::new();
     let mut unknown = 0;
     for r in &t.rows {
@@ -509,7 +531,7 @@ pub fn select(t: &Table, spec: &Spec) -> Option<Selection> {
     let criteria = spec.filters.iter().map(|f| format!("{} {} {}{}", f.column, match f.op { Op::Lt => "<", Op::Le => "<=", Op::Gt => ">", Op::Ge => ">=", Op::Eq => "=" }, fmt(f.value), f.unit)).collect::<Vec<_>>().join(" and ");
     let kept_n = rows.len();
     rows.truncate(SHOWN_ROWS);
-    Some(Selection { source: t.source.clone(), primary: t.primary, header, rows, considered: t.rows.len(), unknown, kept: kept_n, rank_col: t.header[rank_i].clone(), criteria })
+    Some(Selection { source: t.source.clone(), primary: t.primary, header, rows, considered: t.rows.len(), unknown, kept: kept_n, rank_col: t.header[rank_i].clone(), criteria, unchecked })
 }
 
 /// The best selection over several tables: a primary source before a secondary one, then the one with most rows.
@@ -523,7 +545,8 @@ impl Selection {
         let mut out = format!("Computed by Penelope from the rows of {} ({}): {} of {} rows{}, ranked by {}. The rank counts the kept rows, not the rank the source prints.{}\n\n",
             self.source, if self.primary { "primary source" } else { "secondary source, third party" }, self.kept, self.considered,
             if self.criteria.is_empty() { String::new() } else { format!(" with {}", self.criteria) }, self.rank_col,
-            if self.unknown > 0 { format!(" {} rows were left out because a value could not be read.", self.unknown) } else { String::new() });
+            format!("{}{}", if self.unknown > 0 { format!(" {} rows were left out because a value could not be read.", self.unknown) } else { String::new() },
+                    if self.unchecked.is_empty() { String::new() } else { format!(" Not checked, the table has no such column: {}.", self.unchecked.join(", ")) }));
         out.push_str(&format!("| {} |\n|{}|\n", self.header.join(" | "), vec!["---"; self.header.len()].join("|")));
         for r in &self.rows {
             out.push_str(&format!("| {} |\n", r.iter().map(|c| c.replace('|', "/")).collect::<Vec<_>>().join(" | ")));
@@ -597,6 +620,10 @@ mod tests {
 
     #[test]
     fn rows_are_filtered_by_size_and_ranked_from_the_kept_rows() {
+        for v in [json!("2B"), json!("2 billion"), json!(2)] {
+            let sp = parse_spec(&json!({"filters": [{"column": "parameters", "op": "<", "value": v, "unit": if v == json!(2) { "B" } else { "" }}]}));
+            assert_eq!((sp.filters.len(), sp.filters[0].value, sp.filters[0].unit.as_str()), (1, 2.0, "B"), "{:?}", v);
+        }
         let t = &from_markdown("https://lb.example/", HTML_TABLE_MD)[0];
         let s = select(t, &spec()).unwrap();
         // Under 2B by name: Qwen3-0.6B (21.1), xLAM-2-1b (33.4), MiniCPM5-1B (25.1). Mystery Model has no size in its name.
@@ -628,7 +655,9 @@ mod tests {
         assert_eq!(s.rows.iter().map(|r| r[0].clone()).collect::<Vec<_>>(), ["1", "1", "3"]);
         let wordy = parse_spec(&json!({"filters": [{"column": "parameter count", "op": "<", "value": 2, "unit": "B"}], "rank_by": "BFCL overall score"}));
         assert_eq!(select(&csv, &wordy).unwrap().rank_col, "Overall Acc");
-        assert!(select(&tie, &parse_spec(&json!({"filters": [{"column": "license", "op": "=", "value": 1}]}))).is_none());
+        let lic = select(&tie, &parse_spec(&json!({"filters": [{"column": "license", "op": "=", "value": 1}], "rank_by": "score"}))).unwrap();
+        assert_eq!((lic.kept, lic.unchecked.clone()), (3, vec!["license".to_string()]));
+        assert!(lic.markdown().contains("Not checked, the table has no such column: license."));
         // A primary table beats a bigger secondary one.
         let mut big = tie.clone();
         big.rows.extend((0..5).map(|i| vec![format!("D{}-1B", i), format!("{}", i)]));

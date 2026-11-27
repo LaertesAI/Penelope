@@ -1511,6 +1511,13 @@ pub fn run_with(io: &dyn Io, st: &Settings, base: &Path, question: &str) -> Outc
     let mut states: Vec<SubState> = Vec::new();
     let planned = plan(io, &q);
     let required = planned.required;
+    // What the planner decided, for the person who reads the folder.
+    let plan_text = format!("# Plan\n\nRequired output: {}\n\nPrimary sources:\n{}\n\nData spec: {:?}\n\nSub-questions:\n{}\n", required,
+                            planned.primary.iter().map(|u| format!("- {}", u)).collect::<Vec<_>>().join("\n"), planned.spec,
+                            planned.subs.iter().map(|s| format!("- {}: {}", s.id, s.question)).collect::<Vec<_>>().join("\n"));
+    if std::fs::write(dir.join("plan.md"), plan_text).is_ok() {
+        io.written(&dir.join("plan.md"));
+    }
     let hosts: Vec<String> = planned.primary.iter().map(|u| host_of(u)).collect();
     let spec = planned.spec;
     let mut tasks: Vec<Task> = Vec::new();
