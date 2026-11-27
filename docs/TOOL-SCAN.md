@@ -172,7 +172,8 @@ second block hidden behind the first; the condition rule passes it. Both changes
 values under names with KEY, TOKEN, SECRET, PASSWORD or AUTH, headers, `Authorization` and `Bearer` in arguments,
 query keys and the value after `--token` or `--api-key`. It prints the length only. On the development machine it
 found 2: a bearer header in an argument of a Claude Code project server and an `Authorization` header of a plugin
-server. A key inside a URL path is not detected.
+server. A key inside a URL path is not detected. The TUI settings view shows server arguments with the same
+redaction.
 
 ## Commands
 

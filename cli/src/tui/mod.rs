@@ -2778,7 +2778,8 @@ fn folder_settings(root: &std::path::Path) -> Vec<String> {
     let ctx = Ctx { root: root.to_path_buf(), cfg: serde_json::json!({}) };
     if let Some(servers) = crate::plugins::servers(&ctx).as_object() {
         for (name, s) in servers {
-            let args = s["args"].as_array().map(|a| a.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(" ")).unwrap_or_default();
+            // An argument may carry `Authorization: Bearer ...`; the settings view shows its length only.
+            let args = s["args"].as_array().map(|a| a.iter().filter_map(|x| x.as_str()).map(|x| crate::vet::redact(x, false)).collect::<Vec<_>>().join(" ")).unwrap_or_default();
             out.push(format!("mcp {}: {} {}", name, s["command"].as_str().unwrap_or(s["url"].as_str().unwrap_or("?")), args).trim_end().to_string());
         }
     }
