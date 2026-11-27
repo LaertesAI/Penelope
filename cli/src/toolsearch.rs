@@ -1,6 +1,6 @@
 //! Tool search: finds a capability that no connected tool has, and installs it only after a yes in the TUI.
 //!
-//! Step 1, local: the tools of the running MCP servers (`mcpclient::cached_tools`, no server is started for this),
+//! Step 1, local: the tools of the running MCP servers (`mcpclient::cached_tools_all`, no server is started for this),
 //! the names of every registered server, the installed plugins (name, skills, commands) and the standalone skills.
 //! Each is one document of name plus first sentence, ranked with BM25.
 //!
@@ -226,7 +226,7 @@ fn doc(name: &str, line: &str, install: Install) -> Doc {
 
 fn local_docs(ctx: &Ctx) -> Vec<Doc> {
     let mut out = Vec::new();
-    for (server, t) in crate::mcpclient::cached_tools(ctx) {
+    for (server, t) in crate::mcpclient::cached_tools_all(ctx) {
         out.push(doc(&format!("{}/{}", server, t.name), &first_sentence(&t.description), Install::Local));
     }
     if let Some(servers) = crate::plugins::servers(ctx).as_object() {

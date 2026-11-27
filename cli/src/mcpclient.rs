@@ -334,7 +334,7 @@ pub fn probe(ctx: &Ctx, server: &str) -> Result<Vec<ToolInfo>, String> {
 
 /// The tools that running servers already listed in this session, as (server, tool). No server is started and no
 /// request is sent; a server that is busy or not started adds nothing. Tool search reads this.
-pub fn cached_tools(ctx: &Ctx) -> Vec<(String, ToolInfo)> {
+pub fn cached_tools_all(ctx: &Ctx) -> Vec<(String, ToolInfo)> {
     let prefix = format!("{}|", ctx.root.display());
     let cells: Vec<(String, Cell)> = {
         let map = pool().lock().unwrap_or_else(|e| e.into_inner());
@@ -354,6 +354,15 @@ pub fn cached_tools(ctx: &Ctx) -> Vec<(String, ToolInfo)> {
         }
     }
     out
+}
+
+/// The tool list this process already holds for a server, or None when the server is not running or has not listed its
+/// tools yet. It starts nothing and waits for nothing, so the watcher can read it on every call.
+pub fn cached_tools(ctx: &Ctx, name: &str) -> Option<Vec<Value>> {
+    let cell = cell_for(ctx, name);
+    let slot = cell.try_lock().ok()?;
+    let server = slot.as_ref().filter(|s| s.alive)?;
+    server.tools.clone()
 }
 
 /// The full argument schema of one tool, asked from a Mitos server only when needed. The model reads it before
