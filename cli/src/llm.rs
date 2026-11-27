@@ -345,7 +345,10 @@ pub fn text_tool_calls(content: &str) -> (Vec<ToolCall>, String) {
                 };
                 calls.push(ToolCall { id: format!("text-call-{}", calls.len() + 1), name: v["name"].as_str().unwrap().to_string(), args });
             }
-            _ => left.push_str(&cursor[open..open + "<tool_call>".len() + close + "</tool_call>".len()]),
+            _ => match glm_call(body) {
+                Some((name, args)) => calls.push(ToolCall { id: format!("text-call-{}", calls.len() + 1), name, args }),
+                None => left.push_str(&cursor[open..open + "<tool_call>".len() + close + "</tool_call>".len()]),
+            },
         }
         cursor = &after[close + "</tool_call>".len()..];
     }
@@ -358,6 +361,31 @@ pub fn text_tool_calls(content: &str) -> (Vec<ToolCall>, String) {
     let text = left.trim();
     let text = text.strip_prefix("none:").map(str::trim).unwrap_or(text);
     (calls, text.to_string())
+}
+
+/// One call in GLM's own template, the body between `<tool_call>` and `</tool_call>`: the tool name, then pairs of
+/// `<arg_key>K</arg_key><arg_value>V</arg_value>`. A value that parses as JSON other than a string keeps its type.
+/// None when the body does not start with a tool name followed by a pair or nothing.
+pub fn glm_call(body: &str) -> Option<(String, Value)> {
+    let pair = regex::Regex::new(r"(?s)<arg_key>(.*?)</arg_key>\s*<arg_value>(.*?)</arg_value>").unwrap();
+    let name_end = body.find("<arg_key>").unwrap_or(body.len());
+    let name = body[..name_end].trim();
+    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.') {
+        return None;
+    }
+    let mut args = serde_json::Map::new();
+    for p in pair.captures_iter(&body[name_end..]) {
+        let raw = &p[2];
+        let value = match serde_json::from_str::<Value>(raw.trim()) {
+            Ok(v) if !v.is_string() => v,
+            _ => json!(raw),
+        };
+        args.insert(p[1].trim().to_string(), value);
+    }
+    if name_end < body.len() && args.is_empty() {
+        return None;
+    }
+    Some((name.to_string(), Value::Object(args)))
 }
 
 /// The marker of DeepSeek's own text template for tool calls (fullwidth bars).
@@ -491,6 +519,21 @@ pub fn run_loop_with(model: &Value, system: &str, history: &mut Vec<Value>, tool
 #[cfg(test)]
 mod text_call_tests {
     use super::*;
+
+    #[test]
+    fn glm_arg_key_blocks_become_calls() {
+        // GLM-5.3 in a calibration run with the text tool format (hard-fix-median), plus a typed value.
+        let answer = "<tool_call>read<arg_key>path</arg_key><arg_value>app/mathutil.py</arg_value></tool_call>\
+<tool_call>run<arg_key>command</arg_key><arg_value>python3 tests/test_median.py</arg_value><arg_key>timeout</arg_key><arg_value>30</arg_value></tool_call>";
+        let (calls, rest) = text_tool_calls(answer);
+        assert_eq!(calls.len(), 2);
+        assert_eq!((calls[0].name.as_str(), calls[0].args["path"].as_str()), ("read", Some("app/mathutil.py")));
+        assert_eq!((calls[1].args["command"].as_str(), &calls[1].args["timeout"]), (Some("python3 tests/test_median.py"), &json!(30)));
+        assert!(rest.is_empty());
+        // A broken pair (seen in the same run) stays text.
+        let (none, _) = text_tool_calls("<tool_call>read<arg_key>path\": \"config/settings.json\"</arg_value></tool_call>");
+        assert!(none.is_empty());
+    }
 
     #[test]
     fn deepseek_dsml_blocks_become_calls() {
