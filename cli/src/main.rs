@@ -22,6 +22,7 @@ mod cost;
 mod crew;
 mod cursor;
 mod forge;
+mod gates;
 mod graph;
 mod eurykleia;
 mod eval;

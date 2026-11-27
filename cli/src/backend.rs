@@ -134,19 +134,22 @@ pub struct Chat {
     routed: bool,
     context_tokens: u64,
     route: crate::autoroute::RouteId,
+    /// The first outside text of this chat (Kerkis gates). It stays while the history can hold that text.
+    gate_taint: Option<String>,
 }
 
 impl Chat {
     pub fn new() -> Chat {
         Chat { session: None, history: Vec::new(), history_kind: String::new(), input_tokens: 0, output_tokens: 0, turns: 0,
                cancel: Arc::new(AtomicBool::new(false)), pid: Arc::new(AtomicU32::new(0)), trace: Vec::new(),
-               routed: false, context_tokens: 0, route: crate::autoroute::RouteId::new() }
+               routed: false, context_tokens: 0, route: crate::autoroute::RouteId::new(), gate_taint: None }
     }
 
     /// Goes on with a stored conversation. A conversation through an HTTP endpoint gets its message history back from disk.
     pub fn resume(ctx: &Ctx, entry: &Value) -> Chat {
         let mut chat = Chat::new();
         chat.session = entry["id"].as_str().map(String::from);
+        chat.gate_taint = chat.session.as_deref().and_then(|id| crate::gates::load_session(ctx, id));
         if let Some((kind, messages)) = chat.session.as_deref().and_then(|id| crate::sessions::load_history(ctx, id)) {
             chat.history = messages;
             chat.history_kind = kind;
@@ -199,9 +202,11 @@ impl Chat {
 Choose a hosted model: penelope provider use NAME --role main.", family));
         }
         crate::tools::begin_turn();
+        crate::gates::set_session(self.gate_taint.clone());
         self.cancel.store(false, Ordering::SeqCst);
         let (user, masked) = crate::tools::guard_count(ctx, user);
         let user = user.as_str();
+        crate::gates::user_said(user);
         if masked > 0 {
             on(Event::Masked(masked));
         }
@@ -262,6 +267,9 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
             }
             shown
         });
+        if let Some(id) = &self.session {
+            crate::gates::save_session(ctx, id, self.gate_taint.as_deref());
+        }
         if out.is_ok() {
             self.turns += 1;
             if let Some(id) = &self.session {
@@ -297,6 +305,11 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
         if !acp_session.is_empty() {
             servers["penelope"]["env"]["PENELOPE_ACP_SESSION"] = json!(acp_session);   // a question goes to this editor session
         }
+        // The gates read the user text and the session taint from a 0600 file: the text stays off the command line.
+        let turn_file = crate::gates::write_turn_file(ctx, user, self.gate_taint.as_deref());
+        if let Some(path) = &turn_file {
+            servers["penelope"]["env"]["PENELOPE_GATES_TURN"] = json!(path.to_string_lossy());
+        }
         let mut allowed: Vec<String> = mcp::main_tools(ctx).iter().map(|t| format!("mcp__penelope__{}", t)).collect();
         for t in crate::forge::specs(ctx) {          // a tool Penelope wrote is offered to the claude command too
             if let Some(name) = t["name"].as_str() { allowed.push(format!("mcp__penelope__{}", name)); }
@@ -326,8 +339,13 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
         if let Some(s) = &self.session {
             cmd.args(["--resume", s]);
         }
-        let mut child = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()
-            .map_err(|e| format!("cannot start the claude command: {}", e))?;
+        let mut child = match cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn() {
+            Ok(child) => child,
+            Err(e) => {
+                if let Some(path) = &turn_file { let _ = std::fs::remove_file(path); }
+                return Err(format!("cannot start the claude command: {}", e));
+            }
+        };
         self.pid.store(child.id(), Ordering::SeqCst);
         let mut result: Option<Value> = None;
         let mut seen = String::new();
@@ -384,6 +402,9 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
         }
         let _ = child.wait();
         self.pid.store(0, Ordering::SeqCst);
+        if let Some(taint) = turn_file.as_deref().and_then(crate::gates::read_turn_file) {
+            self.gate_taint = Some(taint);
+        }
         if self.cancel.load(Ordering::SeqCst) {
             return Err("stopped".to_string());
         }
@@ -438,6 +459,7 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
             },
             &mut |text| (*events.borrow_mut())(Event::Text(text.to_string())));
         self.history = history;
+        self.gate_taint = crate::gates::snapshot().map(|t| t.source);
         self.input_tokens += usage.tokens_in;
         self.output_tokens += usage.tokens_out;
         self.context_tokens = usage.max_in;
