@@ -207,7 +207,7 @@ fn permit(ctx: &Ctx, what: &str, cwd: &str, diff: &str) -> Option<String> {
         return None;
     }
     match crate::tools::ask_person(what, cwd, "file", diff) {
-        Some(true) => None,
+        Some(true) => { crate::gates::diff_approved(); None }
         Some(false) => Some("NOT changed. The user declined this change.".to_string()),
         None => Some("NOT changed. Outside the full screen interface nobody can answer the question. The user can allow every change \
                       with \"edit_policy\": \"all\" in .penelope/config.json.".to_string()),
@@ -430,7 +430,7 @@ pub fn write(ctx: &Ctx, path: &str, text: &str, cwd: &str) -> String {
         let _ = fs::create_dir_all(dir);
     }
     match fs::write(&p, text) {
-        Ok(()) => { crate::clusters::note_file(ctx, &p, crate::clusters::current_level()); format!("done: {}", what) }
+        Ok(()) => { crate::clusters::note_file(ctx, &p, crate::gates::writer_level()); format!("done: {}", what) }
         Err(e) => format!("cannot write {}: {}", show(&p), e),
     }
 }
@@ -477,7 +477,7 @@ pub fn edit(ctx: &Ctx, path: &str, replacements: &[Replacement], cwd: &str) -> S
     }
     keep_for_undo(ctx, &p, &what);
     match fs::write(&p, after) {
-        Ok(()) => { crate::clusters::note_file(ctx, &p, crate::clusters::current_level()); format!("done: {}", what) }
+        Ok(()) => { crate::clusters::note_file(ctx, &p, crate::gates::writer_level()); format!("done: {}", what) }
         Err(e) => format!("cannot write {}: {}", show(&p), e),
     }
 }

@@ -162,6 +162,7 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
         self.cancel.store(false, Ordering::SeqCst);
         let (user, masked) = crate::tools::guard_count(ctx, user);
         let user = user.as_str();
+        crate::gates::user_said(user);
         if masked > 0 {
             on(Event::Masked(masked));
         }
@@ -239,6 +240,7 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
         if let Ok(dir) = std::env::var("PENELOPE_APPROVE_DIR") {
             servers["penelope"]["env"]["PENELOPE_APPROVE_DIR"] = json!(dir);       // the interface answers questions about unsafe commands
         }
+        servers["penelope"]["env"]["PENELOPE_TURN_USER"] = json!(user.chars().take(4000).collect::<String>());   // the anchor rule of the gates
         let mut allowed: Vec<String> = mcp::main_tools(ctx).iter().map(|t| format!("mcp__penelope__{}", t)).collect();
         for t in crate::forge::specs(ctx) {          // a tool Penelope wrote is offered to the claude command too
             if let Some(name) = t["name"].as_str() { allowed.push(format!("mcp__penelope__{}", name)); }
