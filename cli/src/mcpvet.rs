@@ -72,7 +72,7 @@ Start the server inside a project, or name the folder to scan with --scan-root D
 
 pub fn profile(scan_roots: Vec<PathBuf>) -> Result<Profile, String> {
     let cwd = std::env::current_dir().and_then(|d| d.canonicalize()).map_err(|e| format!("cannot read the working folder: {}", e))?;
-    let home = std::env::var_os("HOME").map(PathBuf::from).and_then(|h| h.canonicalize().ok());
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from).and_then(|h| h.canonicalize().ok());
     let roots = roots_for(&cwd, home.as_deref(), scan_roots)?;
     Ok(Profile {
         name: "vet",
@@ -91,7 +91,7 @@ fn dispatch(roots: &[PathBuf], name: &str, a: &Value) -> Result<Reply, Fail> {
 }
 
 fn finding_json(f: &Finding, base: &Path) -> Value {
-    let file = f.file.strip_prefix(base).unwrap_or(&f.file).display().to_string();
+    let file = f.file.strip_prefix(base).unwrap_or(&f.file).display().to_string().replace('\\', "/");
     json!({"rule": f.pattern, "file": file, "line": f.line, "text": f.text.chars().take(QUOTE_CHARS).collect::<String>()})
 }
 
@@ -261,6 +261,7 @@ mod tests {
         let _ = fs::remove_dir_all(&other);
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_symlink_that_points_out_of_the_workspace_is_refused() {
         let work = temp("link-work");
