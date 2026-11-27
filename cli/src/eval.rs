@@ -876,6 +876,8 @@ mod tests {
             assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
         };
         run(&["init", "-q"]);
+        // The Windows runners set core.autocrlf=true globally; the worktree must keep the committed bytes.
+        run(&["config", "core.autocrlf", "false"]);
         fs::write(repo.join("a.txt"), "one\n").unwrap();
         run(&["add", "."]);
         run(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "one"]);
