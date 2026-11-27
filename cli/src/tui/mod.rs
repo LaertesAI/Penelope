@@ -131,7 +131,8 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd { name: "/rewind", help: "restore files and transcript N turns back: /rewind 3", key: "", takes_text: true },
     Cmd { name: "/search", help: "search several engines and show the ranked results; /search fanout on|off", key: "", takes_text: true },
     Cmd { name: "/research", help: "search, read the best pages and show a cited report", key: "", takes_text: true },
-    Cmd { name: "/route", help: "the roles, their tools and their models", key: "", takes_text: false },
+    Cmd { name: "/route", help: "the roles and their models; /route auto|fixed sets the cost mode", key: "", takes_text: true },
+    Cmd { name: "/escalate", help: "cost mode: move this task to the main model", key: "", takes_text: false },
     Cmd { name: "/tools", help: "every tool, its arguments and its roles", key: "", takes_text: false },
     Cmd { name: "/consolidate", help: "keep the lasting rules of this session for every project", key: "", takes_text: false },
     Cmd { name: "/forge", help: "write a tool from the notes at a memory waypoint", key: "", takes_text: true },
@@ -709,6 +710,9 @@ impl App {
 
     /// The model and effort of the main role for the footer: `sonnet · high`, or `haiku · no effort`.
     pub fn model_label(&self) -> String {
+        if let Some(line) = crate::autoroute::label(&self.ctx) {
+            return line;
+        }
         let (model, levels, current) = self.main_effort();
         if levels.is_empty() { format!("{} · no effort", model) } else { format!("{} · {}", model, current) }
     }
@@ -719,6 +723,27 @@ impl App {
         save_config(&self.ctx);
         let model = self.ctx.cfg["main"]["model"].as_str().unwrap_or("").to_string();
         self.toast(format!("{} · effort {} · applies to the next request", model, level));
+    }
+
+    /// `/route`: the roles and models, with the cost mode on top. `/route auto|fixed` sets the mode.
+    fn route_command(&mut self, rest: &str) {
+        match crate::autoroute::command(&mut self.ctx, rest) {
+            Ok((text, true)) => {
+                save_config(&self.ctx);
+                self.toast(text);
+            }
+            Ok((text, false)) => {
+                let report = format!("{}\n\n{}", text, crate::route::report(&self.ctx));
+                self.pager("Roles and models", report);
+            }
+            Err(e) => self.toast(e),
+        }
+    }
+
+    fn escalate_command(&mut self) {
+        match crate::autoroute::escalate_now(&self.ctx) {
+            Ok(text) | Err(text) => self.toast(text),
+        }
     }
 
     /// Alt+E in the chat view: the next level of the main model, from the highest back to the lowest.
@@ -1692,7 +1717,8 @@ impl App {
             }
             "/brain" => self.overlay = Overlay::Brain { scroll: 0 },
             "/cost" => self.pager("Cost in euro", crate::cost::report(&self.ctx)),
-            "/route" => self.pager("Roles and models", crate::route::report(&self.ctx)),
+            "/route" => self.route_command(rest),
+            "/escalate" => self.escalate_command(),
             "/tools" => self.pager("Tool contracts", crate::route::table(&self.ctx)),
             "/consolidate" => {
                 let users: Vec<String> = self.items.iter().filter_map(|i| if let Item::User(t) = i { Some(t.clone()) } else { None }).collect();

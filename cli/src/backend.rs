@@ -130,12 +130,16 @@ pub struct Chat {
     pub pid: Arc<AtomicU32>,
     /// The tool calls of the last turn, for the lessons the weaker model draws from them.
     pub trace: Vec<crate::tools::Call>,
+    /// Cost mode: true once this chat has started its task, and the context size of the last turn in tokens.
+    routed: bool,
+    context_tokens: u64,
 }
 
 impl Chat {
     pub fn new() -> Chat {
         Chat { session: None, history: Vec::new(), history_kind: String::new(), input_tokens: 0, output_tokens: 0, turns: 0,
-               cancel: Arc::new(AtomicBool::new(false)), pid: Arc::new(AtomicU32::new(0)), trace: Vec::new() }
+               cancel: Arc::new(AtomicBool::new(false)), pid: Arc::new(AtomicU32::new(0)), trace: Vec::new(),
+               routed: false, context_tokens: 0 }
     }
 
     /// Goes on with a stored conversation. A conversation through an HTTP endpoint gets its message history back from disk.
@@ -152,8 +156,38 @@ impl Chat {
         chat
     }
 
-    /// One turn. `on` receives the text and the tool calls while the turn runs.
+    /// One turn. `on` receives the text and the tool calls while the turn runs. With config `route` set to `auto` the
+    /// turn runs on the weak or the main model (see `autoroute.rs`); a trigger during a weak turn adds one follow-up
+    /// turn on the main model.
     pub fn turn_with(&mut self, ctx: &Ctx, user: &str, memory: &str, on: &mut dyn FnMut(Event)) -> Result<String, String> {
+        if !crate::autoroute::active(ctx) {
+            return self.turn_once(ctx, user, memory, on);
+        }
+        if !self.routed {
+            crate::autoroute::start_task(ctx);
+            self.routed = true;
+        }
+        let (out, fired) = self.turn_routed(ctx, user, memory, on);
+        match fired {
+            Some(why) if out.is_ok() && !self.cancel.load(Ordering::SeqCst) => {
+                let follow = format!("The weaker model could not finish this task ({}). Continue the same task on this model: read the last failing output, find the cause and fix it.", why);
+                self.turn_routed(ctx, &follow, memory, on).0
+            }
+            _ => out,
+        }
+    }
+
+    /// One turn on the model that the cost mode picks. Returns the reason when a trigger fired during the turn.
+    fn turn_routed(&mut self, ctx: &Ctx, user: &str, memory: &str, on: &mut dyn FnMut(Event)) -> (Result<String, String>, Option<String>) {
+        let mut run = ctx.clone();
+        run.cfg["main"] = crate::autoroute::pick(ctx, user);
+        self.context_tokens = 0;
+        let out = self.turn_once(&run, user, memory, on);
+        let fired = crate::autoroute::after_turn(ctx, self.context_tokens);
+        (out, fired)
+    }
+
+    fn turn_once(&mut self, ctx: &Ctx, user: &str, memory: &str, on: &mut dyn FnMut(Event)) -> Result<String, String> {
         if let Some(family) = crate::crew::family_of(&ctx.cfg["main"]) {
             return Err(format!("The main model is {} 1, one of the Laertes families. It is in training and cannot answer yet. \
 Choose a hosted model: penelope provider use NAME --role main.", family));
@@ -335,6 +369,7 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
         let tout = v["usage"]["output_tokens"].as_u64().unwrap_or(0);
         self.input_tokens += tin;
         self.output_tokens += tout;
+        self.context_tokens = tin + v["usage"]["cache_read_input_tokens"].as_u64().unwrap_or(0);
         crate::cost::record(ctx, "lead", ctx.cfg["main"]["model"].as_str().unwrap_or(""), tin, tout);
         if v["is_error"].as_bool().unwrap_or(false) {
             return Err(v["result"].as_str().unwrap_or("the claude command reported an error").trim().to_string());
@@ -376,6 +411,7 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
         self.history = history;
         self.input_tokens += usage.tokens_in;
         self.output_tokens += usage.tokens_out;
+        self.context_tokens = usage.tokens_in / usage.steps.max(1);
         crate::cost::record(ctx, "lead", m["model"].as_str().unwrap_or(""), usage.tokens_in, usage.tokens_out);
         if out.is_err() {
             self.history.truncate(before);          // a failed turn leaves no half exchange behind
