@@ -680,6 +680,21 @@ fn research_sub(io: &dyn Io, st: &Settings, dir: &Path, task: &Task, round: usiz
                         }
                     }
                 }
+                if found.is_empty() && task.primary {
+                    // The page is a script shell and links no file: try the usual places of a leaderboard's data.
+                    for guess in crate::datatable::guess_data_files(&h.url) {
+                        if let Ok(d) = io.fetch(&guess) {
+                            let more = crate::datatable::tables_of(&guess, &d.content_type, &d.markdown);
+                            if let Some(t) = more.first() {
+                                let n = ev.sources.len() + 1;
+                                let _ = write!(ev.text, "[S{}] DATA FILE READ | {} | columns: {} | {} rows\n\n", n, guess, cut(&t.header.join(", "), 200), t.rows.len());
+                                ev.sources.push(SourceRec { url: guess.clone(), title: "data file".to_string(), read: true, attachment: None, primary: true });
+                                found.extend(more);
+                                break;
+                            }
+                        }
+                    }
+                }
                 for mut t in found.into_iter().take(6) {
                     t.primary = hosts.contains(&host_of(&t.source)) || task.primary && t.source == h.url;
                     tables.push(t);

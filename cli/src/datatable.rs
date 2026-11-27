@@ -294,6 +294,25 @@ pub fn data_links(links: &[String]) -> Vec<String> {
     found.into_iter().take(3).cloned().collect()
 }
 
+/// Where a leaderboard usually publishes its data when the page only holds a script: next to the page or at the site root.
+pub fn guess_data_files(url: &str) -> Vec<String> {
+    let Some((scheme, rest)) = url.split_once("://") else { return Vec::new() };
+    let host = rest.split('/').next().unwrap_or("");
+    let path = rest[host.len()..].split(['?', '#']).next().unwrap_or("");
+    let dir = path.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+    let mut out = Vec::new();
+    for base in [dir, ""] {
+        for name in ["data_overall.csv", "data.csv", "leaderboard.csv", "results.json"] {
+            let u = format!("{}://{}{}/{}", scheme, host, base, name);
+            if !out.contains(&u) {
+                out.push(u);
+            }
+        }
+    }
+    out.truncate(6);
+    out
+}
+
 // ---------- filter and rank ----------
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -565,6 +584,8 @@ mod tests {
         assert_eq!(tables_of("https://lb.example/x.csv", "text/csv", CSV).len(), 1);
         assert_eq!(tables_of("https://lb.example/api", "application/json", "[{\"a\":1,\"b\":2},{\"a\":3,\"b\":4},{\"a\":5,\"b\":6}]").len(), 1);
         assert_eq!(tables_of("https://lb.example/", "text/html", HTML_TABLE_MD).len(), 1);
+        assert_eq!(guess_data_files("https://gorilla.cs.berkeley.edu/leaderboard.html")[0], "https://gorilla.cs.berkeley.edu/data_overall.csv");
+        assert!(guess_data_files("https://x.example/a/b/lb.html").contains(&"https://x.example/a/b/data.csv".to_string()));
         assert_eq!(data_links(&["https://a.example/x.png".into(), "https://a.example/other.csv".into(), "https://a.example/data_overall.csv".into()])[0], "https://a.example/data_overall.csv");
     }
 
