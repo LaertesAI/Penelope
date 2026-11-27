@@ -186,11 +186,88 @@ fn call_raw_inner(ctx: &Ctx, name: &str, a: &Value) -> Result<String, String> {
     }
 }
 
+static ROOT_GIVEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Called by main when the server was started with `--root DIR`: file tools then stay inside the project.
+pub fn set_root_given(given: bool) {
+    ROOT_GIVEN.store(given, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Tools that take a file or folder in `path`, `dir` or `cwd`.
+const PATH_TOOLS: &[&str] = &["read", "find", "grep", "tree", "outline", "lsp", "json_query", "git_diff", "write", "edit", "unzip"];
+
+fn settle(path: &std::path::Path) -> std::path::PathBuf {
+    // Lexical `..` first, then the real path of the deepest part that exists, so a symlink cannot lead out.
+    let mut clean = std::path::PathBuf::new();
+    for part in path.components() {
+        match part {
+            std::path::Component::ParentDir => { clean.pop(); }
+            std::path::Component::CurDir => {}
+            other => clean.push(other.as_os_str()),
+        }
+    }
+    let mut tail = Vec::new();
+    let mut head = clean.clone();
+    while !head.exists() {
+        match head.file_name() {
+            Some(n) => { tail.push(n.to_os_string()); head.pop(); }
+            None => break,
+        }
+    }
+    let mut real = std::fs::canonicalize(&head).unwrap_or(head);
+    for n in tail.iter().rev() { real.push(n); }
+    real
+}
+
+/// With `--root`, a file tool may only touch the project folder, the folders in `brief.roots`, `plugin_dirs` and
+/// `mcp.roots`, unless `mcp.allow_outside_root` is true in config.json. Returns the refusal text.
+pub fn outside_root_refusal(ctx: &Ctx, name: &str, args: &Value, root_given: bool) -> Option<String> {
+    if !root_given || !PATH_TOOLS.contains(&name) || ctx.cfg["mcp"]["allow_outside_root"].as_bool().unwrap_or(false) {
+        return None;
+    }
+    let project = if ctx.root.file_name().map(|n| n == ".penelope").unwrap_or(false) {
+        ctx.root.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| ctx.root.clone())
+    } else {
+        ctx.root.clone()
+    };
+    let mut allowed = vec![settle(&project)];
+    for key in [&ctx.cfg["brief"]["roots"], &ctx.cfg["plugin_dirs"], &ctx.cfg["mcp"]["roots"]] {
+        for item in key.as_array().into_iter().flatten().filter_map(Value::as_str) {
+            allowed.push(settle(&crate::files::resolve(item, "")));
+        }
+    }
+    let cwd = args["cwd"].as_str().unwrap_or("");
+    for field in ["path", "dir", "cwd", "archive", "into"] {
+        let Some(text) = args[field].as_str().filter(|t| !t.is_empty()) else { continue };
+        let base = if field == "cwd" { "" } else { cwd };
+        let resolved = settle(&crate::files::resolve(text, base));
+        if !allowed.iter().any(|a| resolved.starts_with(a)) {
+            return Some(format!("NOT called. {} is outside the project {} that this server was started with --root for. Put the folder into mcp.roots in config.json, or set mcp.allow_outside_root to true.", text, allowed[0].display()));
+        }
+    }
+    None
+}
+
 /// The capabilities of this server: the brief extension and Mitos, both under `experimental`.
 fn server_capabilities() -> Value {
     let mut caps = crate::brief::capabilities();
     caps["experimental"][crate::mitos::EXTENSION_ID] = crate::mitos::manifest();
     caps
+}
+
+/// One input line as a JSON-RPC message. Err holds the answer for a line that cannot be one: not UTF-8, not JSON or not
+/// an object. The server stays up in every case.
+fn parse_line(raw: &[u8]) -> Result<Option<Value>, Value> {
+    let error = |code: i64, message: &str| json!({"jsonrpc": "2.0", "id": Value::Null, "error": {"code": code, "message": message}});
+    let Ok(line) = std::str::from_utf8(raw) else { return Err(error(-32700, "parse error: the line is not valid UTF-8")) };
+    if line.trim().is_empty() {
+        return Ok(None);
+    }
+    match serde_json::from_str::<Value>(line.trim()) {
+        Err(_) => Err(error(-32700, "parse error: the line is not JSON")),
+        Ok(v) if v.is_object() => Ok(Some(v)),
+        Ok(_) => Err(error(-32600, "invalid request: not a JSON object")),
+    }
 }
 
 pub fn serve(ctx: &Ctx) {
@@ -200,9 +277,23 @@ pub fn serve(ctx: &Ctx) {
     let mut mitos = false;
     // True after the client announced version 1 with the `attachments` feature; then a long result is a resource_link.
     let mut attach = false;
-    for line in stdin.lock().lines() {
-        let line = match line { Ok(l) => l, Err(_) => break };
-        let msg: Value = match serde_json::from_str(line.trim()) { Ok(v) => v, Err(_) => continue };
+    let mut input = stdin.lock();
+    let mut raw: Vec<u8> = Vec::new();
+    loop {
+        raw.clear();
+        match input.read_until(b'\n', &mut raw) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+        let msg = match parse_line(&raw) {
+            Ok(Some(m)) => m,
+            Ok(None) => continue,
+            Err(answer) => {
+                let _ = writeln!(out, "{}", answer);
+                let _ = out.flush();
+                continue;
+            }
+        };
         let id = msg["id"].clone();
         if id.is_null() {
             continue; // a notification
@@ -241,7 +332,10 @@ pub fn serve(ctx: &Ctx) {
                 let args = &msg["params"]["arguments"];
                 let role = crate::route::current_role();
                 // The plain loop: this process answers in the shape the client announced, not in the model's.
-                let (text, ok) = crate::tools::dispatch_retry_plain(ctx, &role, name, args);
+                let (text, ok) = match outside_root_refusal(ctx, name, args, ROOT_GIVEN.load(std::sync::atomic::Ordering::Relaxed)) {
+                    Some(refusal) => (refusal, false),
+                    None => crate::tools::dispatch_retry_plain(ctx, &role, name, args),
+                };
                 let level = crate::attach::result_level(ctx, name, args);
                 json!({"content": crate::attach::for_client(ctx, name, &text, attach), "isError": !ok, "_meta": crate::mitos::call_meta_level(level)})
             }
@@ -258,6 +352,26 @@ pub fn serve(ctx: &Ctx) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn with_root_a_file_tool_stays_in_the_project_unless_the_config_allows_more() {
+        let dir = temp("outside-root");
+        let mut ctx = crate::config::load(&dir.join(".penelope"));
+        let abs_inside = json!({"path": dir.join("src/a.rs").display().to_string()});
+        let outside = json!({"path": "/etc/passwd"});
+        let dotdot = json!({"path": "../../x"});
+        let cwd_out = json!({"path": "a", "cwd": "/tmp"});
+        assert!(outside_root_refusal(&ctx, "read", &abs_inside, true).is_none());
+        for bad in [&outside, &dotdot, &cwd_out] {
+            assert!(outside_root_refusal(&ctx, "read", bad, true).unwrap().starts_with("NOT called."), "{}", bad);
+        }
+        assert!(outside_root_refusal(&ctx, "read", &outside, false).is_none(), "no --root: nothing changes");
+        assert!(outside_root_refusal(&ctx, "memory_go", &outside, true).is_none(), "tools without a path");
+        ctx.cfg["mcp"] = json!({"roots": ["/etc"]});
+        assert!(outside_root_refusal(&ctx, "read", &outside, true).is_none(), "a configured root is allowed");
+        ctx.cfg["mcp"] = json!({"allow_outside_root": true});
+        assert!(outside_root_refusal(&ctx, "read", &dotdot, true).is_none());
+    }
+
     use super::*;
     use std::fs;
 

@@ -235,6 +235,10 @@ fn main() {
         println!("{}", HELP);
         return;
     }
+    if cmd == "--version" || cmd == "-V" || cmd == "version" {
+        println!("penelope {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
     if cmd == "init" {
         let root = std::env::current_dir().unwrap().join(".penelope");
         let ctx = config::load(&root);
@@ -309,8 +313,17 @@ fn main() {
             }
         }
         "cursor" => {
-            let x: i64 = args.get(1).and_then(|n| n.parse().ok()).unwrap_or(0);
-            let y: i64 = args.get(2).and_then(|n| n.parse().ok()).unwrap_or(0);
+            let number = |i: usize| -> Result<i64, String> {
+                match args.get(i) {
+                    None => Ok(0),
+                    Some(n) if n.starts_with("--") => Ok(0),
+                    Some(n) => n.parse().map_err(|_| format!("usage: penelope cursor X Y [--click] (X and Y are whole numbers, got {})", n)),
+                }
+            };
+            let (x, y) = match (number(1), number(2)) {
+                (Ok(x), Ok(y)) => (x, y),
+                (Err(e), _) | (_, Err(e)) => { loom::warn(&e); std::process::exit(2); }
+            };
             let click = args.iter().any(|a| a == "--click");
             match cursor::tool(&ctx, &serde_json::json!({"x": x, "y": y, "click": click})) {
                 Ok(text) => println!("{}", text),
@@ -444,8 +457,11 @@ fn main() {
                 loom::warn("usage: penelope run-agent NAME --goal TEXT");
                 std::process::exit(2);
             }
-            let spec = agents::Spec { name, role: "orchestrator".into(), thinking: "high".into(), goal, max_sub_agents: 3, max_parallel: 2,
-                                      max_steps: 12, budget_eur: 0.0, model: String::new(), verify: ctx.cfg["agent_verify"].as_bool().unwrap_or(true), language: "en".into(), mcp: Vec::new() };
+            let Some(mut spec) = agents::load(&ctx, &name) else {
+                loom::warn(&format!("no stored agent {} (penelope agents lists them; an orchestrate call with $name(goal=\"...\") stores one)", name));
+                std::process::exit(2);
+            };
+            spec.goal = goal;
             match agents::run(&ctx, &spec) {
                 Ok(text) => println!("{}", text),
                 Err(e) => { loom::warn(&e); std::process::exit(2); }
@@ -483,7 +499,8 @@ fn main() {
         "cost" => print!("{}", cost::report(&ctx)),
         "price" => {
             let parts: Vec<&str> = args[1..].iter().map(String::as_str).collect();
-            if parts.len() != 3 || parts[1].parse::<f64>().is_err() || parts[2].parse::<f64>().is_err() {
+            let price_ok = |t: &str| t.parse::<f64>().map(|v| v.is_finite() && v >= 0.0).unwrap_or(false);
+            if parts.len() != 3 || parts[0].trim().is_empty() || !price_ok(parts[1]) || !price_ok(parts[2]) {
                 loom::warn("usage: penelope price MODEL INPUT OUTPUT (dollars per million tokens)");
                 std::process::exit(2);
             }
@@ -583,7 +600,8 @@ fn main() {
                 Ok(text) => println!("{}", text),
                 Err(e) => { loom::warn(&e); std::process::exit(2); }
             },
-            _ => print!("{}", input::status(&ctx)),
+            None | Some("status") => print!("{}", input::status(&ctx)),
+            Some(_) => { loom::warn("usage: penelope input [install|enable|status]"); std::process::exit(2); }
         },
         "update" => {
             let result = if args.iter().any(|a| a == "--check") { update::check(&ctx) } else { update::install(&ctx) };
@@ -636,9 +654,13 @@ fn main() {
             _ => print!("{}", tools::allowed_commands(&ctx)),
         },
         "jobs" => match (args.get(1).map(String::as_str), args.get(2).and_then(|n| n.parse::<u64>().ok())) {
-            (Some("stop"), Some(id)) => println!("{}", jobs::stop(&ctx, id)),
-            (Some("read"), Some(id)) => println!("{}", jobs::read(&ctx, id)),
-            _ => print!("{}", jobs::list(&ctx)),
+            (Some("stop"), Some(id)) => print_checked(jobs::stop(&ctx, id)),
+            (Some("read"), Some(id)) => print_checked(jobs::read(&ctx, id)),
+            (None, _) | (Some("list"), _) => print!("{}", jobs::list(&ctx)),
+            _ => {
+                loom::warn("usage: penelope jobs | jobs stop N | jobs read N (N is the job number from the list)");
+                std::process::exit(2);
+            }
         },
         "mcp" if args.get(1).map(String::as_str) == Some("add") && args.len() >= 4 => {
             let allow = args[4..].iter().any(|a| a == "--allow");
@@ -647,10 +669,10 @@ fn main() {
             println!("{}", if allow { toolscan::after_allow(&ctx, &args[2], &said) } else { said });
         }
         "mcp" if args.get(1).map(String::as_str) == Some("remove") && args.len() >= 3 => {
-            println!("{}", plugins::mcp_remove(&ctx, &args[2]));
+            print_checked(plugins::mcp_remove(&ctx, &args[2]));
         }
         "mcp" if args.get(1).map(String::as_str) == Some("allow") && args.len() >= 3 => {
-            println!("{}", toolscan::after_allow(&ctx, &args[2], &plugins::mcp_set_allow(&ctx, &args[2], true)));
+            print_checked(toolscan::after_allow(&ctx, &args[2], &plugins::mcp_set_allow(&ctx, &args[2], true)));
         }
         "mcp" if args.get(1).map(String::as_str) == Some("scan") && args.len() >= 3 => {
             print!("{}", toolscan::report(&ctx, &args[2]));
@@ -659,19 +681,19 @@ fn main() {
             println!("{}", toolscan::trust(&ctx, &args[2]));
         }
         "mcp" if args.get(1).map(String::as_str) == Some("deny") && args.len() >= 3 => {
-            println!("{}", plugins::mcp_set_allow(&ctx, &args[2], false));
+            print_checked(plugins::mcp_set_allow(&ctx, &args[2], false));
         }
         "mcp" if args.get(1).map(String::as_str) == Some("allow-tool") && args.len() >= 4 => {
-            println!("{}", plugins::mcp_set_tool_allow(&ctx, &args[2], &args[3], true));
+            print_checked(plugins::mcp_set_tool_allow(&ctx, &args[2], &args[3], true));
         }
         "mcp" if args.get(1).map(String::as_str) == Some("deny-tool") && args.len() >= 4 => {
-            println!("{}", plugins::mcp_set_tool_allow(&ctx, &args[2], &args[3], false));
+            print_checked(plugins::mcp_set_tool_allow(&ctx, &args[2], &args[3], false));
         }
         "mcp" if args.get(1).map(String::as_str) == Some("call") && args.len() >= 4 => {
             let payload: serde_json::Value = args.get(4).and_then(|j| serde_json::from_str(j).ok()).unwrap_or_else(|| serde_json::json!({}));
             match mcpclient::call(&ctx, &args[2], &args[3], &payload) {
                 Ok(text) => println!("{}", text),
-                Err(e) => println!("{}", e),
+                Err(e) => { println!("{}", e); std::process::exit(2); }
             }
         }
         "mcp" if args.get(1).map(String::as_str) == Some("list") => {
@@ -683,7 +705,15 @@ fn main() {
                 std::process::exit(2);
             }
         }
-        "mcp" => mcp::serve(&ctx),
+        "mcp" if args.len() > 1 => {
+            // A mistyped or incomplete `mcp` verb must not start the stdio server, which would wait on stdin.
+            loom::warn(&format!("usage: penelope mcp [--root DIR] | list [--probe] | serve kerkis|vet | add NAME COMMAND [ARGS...] [--allow] | remove NAME | allow|deny NAME | allow-tool|deny-tool SERVER TOOL | call SERVER TOOL JSON (got: mcp {})", args[1..].join(" ")));
+            std::process::exit(2);
+        }
+        "mcp" => {
+            mcp::set_root_given(root_arg.is_some());
+            mcp::serve(&ctx)
+        }
         "acp" => {
             if let Err(e) = acp::run(&ctx) {
                 loom::warn(&e);
@@ -707,6 +737,10 @@ fn main() {
                 if arg == "--json" { json = true; } else { words.push(arg.clone()); }
             }
             let text = words.join(" ");
+            if text.trim().is_empty() {
+                loom::warn("usage: penelope ask [--json] \"TEXT\"");
+                std::process::exit(2);
+            }
             let mut chat = backend::Chat::new();
             if json {
                 if !answer_json(&ctx, &mut chat, &text) { std::process::exit(1); }
@@ -717,7 +751,8 @@ fn main() {
         "search" if args.get(1).map(String::as_str) == Some("fanout") => match args.get(2).map(String::as_str) {
             Some("on") => println!("{}", search::set_fanout(&ctx, true)),
             Some("off") => println!("{}", search::set_fanout(&ctx, false)),
-            _ => println!("{}", search::health(&ctx, false)),
+            None => println!("{}", search::health(&ctx, false)),
+            Some(_) => { loom::warn("usage: penelope search fanout on|off"); std::process::exit(2); }
         },
         "search" if args.get(1).map(String::as_str) == Some("health") => {
             print!("{}", search::health(&ctx, args.iter().any(|a| a == "--probe")));
@@ -770,37 +805,42 @@ fn main() {
             let name = args.get(2).map(String::as_str).unwrap_or("");
             let cwd = std::env::current_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
             match verb {
-                "new" if !name.is_empty() => println!("{}", work::new(&ctx, &cwd, name)),
+                "new" if !name.is_empty() => print_checked(work::new(&ctx, &cwd, name)),
                 "list" | "" => print!("{}", work::list(&ctx, &cwd)),
-                "diff" if !name.is_empty() => print!("{}", work::diff(&ctx, &cwd, name, args.iter().any(|a| a == "--stat"))),
-                "apply" if !name.is_empty() => println!("{}", work::apply(&ctx, &cwd, name)),
-                "remove" if !name.is_empty() => println!("{}", work::remove(&ctx, &cwd, name, args.iter().any(|a| a == "--force"))),
-                _ => println!("penelope work new NAME | list | diff NAME | apply NAME | remove NAME [--force]"),
+                "diff" if !name.is_empty() => print_checked(work::diff(&ctx, &cwd, name, args.iter().any(|a| a == "--stat"))),
+                "apply" if !name.is_empty() => print_checked(work::apply(&ctx, &cwd, name)),
+                "remove" if !name.is_empty() => print_checked(work::remove(&ctx, &cwd, name, args.iter().any(|a| a == "--force"))),
+                _ => { loom::warn("usage: penelope work new NAME | list | diff NAME | apply NAME | remove NAME [--force]"); std::process::exit(2); }
             }
         }
         "doctor" => doctor(&ctx),
         "serve" => {
             if let Err(e) = server::run(&ctx, &args[1..]) {
                 loom::warn(&e);
-                std::process::exit(1);
+                std::process::exit(if e.starts_with("--") { 2 } else { 1 });
             }
         }
         "crew" => print!("{}", tools::crew(&ctx)),
         "sessions" => print!("{}", sessions::list(&ctx)),
         "stats" => print!("{}", tools::stats(&ctx)),
         "plugin" => match args.get(1).map(String::as_str) {
-            Some("add") if args.len() >= 3 => println!("{}", plugins::add(&ctx, &args[2])),
-            Some("install") if args.len() >= 3 => println!("{}", plugins::install(&ctx, &args[2])),
+            Some(verb @ ("add" | "install" | "allow" | "deny" | "update" | "remove" | "command")) if args.len() < 3 => {
+                let what = if verb == "add" { "DIR" } else if verb == "install" { "LINK" } else { "NAME" };
+                loom::warn(&format!("usage: penelope plugin {} {}", verb, what));
+                std::process::exit(2);
+            }
+            Some("add") => print_checked(plugins::add(&ctx, &args[2])),
+            Some("install") => print_checked(plugins::install(&ctx, &args[2])),
             Some("import") => {
                 let lines = plugins::import_known(&ctx);
                 if lines.is_empty() { println!("no new plugin found in the folders of other harnesses"); }
                 for line in lines { println!("{}", line); }
             }
-            Some(verb @ ("allow" | "deny")) if args.len() >= 3 => println!("{}", plugins::set_allow(&ctx, &args[2], verb == "allow")),
-            Some("update") if args.len() >= 3 => println!("{}", plugins::update(&ctx, &args[2])),
-            Some("remove") if args.len() >= 3 => println!("{}", plugins::remove(&ctx, &args[2])),
+            Some(verb @ ("allow" | "deny")) => print_checked(plugins::set_allow(&ctx, &args[2], verb == "allow")),
+            Some("update") => print_checked(plugins::update(&ctx, &args[2])),
+            Some("remove") => print_checked(plugins::remove(&ctx, &args[2])),
             Some("commands") => print!("{}", plugins::command_index(&ctx, args.get(2).map(String::as_str))),
-            Some("command") if args.len() >= 3 => match plugins::expand_command(&ctx, &args[2], &args[3..].join(" ")) {
+            Some("command") => match plugins::expand_command(&ctx, &args[2], &args[3..].join(" ")) {
                 Some(text) => println!("{}", text),
                 None => {
                     loom::warn(&format!("no plugin command {} (penelope plugin commands)", args[2]));
@@ -813,6 +853,10 @@ fn main() {
             let mut resume = None;
             if let Some(i) = args.iter().position(|a| a == "--resume") {
                 let key = args.get(i + 1).cloned().unwrap_or_default();
+                if key.is_empty() || key.starts_with("--") {
+                    loom::warn("usage: penelope chat --resume N (N is the number in penelope sessions)");
+                    std::process::exit(2);
+                }
                 match sessions::pick(&ctx, &key) {
                     Some(entry) => resume = Some(entry),
                     None => {
@@ -862,6 +906,20 @@ fn screen_desktop_click(ctx: &config::Ctx, find: &str) -> Result<String, String>
     Ok(format!("element {} · {}\n{}\n--- after the click ---\n{}", id, find, click, after))
 }
 
+/// Prints a result text. A refusal ("NOT ..." or "no X named ...") exits 2, so a script sees the failure.
+fn print_checked(text: String) {
+    let text = text.trim_end().to_string();
+    println!("{}", text);
+    if is_refusal(&text) {
+        std::process::exit(2);
+    }
+}
+
+fn is_refusal(text: &str) -> bool {
+    ["NOT ", "no plugin named", "no standalone MCP server named", "no MCP server named", "no worktree named", "no folder ", "no job ", "no plugin command", "git rev-parse"]
+        .iter().any(|p| text.starts_with(p))
+}
+
 fn memory_cmd(ctx: &config::Ctx, args: &[String]) {
     match args.first().map(String::as_str) {
         Some("map") | None => print!("{}", tools::memory_map(ctx)),
@@ -872,6 +930,10 @@ fn memory_cmd(ctx: &config::Ctx, args: &[String]) {
             if rest.first().map(String::as_str) == Some("--path") && rest.len() >= 2 {
                 path = rest[1].clone();
                 rest.drain(0..2);
+            }
+            if rest.join(" ").trim().is_empty() {
+                loom::warn("usage: penelope memory note [--path a/b] TEXT");
+                std::process::exit(2);
             }
             println!("{}", tools::memory_note(ctx, &path, &rest.join(" ")));
         }
@@ -1152,6 +1214,16 @@ pub fn doctor_text(ctx: &config::Ctx) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_refusal_text_is_told_from_an_answer() {
+        for t in ["NOT called. x", "no plugin named a", "no MCP server named a", "no standalone MCP server named a", "no worktree named a", "no folder /x", "no job 3. none"] {
+            assert!(is_refusal(t), "{}", t);
+        }
+        for t in ["plugin a removed", "no plugins registered.", "worktree a removed", "the worktree has no change"] {
+            assert!(!is_refusal(t), "{}", t);
+        }
+    }
+
     use super::*;
 
     #[test]
