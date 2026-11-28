@@ -25,7 +25,7 @@ An entry id is `CLUSTER:LINE`, for example `kerkis-memory:3`.
 
 | Tool | Arguments | Answer |
 |---|---|---|
-| `memory_search` | `query` (all words must match, case-insensitive), optional `l_max` (0 to 3, keep entries with L at most this), `cluster`, `limit` (1 to 100, default 20) | `total`, `returned`, `entries`, newest first |
+| `memory_search` | `query` (all words must match, case-insensitive; if no entry holds every word the answer has `mode` `ranked` and lists the entries with the rarest query words, best first, and `mode` is `all-words` otherwise), optional `l_max` (0 to 3, keep entries with L at most this), `cluster`, `limit` (1 to 100, default 20) | `total`, `returned`, `entries`, newest first |
 | `memory_get` | `id` | one entry |
 | `memory_add` | `ENT`, `ATT`, `VAL`, `level` (0 to 3), `source`, optional `cluster` (default `kerkis-memory`) | the new entry with its id |
 | `memory_status` | optional `cluster` | the newest `KRK:1` line from `report.krk`, parsed and rendered again, or `no KRK:1 status line yet` |

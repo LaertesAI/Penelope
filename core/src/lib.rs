@@ -39,6 +39,7 @@ pub mod eval;
 pub mod factories;
 pub mod files;
 pub mod forge;
+pub mod fslock;
 pub mod gates;
 pub mod graph;
 pub mod jobs;

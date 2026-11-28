@@ -147,12 +147,26 @@ pub struct Pointer {
 pub struct Opts {
     /// The most waypoints and entries. File and link nodes are capped at half of it.
     pub max_nodes: usize,
+    /// How many of the newest lines of each cluster log become entries.
+    pub log_tail: usize,
+    /// Whether `[[name]]`, id and title mentions become edges. A search does not read edges, and the pass over every
+    /// word of every note is the most expensive part of building the graph.
+    pub mentions: bool,
+    /// Whether the notes of the person (level 3) are read at all. An export without `--include-person` does not read
+    /// them, so they cannot fill the cap and leave no room for the entries that may leave.
+    pub person: bool,
     pub now: u64,
 }
 
 impl Opts {
     pub fn standard() -> Opts {
-        Opts { max_nodes: 3000, now: now() }
+        Opts { max_nodes: 3000, log_tail: LOG_TAIL, mentions: true, person: true, now: now() }
+    }
+
+    /// For `find`: every waypoint and every log line. The view and the export keep the cap, a search must not: at
+    /// 10,000 notes the cap hid 70 percent of them from `memory_find`.
+    pub fn for_find() -> Opts {
+        Opts { max_nodes: 2_000_000, log_tail: usize::MAX, mentions: false, person: true, now: now() }
     }
 }
 
@@ -169,7 +183,39 @@ pub struct Graph {
     pub truncated: bool,
     index: HashMap<String, usize>,
     adjacent: Vec<Vec<usize>>,
+    /// The word lists of `find`, built on the first search and kept as long as the graph.
+    finder: std::sync::OnceLock<FindIndex>,
 }
+
+/// Word lists of a graph for `find`: which nodes hold a word in the title, in the id, in the text, or a word with the
+/// same first 5 letters. A query looks at the nodes of its own words, not at every node.
+#[derive(Default)]
+struct FindIndex {
+    title: HashMap<String, Vec<u32>>,
+    id: HashMap<String, Vec<u32>>,
+    body: HashMap<String, Vec<u32>>,
+    stem: HashMap<String, Vec<u32>>,
+    /// The lower-case path of every node, for the rule that a query word of 4 letters or more inside a path counts.
+    path: Vec<String>,
+}
+
+/// The words of a lower-case text: runs of letters, digits, `+` and `#`.
+fn tokens(text: &str) -> impl Iterator<Item = &str> {
+    text.split(|c: char| !(c.is_alphanumeric() || c == '+' || c == '#')).filter(|w| !w.is_empty())
+}
+
+fn stem5(w: &str) -> String {
+    w.chars().take(5).collect()
+}
+
+/// Words that carry no search meaning in a question. They would only dilute the score of the words that do.
+pub(crate) const FIND_STOP: &[&str] = &[
+    "the", "and", "for", "with", "der", "die", "das", "und", "was", "wie", "how", "what", "which", "who", "whom", "whose", "where", "when", "why",
+    "is", "are", "was", "were", "be", "has", "have", "had", "does", "do", "did", "of", "to", "an", "as", "its", "it", "one", "tell", "me",
+    "about", "in", "on", "at", "by", "or", "this", "that", "these", "those", "my", "your", "from", "into", "can", "you", "please", "show",
+    "wer", "welche", "welcher", "welches", "wo", "wann", "warum", "ist", "sind", "hat", "haben", "ein", "eine", "einen", "mit", "von", "zu",
+    "im", "auf", "fuer", "bitte", "sag", "mir", "ueber", "nicht", "auch",
+];
 
 fn secs(t: std::time::SystemTime) -> u64 {
     t.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
@@ -189,7 +235,6 @@ struct Patterns {
     url: Regex,
     file: Regex,
     token: Regex,
-    word: Regex,
 }
 
 impl Patterns {
@@ -199,7 +244,6 @@ impl Patterns {
             url: Regex::new(r#"https?://[^\s<>"'`\]\)]+"#).unwrap(),
             file: Regex::new(r"[A-Za-z0-9_~@+.-]+(?:/[A-Za-z0-9_@+.-]+)*\.[A-Za-z][A-Za-z0-9]{0,4}").unwrap(),
             token: Regex::new(r"[\p{L}\p{N}][\p{L}\p{N}_./-]*").unwrap(),
-            word: Regex::new(r"[\p{L}\p{N}+#]+").unwrap(),
         }
     }
 }
@@ -291,7 +335,7 @@ fn memory_nodes(m: &Memory, prefix: &str, scope: Scope, fallback_time: u64, out:
 }
 
 /// The newest entries of every cluster log, each with its line number as the log counts it.
-fn cluster_nodes(ctx: &Ctx) -> Vec<Node> {
+fn cluster_nodes(ctx: &Ctx, tail: usize) -> Vec<Node> {
     let dir = ctx.root.join("clusters");
     let Ok(read) = fs::read_dir(&dir) else { return Vec::new() };
     let mut names: Vec<String> = read.flatten().filter(|e| e.path().is_dir()).map(|e| e.file_name().to_string_lossy().to_string()).collect();
@@ -301,7 +345,7 @@ fn cluster_nodes(ctx: &Ctx) -> Vec<Node> {
         let Ok(bytes) = fs::read(dir.join(&name).join("memory.log")) else { continue };
         let body = String::from_utf8_lossy(&bytes).into_owned();
         let lines: Vec<(usize, &str)> = body.lines().enumerate().collect();
-        let from = lines.len().saturating_sub(LOG_TAIL);
+        let from = lines.len().saturating_sub(tail);
         for (i, line) in &lines[from..] {
             let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
             let Some(text) = v["text"].as_str() else { continue };
@@ -336,9 +380,11 @@ impl Graph {
         let project = Memory::open(&ctx.root);
         let shared = crate::memory::shared(ctx);
         let stamp = |dir: &Path| fs::metadata(dir.join("map.json")).and_then(|m| m.modified()).map(secs).unwrap_or(opts.now);
-        memory_nodes(&project, "p", Scope::Project, stamp(&project.dir), &mut nodes, &mut edges);
-        memory_nodes(&shared, "g", Scope::Global, stamp(&shared.dir), &mut nodes, &mut edges);
-        let mut entries = cluster_nodes(ctx);
+        if opts.person {
+            memory_nodes(&project, "p", Scope::Project, stamp(&project.dir), &mut nodes, &mut edges);
+            memory_nodes(&shared, "g", Scope::Global, stamp(&shared.dir), &mut nodes, &mut edges);
+        }
+        let mut entries = cluster_nodes(ctx, opts.log_tail);
         entries.sort_by(|a, b| b.changed.cmp(&a.changed).then_with(|| a.id.cmp(&b.id)));
         let total = nodes.len() + entries.len();
         let room = opts.max_nodes.saturating_sub(nodes.len());
@@ -351,13 +397,13 @@ impl Graph {
         // A child edge to a waypoint the cap cut would point nowhere.
         let known: HashSet<&str> = graph.nodes.iter().map(|n| n.id.as_str()).collect();
         graph.edges.retain(|e| known.contains(e.to.as_str()) && known.contains(e.from.as_str()));
-        graph.link_text(opts.max_nodes);
+        graph.link_text(opts.max_nodes, opts.mentions);
         graph.reindex();
         graph
     }
 
     /// Cross-links from the text of the nodes: `[[name]]`, ids, titles, file paths and URLs.
-    fn link_text(&mut self, max_nodes: usize) {
+    fn link_text(&mut self, max_nodes: usize, mentions: bool) {
         let p = Patterns::new();
         let primary: Vec<usize> = (0..self.nodes.len()).collect();
         // names that point at a waypoint: the id without its prefix, and the vault form with " · "
@@ -401,7 +447,7 @@ impl Graph {
                 }
             };
             // [[name]] and the plain words of a name
-            for c in p.wiki.captures_iter(&text) {
+            for c in p.wiki.captures_iter(if mentions { &text } else { "" }) {
                 let raw = c[1].split('|').next().unwrap_or("").split('#').next().unwrap_or("").trim().to_lowercase();
                 let raw = raw.replace(" · ", "/");
                 let hit = by_name.get(&raw).or_else(|| by_name.get(&raw.replace('/', " · "))).or_else(|| by_title.get(&raw));
@@ -413,7 +459,7 @@ impl Graph {
                     }
                 }
             }
-            for t in p.token.find_iter(&text) {
+            for t in p.token.find_iter(if mentions { &text } else { "" }) {
                 let token = t.as_str().trim_end_matches(|c| "./-".contains(c)).to_lowercase();
                 let long_id = token.contains('/') && token.len() >= 5;
                 if let Some(list) = by_name.get(&token).filter(|_| long_id) {
@@ -563,48 +609,104 @@ impl Graph {
         })
     }
 
+    fn finder(&self) -> &FindIndex {
+        self.finder.get_or_init(|| {
+            let mut ix = FindIndex::default();
+            fn add(map: &mut HashMap<String, Vec<u32>>, word: &str, i: u32) {
+                match map.get_mut(word) {
+                    Some(list) => {
+                        if list.last() != Some(&i) {
+                            list.push(i);
+                        }
+                    }
+                    None => {
+                        map.insert(word.to_string(), vec![i]);
+                    }
+                }
+            }
+            for (i, n) in self.nodes.iter().enumerate() {
+                let i = i as u32;
+                for w in tokens(&n.title.to_lowercase()) {
+                    add(&mut ix.title, w, i);
+                }
+                for part in n.id.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|s| !s.is_empty()) {
+                    add(&mut ix.id, part, i);
+                }
+                for w in tokens(&n.text.to_lowercase()) {
+                    add(&mut ix.body, w, i);
+                    add(&mut ix.stem, &stem5(w), i);
+                }
+                ix.path.push(n.path.to_lowercase());
+            }
+            ix
+        })
+    }
+
     /// The pointers for a query, best first, at most `limit`. Per query word the best place counts: the title 3, the
     /// id or path 2, a word of the text 1, a word of the text with the same first 5 letters 0.5. The score is that sum
-    /// over 3 times the number of words, so 1.0 means every word is in a title. Below `FIND_THRESHOLD` nothing is
-    /// returned. Level 3 nodes are left out when `person` is false.
+    /// over 3 times the number of words, so 1.0 means every word is in a title. Words that only make a question
+    /// (`which`, `the`, `wer`) do not count, and neither does a word that occurs nowhere in the memory. Below `FIND_THRESHOLD` nothing is returned. Level 3 nodes are left out
+    /// when `person` is false. The first call builds the word lists; every call after it reads only the nodes that
+    /// share a word with the query.
     pub fn find(&self, query: &str, limit: usize, person: bool) -> Vec<Pointer> {
-        let p = Patterns::new();
         let lower = query.to_lowercase();
-        let words: Vec<String> = p.word.find_iter(&lower).map(|m| m.as_str().to_string())
-            .filter(|w| w.chars().count() > 1 && !["the", "and", "for", "with", "der", "die", "das", "und", "was", "wie", "how", "what"].contains(&w.as_str())).collect();
+        let mut words: Vec<String> = tokens(&lower).map(String::from)
+            .filter(|w| w.chars().count() > 1 && !FIND_STOP.contains(&w.as_str())).collect();
+        words.dedup();
         if words.is_empty() {
             return Vec::new();
         }
-        let stem = |w: &str| w.chars().take(5).collect::<String>();
-        let mut scored: Vec<(f64, &Node, String)> = Vec::new();
-        for n in &self.nodes {
-            if !person && n.level >= 3 {
-                continue;
+        let ix = self.finder();
+        let mut sums: HashMap<u32, f64> = HashMap::new();
+        let mut known = 0usize;
+        for w in &words {
+            // the best place of this word per node
+            let mut best: HashMap<u32, f64> = HashMap::new();
+            let mut put = |list: Option<&Vec<u32>>, value: f64| {
+                for &i in list.map(|l| l.as_slice()).unwrap_or(&[]) {
+                    let e = best.entry(i).or_insert(0.0);
+                    if *e < value {
+                        *e = value;
+                    }
+                }
+            };
+            put(ix.title.get(w), 3.0);
+            put(ix.id.get(w), 2.0);
+            put(ix.body.get(w), 1.0);
+            if w.chars().count() >= 5 {
+                put(ix.stem.get(&stem5(w)), 0.5);
             }
-            let title: Vec<String> = p.word.find_iter(&n.title.to_lowercase()).map(|m| m.as_str().to_string()).collect();
-            let id = n.id.to_lowercase();
-            let body = n.text.to_lowercase();
-            let body_words: Vec<String> = p.word.find_iter(&body).map(|m| m.as_str().to_string()).collect();
-            let mut sum = 0.0;
-            for w in &words {
-                sum += if title.contains(w) { 3.0 }
-                    else if id.split(|c: char| !c.is_alphanumeric()).any(|s| s == w) || (w.len() > 3 && n.path.to_lowercase().contains(w.as_str())) { 2.0 }
-                    else if body_words.contains(w) { 1.0 }
-                    else if w.chars().count() >= 5 && body_words.iter().any(|b| stem(b) == stem(w)) { 0.5 }
-                    else { 0.0 };
+            if w.len() > 3 {
+                for (i, path) in ix.path.iter().enumerate() {
+                    if path.contains(w.as_str()) {
+                        let e = best.entry(i as u32).or_insert(0.0);
+                        if *e < 2.0 {
+                            *e = 2.0;
+                        }
+                    }
+                }
             }
-            let score = sum / (3.0 * words.len() as f64);
-            if score >= FIND_THRESHOLD {
-                // the line that holds most words of the query
-                let line = n.text.lines().max_by_key(|l| { let l = l.to_lowercase(); words.iter().filter(|w| l.contains(w.as_str())).count() }).unwrap_or("").to_string();
-                scored.push((score, n, one_line(&line, 120)));
+            if !best.is_empty() {
+                known += 1;
+            }
+            for (i, v) in best {
+                *sums.entry(i).or_insert(0.0) += v;
             }
         }
+        // A word that occurs nowhere in the memory (a synonym, a typo) cannot match any node, so it does not lower the
+        // score of the words that do.
+        let mut scored: Vec<(f64, &Node)> = sums.into_iter()
+            .map(|(i, sum)| (sum / (3.0 * known.max(1) as f64), &self.nodes[i as usize]))
+            .filter(|(score, n)| *score >= FIND_THRESHOLD && (person || n.level < 3)).collect();
         scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal).then_with(|| b.1.uses.cmp(&a.1.uses))
             .then_with(|| b.1.changed.cmp(&a.1.changed)).then_with(|| a.1.id.cmp(&b.1.id)));
-        scored.into_iter().take(limit).map(|(score, n, line)| Pointer {
-            id: n.id.clone(), title: n.title.clone(), line, path: n.path.clone(), level: n.level, scope: n.scope.name(), kind: n.kind.name(),
-            score: (score * 100.0).round() / 100.0,
+        scored.into_iter().take(limit).map(|(score, n)| {
+            // the line that holds most words of the query
+            let line = n.text.lines().max_by_key(|l| { let l = l.to_lowercase(); words.iter().filter(|w| l.contains(w.as_str())).count() }).unwrap_or("");
+            Pointer {
+                id: n.id.clone(), title: n.title.clone(), line: one_line(line, 120), path: n.path.clone(), level: n.level, scope: n.scope.name(), kind: n.kind.name(),
+                score: (score * 100.0).round() / 100.0,
+            }
         }).collect()
     }
 }
@@ -662,7 +764,7 @@ pub fn cached(ctx: &Ctx) -> std::sync::Arc<Graph> {
             }
         }
     }
-    let graph = Arc::new(Graph::build(ctx));
+    let graph = Arc::new(Graph::build_with(ctx, &Opts::for_find()));
     if let Ok(mut map) = cache.lock() {
         if map.len() >= 8 {
             map.clear();
@@ -799,8 +901,12 @@ pub fn export_cmd(ctx: &Ctx, args: &[String]) -> Result<String, String> {
     }
     let Some(path) = path else { return Err("penelope memory export --format json|obsidian [--include-person] PATH".to_string()) };
     let now = now();
-    let full = Graph::build(ctx);
-    let graph = if person { full } else { full.without_person() };
+    let graph = if person {
+        Graph::build(ctx)
+    } else {
+        // the notes of the person are not even read; the cap then counts only what the export may contain
+        Graph::build_with(ctx, &Opts { person: false, ..Opts::standard() }).without_person()
+    };
     let note = if person { "level 3 (person) nodes included".to_string() } else { "level 3 (person) nodes left out, add --include-person to export them".to_string() };
     match format.as_str() {
         "json" => {
@@ -909,7 +1015,7 @@ pub mod tests {
         assert!(g.nodes.iter().any(|n| n.id == "c:c1-1:2" && n.added < now() - 7 * DAY));
         assert_eq!(s.added_7d, g.nodes.iter().filter(|n| matches!(n.kind, Kind::Note | Kind::Rule | Kind::ClusterEntry)).count() - 1);
         assert!(!s.truncated);
-        let small = Graph::build_with(&ctx, &Opts { max_nodes: 4, now: now() });
+        let small = Graph::build_with(&ctx, &Opts { max_nodes: 4, log_tail: LOG_TAIL, mentions: true, person: true, now: now() });
         assert!(small.truncated && small.total > 4);
         assert!(small.nodes.iter().filter(|n| n.scope != Scope::Derived).count() <= 4);
         let known: HashSet<&str> = small.nodes.iter().map(|n| n.id.as_str()).collect();

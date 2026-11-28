@@ -1014,7 +1014,12 @@ fn memory_cmd(ctx: &config::Ctx, args: &[String]) {
                 loom::warn("usage: penelope memory note [--path a/b] TEXT");
                 std::process::exit(2);
             }
-            println!("{}", tools::memory_note(ctx, &path, &rest.join(" ")));
+            let report = tools::memory_note(ctx, &path, &rest.join(" "));
+            if report.starts_with("NOT ") {
+                loom::warn(&report);
+                std::process::exit(1);
+            }
+            println!("{}", report);
         }
         Some("unravel") => println!("{}", tools::unravel(ctx, args.get(1).and_then(|n| n.parse().ok()).unwrap_or(1))),
         Some("find") => println!("{}", graph::find_text(ctx, &args[1..].join(" "), 8)),

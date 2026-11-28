@@ -70,7 +70,7 @@ penelope memory export --format json --include-person PATH
 
 The Obsidian export writes only inside PATH. File names are made from the node and cleaned: every character that is not a letter, digit, space, `-`, `_`, `.` or `·` becomes `-`, so a waypoint called `../../evil` becomes `project · .. · .. · evil.md` inside PATH. A file that already exists in PATH and was not written by Penelope (no `penelope_node` front matter) stays as it is, and so does a symbolic link.
 
-Level 3 nodes are left out unless `--include-person` is given. With the flag omitted the export holds the cluster entries of level 2 and below and the file and link nodes they name. Edges to left-out nodes and file or link nodes that only those nodes named are dropped too. Because project and shared notes are level 3, a default export of a project without cluster logs is empty.
+Level 3 nodes are left out unless `--include-person` is given. With the flag omitted the export holds the cluster entries of level 2 and below and the file and link nodes they name. Edges to left-out nodes and file or link nodes that only those nodes named are dropped too. Because project and shared notes are level 3, a default export of a project without cluster logs is empty. Without the flag the notes are not even read, so they cannot fill the cap of 3,000 nodes and push the entries out of the export.
 
 ## `memory_find`, the pointer
 
@@ -82,7 +82,9 @@ Level 3 nodes are left out unless `--include-person` is given. With the flag omi
 
 Each pointer has the id, the title, one line (the line of the node that holds most query words, 120 characters), the path, the origin level and the score. The tool is built in and part of the Kerkis MCP server (`penelope mcp serve kerkis`), so Claude Code and OpenCode can call it. Its description is one sentence, so the Mitos index stays short.
 
-Score: per query word the best place counts, title 3, id or path 2, a word of the text 1, a word of the text with the same first 5 letters 0.5. The sum is divided by 3 times the number of words, so 1.0 means every word is in a title. A node needs at least 0.2. A one-word query that is only in the text scores 0.33, a two-word query with one word in the text scores 0.17 and returns nothing. Ties go to the node with more uses, then the newer one.
+Score: per query word the best place counts, title 3, id or path 2, a word of the text 1, a word of the text with the same first 5 letters 0.5. The sum is divided by 3 times the number of counted words, so 1.0 means every word is in a title. Question words (`which`, `the`, `wer`, `ist`) and words that occur nowhere in the memory are not counted: a synonym that the notes never use does not lower the score of the words that match. A node needs at least 0.2. A one-word query that is only in the text scores 0.33, a two-word query with one word in the text scores 0.17 and returns nothing. Ties go to the node with more uses, then the newer one.
+
+`memory_find` reads every waypoint and every log line, not the 3,000 nodes of the view (the cap hid 64 percent of the facts of a 10,000-note memory from it). The first call builds word lists (`docs/MEMORY.md` has the times); every call after it reads only the nodes that share a word with the query. Links by mention (`[[name]]`, id, title) are not built for the search, since it reads no edges. File and link nodes are.
 
 If nothing reaches 0.2 the tool answers:
 
@@ -94,7 +96,7 @@ The Kerkis server says `memory_add` only, since it has no `/note`. It points at 
 
 `penelope memory find QUERY` runs the same search in the terminal.
 
-The graph behind the tool is cached per project folder and rebuilt when a map, a use count or a cluster log changed, or after 30 seconds. The scout and worker roles may call `memory_find` (they may call `memory_go`); the judge and tool roles may not read memory.
+The graph behind the tool is cached per project folder and rebuilt when a map, a use count or a cluster log changed, or after 30 seconds. A rebuild reads everything again, so the first call after a write costs the cold time of the table in `docs/MEMORY.md`. The scout and worker roles may call `memory_find` (they may call `memory_go`); the judge and tool roles may not read memory.
 
 ## Not part of this feature
 
