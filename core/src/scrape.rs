@@ -432,7 +432,7 @@ fn resolve(base: &str, location: &str) -> Option<String> {
 fn pdf_text(bytes: &[u8]) -> Result<String, String> {
     let Some(tool) = crate::config::which("pdftotext") else { return Err("pdftotext is not installed".to_string()); };
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
-    let path = std::env::temp_dir().join(format!("penelope-{}-{}.pdf", std::process::id(), stamp));
+    let path = crate::platform::tmp_dir().join(format!("penelope-{}-{}.pdf", std::process::id(), stamp));
     std::fs::write(&path, bytes).map_err(|e| format!("the PDF could not be written: {}", e))?;
     let out = std::process::Command::new(tool).arg("-layout").arg(&path).arg("-").output();
     let _ = std::fs::remove_file(&path);
