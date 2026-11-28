@@ -107,10 +107,14 @@ Claude Code allein, Haiku 5.5 mit `effort: low`, 28 Entwicklungsaufgaben: 9/28. 
 
 Stand 28.11.2026, vor dem Nachrechnen. Keine neuen Modellläufe in diesem Schritt. Daten: `~/.cache/penelope-calibrate-runs/exp`.
 
-Neue Regel: Ein Variante gewinnt, wenn `eur / bestandene Aufgabe` höchstens 80 % des Defaults ist und die Variante mindestens eine Aufgabe weniger besteht als der Default. Die alte Regel erlaubt einen Gewinn von `aa_band` Aufgaben oder Gleichstand bei höchstens 80 % der Token.
+Neue Regel: Eine Variante gewinnt, wenn `eur / bestandene Aufgabe` höchstens 80 % des Defaults ist und die Variante höchstens eine Aufgabe weniger besteht als der Default (ein Aufgabe Spielraum). Bei 0 bestandenen Aufgaben im Default gibt es keine Auswahl. Bei mehreren Gewinnern: mehr bestandene Aufgaben, dann weniger EUR je Treffer, dann Default. Die alte Regel erlaubt einen Gewinn von `aa_band` Aufgaben oder Gleichstand bei höchstens 80 % der Token.
 
 Vorhersage: Die neue Regel wählt bei mindestens 2 der 4 Modelle eine andere Variante als die alte. Abbruch: bei 0 oder 1 Unterschied wird die Regel nicht weiterverfolgt.
 
 Rauschmessung: Eine zweite Kalibrierung je Modell ist nötig, bevor die neue Regel übernommen wird. Vorhersage: A/A-Unterschied mindestens 1 Aufgabe bei mindestens einem Modell. Abbruch: A/A überall 0, dann ist die Auswahl nicht von Rauschen zu trennen.
 
 Rang 6, Web-Research: mindestens vier Primärquellen mit Lesestatus, jede mit einer prüfbaren Hypothese für Penelope und einem numerischen Ziel. Kein neues Modell, keine Bezahlung.
+
+### Ergebnis der Regelprüfung, 28.11.2026
+
+Mit der im Auftrag gemeinten Regel (höchstens ein Treffer weniger) wechselt 1 von 4 Modellen die Variante, nur GLM auf `effort-low`. Die Vorhersage mindestens 2 ist verworfen, die Abbruchregel greift. Bei der versehentlich wörtlich formulierten Regel (mindestens ein Treffer weniger) wären es 3 von 4; diese Lesart ist verworfen. Die Tabellenzahlen selbst sind aus 340 Rohzeilen reproduzierbar. Die 12 % Annahme der Powerrechnung ist nicht aus den Daten gestützt; ex-ante mit D ~ Bin(N, 0,12) sind es 19,1 % Power bei 50, 76,5 % bei 142 und 80,2 % bei 153 Aufgaben.
