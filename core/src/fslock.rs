@@ -14,8 +14,9 @@ const WAIT: Duration = Duration::from_secs(10);
 /// A lock file older than this was left by a process that died.
 const STALE_SECS: u64 = 30;
 /// A folder that refuses the lock file for this many tries is read-only. A Windows file that another thread deletes
-/// answers `PermissionDenied` for a moment, so a few tries are normal.
-const DENIED_TRIES: u32 = 25;
+/// answers `PermissionDenied` for a moment, so a few tries are normal. The pause between them is fixed and short, so
+/// the error comes in about 10 ms on every system.
+const DENIED_TRIES: u32 = 5;
 
 pub struct Lock(PathBuf);
 
@@ -33,6 +34,10 @@ impl Lock {
                         denied += 1;
                         if denied >= DENIED_TRIES && !path.exists() {
                             return Err(format!("cannot lock {}: {} (the folder is read-only?)", path.display(), e));
+                        }
+                        if !path.exists() {
+                            std::thread::sleep(Duration::from_millis(2));
+                            continue;
                         }
                     }
                     // An age that cannot be read (the file is gone or locked) is not stale.

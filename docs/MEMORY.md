@@ -113,7 +113,7 @@ One change in the export: without `--include-person` the notes are no longer rea
 2. A damaged or missing `map.json` is kept as `map.json.corrupt-TIME` and rebuilt from the note files. A map that cannot be read (permission) refuses the write instead of starting an empty map.
 3. A note file is read with replacement characters for bad bytes. Before a rewrite the original bytes are copied to `NAME.md.bad-TIME`.
 4. `Memory::try_note` returns the error; `memory note` prints `NOT noted. REASON` and exits 1. `Memory::note` prints the error on stderr.
-5. The lock fails at once in a read-only folder (25 refused tries) instead of waiting 10 seconds. `memory_add` uses the same lock.
+5. The lock fails in about 10 ms in a read-only folder (5 refused tries) instead of waiting 10 seconds. `memory_add` uses the same lock.
 6. `memory_get` reads up to its line instead of parsing the log; `memory_add` counts lines in 64 KB blocks.
 7. `memory_find` searches all waypoints and all log lines through word lists, ignores question words and unknown words in the score, and skips mention edges.
 8. `memory_search` falls back to the entries with the rarest query words when no entry holds every word. The answer says `mode: ranked`.
