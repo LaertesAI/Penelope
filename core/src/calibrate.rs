@@ -490,9 +490,10 @@ pub fn one(ctx: &Ctx) -> Result<(), String> {
     let prompt = fs::read_to_string(ctx.root.join("calibrate-prompt.txt")).map_err(|e| format!("no prompt in {}: {}", ctx.root.display(), e))?;
     let mut chat = crate::backend::Chat::new();
     let out = chat.turn_with(ctx, &prompt, "", &mut |_| {});
-    // Every message of the turn, so a cap hit or a tool_describe call can be counted later. Empty for the claude
-    // command, which keeps its own history.
-    let _ = fs::write(ctx.root.join("history.json"), serde_json::to_string(chat.history()).unwrap_or_default());
+    // Every message of the turn, also of a turn that hit the round cap, so cap hits and tool_describe calls can be
+    // counted later. Empty for the claude command, which keeps its own history.
+    let all: Vec<Value> = chat.history().iter().chain(chat.failed_turn.iter()).cloned().collect();
+    let _ = fs::write(ctx.root.join("history.json"), serde_json::to_string(&all).unwrap_or_default());
     let v = match out {
         Ok(answer) => json!({"answer": answer.chars().take(4000).collect::<String>(), "error": ""}),
         Err(e) => json!({"answer": "", "error": e}),
@@ -1417,6 +1418,18 @@ mod tests {
         assert_eq!(roles, ["user", "assistant", "tool", "assistant"]);
         assert!(history[2]["content"].as_str().unwrap().contains("hello from the note"));
         assert_eq!(history[3]["content"], "The note says hello.");
+        // A turn that ends on the round cap keeps its messages too.
+        let call = json!({"choices": [{"finish_reason": "tool_calls", "message": {"role": "assistant", "content": null, "tool_calls": [
+            {"id": "c1", "type": "function", "function": {"name": "read", "arguments": json!({"path": "note.txt", "cwd": dir.to_string_lossy()}).to_string()}}]}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 2}}).to_string();
+        let (address, _seen) = crate::llm::fake::serve(vec![(200, call); 2]);
+        ctx.cfg["main"]["base_url"] = json!(format!("{}/v1", address));
+        ctx.cfg["main"]["max_rounds"] = json!(2);
+        one(&ctx).unwrap();
+        let turn: Value = serde_json::from_str(&fs::read_to_string(ctx.root.join("turn.json")).unwrap()).unwrap();
+        assert!(turn["error"].as_str().unwrap().contains("2 rounds"), "{}", turn);
+        let history: Vec<Value> = serde_json::from_str(&fs::read_to_string(ctx.root.join("history.json")).unwrap()).unwrap();
+        assert_eq!(history.iter().filter(|m| m["role"] == "tool").count(), 2);
         let _ = fs::remove_dir_all(&dir);
     }
 

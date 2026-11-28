@@ -297,6 +297,9 @@ pub struct Chat {
     screen_used: bool,
     /// The work mode of this chat (`modes.rs`): chat, work, agents or code. Empty runs without a mode.
     pub mode: String,
+    /// The messages of the last turn that failed (a round cap, a provider error). The history drops them; the
+    /// calibration runner stores them, so a cap hit can be read afterwards.
+    pub failed_turn: Vec<Value>,
 }
 
 impl Chat {
@@ -308,7 +311,7 @@ impl Chat {
     pub fn new() -> Chat {
         Chat { session: None, history: Vec::new(), history_kind: String::new(), input_tokens: 0, output_tokens: 0, turns: 0,
                cancel: Arc::new(AtomicBool::new(false)), pid: Arc::new(AtomicU32::new(0)), trace: Vec::new(),
-               routed: false, context_tokens: 0, route: crate::autoroute::RouteId::new(), gate_taint: None, mode: String::new(), stream: None, live_seq: 0, screen_missing: false, screen_used: false }
+               routed: false, context_tokens: 0, route: crate::autoroute::RouteId::new(), gate_taint: None, mode: String::new(), failed_turn: Vec::new(), stream: None, live_seq: 0, screen_missing: false, screen_used: false }
     }
 
     /// The outside text a hand-off carries into its sub-session.
@@ -733,7 +736,7 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
         self.context_tokens = usage.max_in;
         crate::cost::record(ctx, "lead", m["model"].as_str().unwrap_or(""), usage.tokens_in, usage.tokens_out);
         if out.is_err() {
-            self.history.truncate(before);          // a failed turn leaves no half exchange behind
+            self.failed_turn = self.history.split_off(before);          // a failed turn leaves no half exchange behind
             return out;
         }
         let id = self.session.get_or_insert_with(crate::sessions::new_id).clone();

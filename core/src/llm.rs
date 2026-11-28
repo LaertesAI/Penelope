@@ -373,24 +373,59 @@ pub fn text_tool_calls_with(content: &str, templates: bool) -> (Vec<ToolCall>, S
 }
 
 /// One call in GLM's own template, the body between `<tool_call>` and `</tool_call>`: the tool name, then pairs of
-/// `<arg_key>K</arg_key><arg_value>V</arg_value>`. Every value stays text, so `{"a": 1}` written as file content
-/// stays that text; `calibrate::typed_args` turns a value into a number, bool, array or object where the tool's schema
-/// asks for one. None when the body does not start with a tool name followed by a pair or nothing.
+/// `<arg_key>K</arg_key><arg_value>V</arg_value>`. GLM-5.3 mixes that template with JSON when the prompt shows JSON
+/// blocks, so the reader also takes `<arg_key>K": V</arg_value>`, attributes `K="V"`, and `name {json}` or
+/// `name({json})`: in 39 stored first answers it reads 37, the strict template 7 of 20. Every value stays text (a JSON
+/// string is unescaped), so `{"a": 1}` written as file content stays that text; `calibrate::typed_call` turns a value
+/// into a number, bool, array or object where the tool's schema asks for one. None when the body does not start with
+/// a tool name or holds text that is no pair.
 pub fn glm_call(body: &str) -> Option<(String, Value)> {
-    let pair = regex::Regex::new(r"(?s)<arg_key>(.*?)</arg_key>\s*<arg_value>(.*?)</arg_value>").unwrap();
-    let name_end = body.find("<arg_key>").unwrap_or(body.len());
-    let name = body[..name_end].trim();
-    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.') {
+    let name_re = regex::Regex::new(r"^\s*([A-Za-z_][A-Za-z0-9_.-]*)").unwrap();
+    let m = name_re.captures(body)?;
+    let name = m[1].to_string();
+    let mut rest = body[m.get(0)?.end()..].trim();
+    if let Some(inner) = rest.strip_prefix('(') {
+        rest = inner.trim_end().strip_suffix(')').unwrap_or(inner).trim();
+    }
+    if rest.starts_with('{') {
+        if let Some(Ok(Value::Object(o))) = serde_json::Deserializer::from_str(rest).into_iter::<Value>().next() {
+            return Some((name, Value::Object(o)));
+        }
+    }
+    let key = regex::Regex::new(r#"(?:^|<arg_key>|</arg_value>|"\s+)\s*"?([A-Za-z_][A-Za-z0-9_-]*)"?\s*(?:</arg_key>\s*<arg_value>|"\s*:\s*|:\s*|=\s*)"#).unwrap();
+    let keys: Vec<regex::Captures> = key.captures_iter(rest).collect();
+    if keys.is_empty() {
+        return rest.trim_matches(|c: char| c == '{' || c == '}' || c.is_whitespace()).is_empty().then(|| (name, json!({})));
+    }
+    if keys[0].get(0)?.start() > 0 && !rest[..keys[0].get(0)?.start()].trim().is_empty() {
         return None;
     }
     let mut args = serde_json::Map::new();
-    for p in pair.captures_iter(&body[name_end..]) {
-        args.insert(p[1].trim().to_string(), json!(&p[2]));
+    for (i, k) in keys.iter().enumerate() {
+        let start = k.get(0)?.end();
+        let end = keys.get(i + 1).and_then(|n| n.get(0)).map(|n| n.start()).unwrap_or(rest.len());
+        args.insert(k[1].to_string(), json!(loose_value(&rest[start..end.max(start)])));
     }
-    if name_end < body.len() && args.is_empty() {
-        return None;
+    Some((name, Value::Object(args)))
+}
+
+/// The text of one loosely written value: closing tags and a trailing `}` or `)` go, a JSON string is unescaped, a
+/// JSON value keeps its text, other text loses its surrounding quotes.
+fn loose_value(raw: &str) -> String {
+    let v = raw.replace("</arg_value>", "").replace("</arg_key>", "");
+    let v = v.trim();
+    let mut stream = serde_json::Deserializer::from_str(v).into_iter::<Value>();
+    if let Some(Ok(x)) = stream.next() {
+        let end = stream.byte_offset();
+        if v[end..].trim().trim_matches(|c| c == '}' || c == ')' || c == '"').trim().is_empty() {
+            return match x {
+                Value::String(s) => s,
+                _ => v[..end].to_string(),
+            };
+        }
     }
-    Some((name.to_string(), Value::Object(args)))
+    let v = v.strip_prefix('"').unwrap_or(v);
+    v.strip_suffix('"').unwrap_or(v).to_string()
 }
 
 /// The marker of DeepSeek's own text template for tool calls (fullwidth bars).
@@ -399,17 +434,28 @@ pub const DSML: &str = "\u{ff5c}DSML\u{ff5c}";
 /// Tool calls in DeepSeek's DSML template, which DeepSeek V4 writes when no API tool field is set:
 /// `<｜DSML｜ invoke name="run">` with one `<｜DSML｜ parameter name="command" string="true">VALUE</｜DSML｜ parameter>`
 /// per argument, inside a `calls` or `function_calls` block. `string="true"` keeps the value as text; any other value is
-/// read as JSON and stays text when it does not parse. The blocks leave the text; everything else stays.
+/// read as JSON and stays text when it does not parse. DeepSeek often closes a tag short (`</｜DSML｜>`), repeats a
+/// closing tag or leaves one out, so an invoke runs to the next invoke and a value to the next DSML tag. The text from
+/// the first to the last DSML tag leaves the answer; everything else stays.
 pub fn dsml_tool_calls(content: &str) -> (Vec<ToolCall>, String) {
     let bar = "\u{ff5c}";
-    let block = regex::Regex::new(&format!(r"(?s)<{b}DSML{b}\s*(?:function_)?calls>.*?</{b}DSML{b}\s*(?:function_)?calls>", b = bar)).unwrap();
-    let invoke = regex::Regex::new(&format!(r#"(?s)<{b}DSML{b}\s*invoke\s+name="([^"]+)"\s*>(.*?)</{b}DSML{b}\s*invoke>"#, b = bar)).unwrap();
-    let param = regex::Regex::new(&format!(r#"(?s)<{b}DSML{b}\s*parameter\s+name="([^"]+)"(?:\s+string="(true|false)")?\s*>(.*?)</{b}DSML{b}\s*parameter>"#, b = bar)).unwrap();
+    let open = format!("<{}DSML{}", bar, bar);
+    let close = format!("</{}DSML{}", bar, bar);
+    let invoke = regex::Regex::new(&format!(r#"<{b}DSML{b}\s*invoke\s+name="([^"]+)"\s*>"#, b = bar)).unwrap();
+    let param = regex::Regex::new(&format!(r#"<{b}DSML{b}\s*parameter\s+name="([^"]+)"(?:\s+string="(true|false)")?\s*>"#, b = bar)).unwrap();
+    let starts: Vec<regex::Captures> = invoke.captures_iter(content).collect();
     let mut calls = Vec::new();
-    for m in invoke.captures_iter(content) {
+    for (i, m) in starts.iter().enumerate() {
+        let from = m.get(0).map(|x| x.end()).unwrap_or(0);
+        let to = starts.get(i + 1).and_then(|n| n.get(0)).map(|n| n.start()).unwrap_or(content.len());
+        let body = &content[from..to];
         let mut args = serde_json::Map::new();
-        for p in param.captures_iter(&m[2]) {
-            let raw = &p[3];
+        for p in param.captures_iter(body) {
+            let vstart = p.get(0).map(|x| x.end()).unwrap_or(0);
+            let tail = &body[vstart..];
+            // The value ends at the next DSML tag, open or close.
+            let vend = [tail.find(&close), tail.find(&open)].into_iter().flatten().min().unwrap_or(tail.len());
+            let raw = &tail[..vend];
             let value = if p.get(2).map(|s| s.as_str()) == Some("true") {
                 json!(raw)
             } else {
@@ -419,8 +465,14 @@ pub fn dsml_tool_calls(content: &str) -> (Vec<ToolCall>, String) {
         }
         calls.push(ToolCall { id: format!("text-call-{}", calls.len() + 1), name: m[1].to_string(), args: Value::Object(args) });
     }
-    let rest = if calls.is_empty() { content.to_string() } else { block.replace_all(content, "").to_string() };
-    (calls, rest)
+    if calls.is_empty() {
+        return (Vec::new(), content.to_string());
+    }
+    let first = [content.find(&open), content.find(&close)].into_iter().flatten().min().unwrap_or(0);
+    let last_tag = content.rfind(&open).max(content.rfind(&close)).unwrap_or(first);
+    let last = content[last_tag..].find('>').map(|i| last_tag + i + 1).unwrap_or(content.len());
+    let rest = format!("{}{}", &content[..first], &content[last..]);
+    (calls, rest.trim().to_string())
 }
 
 /// The tool loop. `history` grows by every message of the turn. `exec` runs one tool call and returns its text and
@@ -543,8 +595,25 @@ mod text_call_tests {
         // Without templates (native mode) the GLM body stays text.
         let (none, _) = text_tool_calls_with("<tool_call>read<arg_key>path</arg_key><arg_value>a</arg_value></tool_call>", false);
         assert!(none.is_empty());
-        // A broken pair (seen in the same run) stays text.
-        let (none, _) = text_tool_calls("<tool_call>read<arg_key>path\": \"config/settings.json\"</arg_value></tool_call>");
+        // GLM's mixed forms from the calibration runs: a JSON key inside arg_key, attributes, name plus JSON.
+        let mixed = [
+            ("read<arg_key>path\": \"config/settings.json\"</arg_value>", "read", json!({"path": "config/settings.json"})),
+            ("run<arg_key>command=\"ls logs; wc -l logs/*.log\"</arg_value>cwd=\"/w\"", "run", json!({"command": "ls logs; wc -l logs/*.log", "cwd": "/w"})),
+            ("read cwd=\"/w\" path=\"data/sales.csv\"", "read", json!({"cwd": "/w", "path": "data/sales.csv"})),
+            ("run {\"command\": \"cat a.py\"}</arg_value><arg_key>cwd\": \"/w\"}</arg_value>", "run", json!({"command": "cat a.py"})),
+            ("read({\"path\": \"data/sales.csv\"})", "read", json!({"path": "data/sales.csv"})),
+            ("tree<arg_key>depth\": 4}</arg_value>", "tree", json!({"depth": "4"})),
+            ("edit<arg_key>edits\":[{\"new\":\"b\",\"old\":\"a\"}]</arg_value><arg_key>path</arg_key><arg_value>c.json</arg_value>", "edit",
+             json!({"edits": "[{\"new\":\"b\",\"old\":\"a\"}]", "path": "c.json"})),
+            ("tree{\"depth\": 3}{}</arg_value>", "tree", json!({"depth": 3})),
+        ];
+        for (body, name, args) in mixed {
+            let (calls, _) = text_tool_calls(&format!("<tool_call>{}</tool_call>", body));
+            assert_eq!(calls.len(), 1, "{}", body);
+            assert_eq!((calls[0].name.as_str(), &calls[0].args), (name, &args), "{}", body);
+        }
+        // Prose in a block is no call.
+        let (none, _) = text_tool_calls("<tool_call>I would now read the file to see what it holds.</tool_call>");
         assert!(none.is_empty());
     }
 
@@ -565,6 +634,16 @@ mod text_call_tests {
         // Text with the marker and no invoke block stays as it is.
         let (none, same) = text_tool_calls("a \u{ff5c}DSML\u{ff5c} marker");
         assert!(none.is_empty() && same == "a \u{ff5c}DSML\u{ff5c} marker");
+        // Short and missing closing tags, as DeepSeek wrote them in the second calibration round (hard-log-warn, hard-pipe-p2).
+        let b = "\u{ff5c}";
+        let sloppy = format!("Next.\n<{b}DSML{b} calls>\n<{b}DSML{b} invoke name=\"read\">\n<{b}DSML{b} parameter name=\"limit\" string=\"false\">200</{b}DSML{b}>\n\
+<{b}DSML{b} parameter name=\"path\" string=\"true\">logs/app-3.log</{b}DSML{b}>\n<{b}DSML{b} invoke name=\"read\">\n\
+<{b}DSML{b} parameter name=\"path\" string=\"true\">data/numbers.txt</{b}DSML{b}>\n</{b}DSML{b}>\n</{b}DSML{b} calls>", b = b);
+        let (calls, rest) = text_tool_calls(&sloppy);
+        assert_eq!(calls.len(), 2);
+        assert_eq!((&calls[0].args["limit"], calls[0].args["path"].as_str()), (&json!(200), Some("logs/app-3.log")));
+        assert_eq!(calls[1].args["path"], "data/numbers.txt");
+        assert_eq!(rest, "Next.");
     }
 
     #[test]
