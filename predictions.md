@@ -103,4 +103,14 @@ Claude Code allein, Haiku 5.5 mit `effort: low`, 28 Entwicklungsaufgaben: 9/28. 
 
 ## Ergebnis A1
 
-Preise neu: Haiku 5.5 0,10/0,50, Sonnet 5.5 2,00/10,00 USD je Mio. Auf den 28 Aufgaben: large 1,5065, cluster Basis 0,3138, K9 0,1446 EUR. Die alten Werte 2,2597, 2,5108, 1,1567 waren mit den Preisen von Haiku 4.5 und Sonnet 4.6 gerechnet.
+## Research Loop 3, Rang 5: Auswahlregel auf gespeicherten Zeilen
+
+Stand 28.11.2026, vor dem Nachrechnen. Keine neuen Modellläufe in diesem Schritt. Daten: `~/.cache/penelope-calibrate-runs/exp`.
+
+Neue Regel: Ein Variante gewinnt, wenn `eur / bestandene Aufgabe` höchstens 80 % des Defaults ist und die Variante mindestens eine Aufgabe weniger besteht als der Default. Die alte Regel erlaubt einen Gewinn von `aa_band` Aufgaben oder Gleichstand bei höchstens 80 % der Token.
+
+Vorhersage: Die neue Regel wählt bei mindestens 2 der 4 Modelle eine andere Variante als die alte. Abbruch: bei 0 oder 1 Unterschied wird die Regel nicht weiterverfolgt.
+
+Rauschmessung: Eine zweite Kalibrierung je Modell ist nötig, bevor die neue Regel übernommen wird. Vorhersage: A/A-Unterschied mindestens 1 Aufgabe bei mindestens einem Modell. Abbruch: A/A überall 0, dann ist die Auswahl nicht von Rauschen zu trennen.
+
+Rang 6, Web-Research: mindestens vier Primärquellen mit Lesestatus, jede mit einer prüfbaren Hypothese für Penelope und einem numerischen Ziel. Kein neues Modell, keine Bezahlung.
