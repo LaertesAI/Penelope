@@ -438,16 +438,20 @@ pub fn is_real_change(call: &str, ok: bool, text: &str) -> bool {
 /// True for a green test after a real file change. A plain `cat` or `echo` that exits 0 is not a check: the command
 /// must look like a test runner. The stop-green variant needs two such checks before it ends a turn.
 pub fn is_green_check(call: &str, args: &serde_json::Value, ok: bool, text: &str, changed: bool) -> bool {
-    if !ok || !changed || !matches!(call, "run" | "test" | "check" | "verify_fix") {
+    if !ok || !changed || !matches!(call, "run" | "test" | "check" | "verify_fix" | "write" | "edit") {
         return false;
     }
     let command = args["command"].as_str().unwrap_or("").to_ascii_lowercase();
     let markers = ["pytest", "python3 -m", "python -m", "make test", "npm test", "cargo test", "./tests", "test_", "verify", "check"];
     let is_check_tool = matches!(call, "check" | "verify_fix");
-    if !is_check_tool && !markers.iter().any(|m| command.contains(m)) {
+    if !matches!(call, "write" | "edit") && !is_check_tool && !markers.iter().any(|m| command.contains(m)) {
         return false;
     }
     let lower = text.to_ascii_lowercase();
+    if matches!(call, "write" | "edit") {
+        // `after_edit` reports a passing test in the answer of the write/edit tool. This is the common case.
+        return lower.contains("tests passed") || lower.contains("pass:") || lower.contains("all tests pass");
+    }
     lower.contains("exit code 0") || lower.contains("exit code: 0") || lower.contains("pass:") || lower.contains("all tests pass")
 }
 
@@ -1270,6 +1274,8 @@ mod tests {
         assert!(!is_green_check("run", &json!({"command":"pytest tests"}), true, "exit code 1", true));
         assert!(is_green_check("run", &json!({"command":"python3 -m pytest tests"}), true, "$ pytest\nexit code 0", true));
         assert!(is_green_check("check", &json!({}), true, "PASS: 3 tests", true));
+        assert!(is_green_check("write", &json!({}), true, "done: create x.py\ntests passed.", true));
+        assert!(!is_green_check("write", &json!({}), true, "done: create x.py", true));
         assert!(!is_real_change("edit", true, "NOT changed, no replacement made."));
         assert!(is_real_change("write", true, "done: create x.py"));
         assert!(is_tool_like("<｜DSML｜ calls>\n<｜DSML｜ invoke name=\"run\">"));

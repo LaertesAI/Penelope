@@ -131,3 +131,10 @@ Vorhersage: c höchstens 1 gegen `default`, EUR je bestandener Aufgabe höchsten
 H2 gemessen (`stopgreen-r2d`): default 17/20, 0,372410 EUR, 0,021906 EUR je Treffer. stop-green 18/20, 0,412383 EUR, 0,022910 EUR je Treffer. b = 1, c = 0, p = 1,0. Das Ziel c = 0 ist erreicht, das Kostenziel nicht: 4,59 % teurer je Treffer, gepaarte EUR-Differenz +0,001999 mit Bootstrap-CI [−0,000174, 0,004259]. Die Abbruchregel „EUR je Treffer über dem Default" greift. Nur 1 der 3 alten Verluste kam zurück, nicht 2.
 
 H3 aus dem Scheitern: Die zweite Bestätigung und der zusätzliche Textfinale-Durchlauf kosten mehr Token. Ein einziger echter Test nach einer echten Dateiänderung soll genügen; die Scheinerkennung (`cat`, `echo`, fehlgeschlagener Edit) und die Textfinale-Regel bleiben. Vorhersage: c höchstens 1, Treffer mindestens 17, EUR je Treffer höchstens so hoch wie im Default. Abbruch: c mindestens 2 oder EUR je Treffer über dem Default. 20 verschränkte Paare, 40 Läufe.
+
+
+### Ergebnis H3 und Hypothese H4, 28.11.2026
+
+H3 gemessen (`stopgreen-r2e`): beide Arme 20/20, default 0,394852 EUR (0,019743 EUR je Treffer), stop-green 0,442358 EUR (0,022118 EUR je Treffer). b = 0, c = 0. Das Kostenziel ist verworfen: 12,0 % teurer je Treffer. 13 von 20 stop-green-Läufen liefen trotzdem bis zum 12-Runden-Deckel, das Signal wurde also selten erkannt.
+
+H4 aus dem Scheitern: Penelope meldet einen erfolgreichen Test nach einer Dateiänderung in der Antwort des Schreibwerkzeugs (`after_edit`: „tests passed"), nicht immer als eigenen `run`-Aufruf. H4 akzeptiert dieses Signal nach einer echten Änderung, weiterhin ohne zweite Bestätigung, aber mit Textfinale. Vorhersage: Treffer mindestens 19, c höchstens 1, EUR je Treffer mindestens 10 % unter dem Default. Abbruch: c mindestens 2 oder EUR je Treffer nicht mindestens 10 % niedriger. 20 verschränkte Paare, 40 Läufe.
