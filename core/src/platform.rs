@@ -15,6 +15,25 @@ pub fn home_str() -> String {
     home().display().to_string()
 }
 
+/// Penelope's own folder for everything that belongs to no project: `~/.penelope`. `PENELOPE_HOME` overrides it.
+pub fn penelope_home() -> PathBuf {
+    match std::env::var("PENELOPE_HOME") {
+        Ok(p) if !p.trim().is_empty() => PathBuf::from(p),
+        _ => home().join(".penelope"),
+    }
+}
+
+/// Scratch space for downloads, check sandboxes and PDFs: `~/.penelope/tmp`, created on first use. The system temp
+/// folder is often a RAM disk, and a full one ends other programs; this folder lives on disk. If it cannot be created,
+/// the system temp folder is used.
+pub fn tmp_dir() -> PathBuf {
+    let dir = penelope_home().join("tmp");
+    match std::fs::create_dir_all(&dir) {
+        Ok(()) => dir,
+        Err(_) => std::env::temp_dir(),
+    }
+}
+
 /// The native pointer helper of a Wayland desktop without ydotool. The command line installs it, ScreenCodec calls it.
 pub fn input_binary() -> PathBuf {
     home().join(".local").join("bin").join("penelope-uinput")
@@ -235,6 +254,14 @@ pub fn move_pointer(x: i64, y: i64, click: bool) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scratch_files_go_to_the_penelope_folder() {
+        let dir = tmp_dir();
+        assert!(dir.is_dir());
+        assert!(dir == penelope_home().join("tmp") || dir == std::env::temp_dir());
+        assert_ne!(penelope_home(), std::env::temp_dir());
+    }
 
     #[test]
     fn a_shell_runs_one_line_on_this_platform() {

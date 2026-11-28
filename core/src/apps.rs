@@ -758,7 +758,7 @@ fn stage_zip_from_target(ctx: &Ctx, target: &str, leaf: &str) -> Result<PathBuf,
         }
         return stage_zip(ctx, &archive, leaf);
     }
-    let tmp = std::env::temp_dir().join(format!("penelope-app-{}-{}.zip", std::process::id(), stamp()));
+    let tmp = crate::platform::tmp_dir().join(format!("penelope-app-{}-{}.zip", std::process::id(), stamp()));
     let result = (|| -> Result<PathBuf, String> {
         let response = match crate::net::agent(60).get(target).call() {
             Ok(r) if (200..300).contains(&r.status()) => r,
