@@ -425,7 +425,7 @@ fn add_link(ctx: &Ctx, entry: Value) {
 
 /// Tools that change things outside a read: a hand-off to a mode that has more of them than the caller needs a yes.
 const RIGHTS: &[&str] = &["git_commit", "pr_create", "computer", "screen", "cursor", "cluster_start", "cluster_spawn", "cluster_respawn",
-                          "cluster_kill", "cluster_profile", "tool_new", "skill_new", "write", "edit"];
+                          "cluster_kill", "cluster_profile", "tool_new", "skill_new", "plugin_new", "mod_new", "factory_new", "app_new", "write", "edit"];
 
 /// The rights the target mode has and the calling mode lacks.
 pub fn extra_rights(ctx: &Ctx, from: &str, to: &str) -> Vec<&'static str> {
@@ -784,7 +784,7 @@ mod tests {
     fn a_hand_off_to_a_mode_with_more_rights_needs_the_person_unless_the_person_typed_it() {
         let c = ctx("rights");
         assert_eq!(extra_rights(&c, "work", "code"), vec!["git_commit", "pr_create", "computer", "screen", "cursor", "cluster_start", "cluster_spawn",
-                                                           "cluster_respawn", "cluster_kill", "cluster_profile", "tool_new", "skill_new"]);
+                                                           "cluster_respawn", "cluster_kill", "cluster_profile", "tool_new", "skill_new", "plugin_new", "mod_new", "factory_new", "app_new"]);
         assert!(extra_rights(&c, "code", "work").is_empty());
         assert!(extra_rights(&c, "work", "agents").contains(&"cluster_start"));
         let from = caller(&c, "work");

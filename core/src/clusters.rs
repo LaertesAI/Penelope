@@ -305,7 +305,7 @@ fn part_role_known(role: &str) -> bool {
     role == "human" || crate::route::role_names().iter().any(|r| *r == role)
 }
 
-fn parse_profile(value: &Value, fallback_name: &str) -> Result<Profile, String> {
+pub(crate) fn parse_profile(value: &Value, fallback_name: &str) -> Result<Profile, String> {
     let name = value["name"].as_str().filter(|s| !s.trim().is_empty()).unwrap_or(fallback_name).trim().to_string();
     let workers = value["workers"].as_array().ok_or_else(|| format!("profile {} has no workers list", name))?;
     if workers.is_empty() { return Err(format!("profile {} has no worker part", name)); }

@@ -177,6 +177,11 @@ fn save(ctx: &Ctx, list: &[Factory]) -> Result<(), String> {
     fs::rename(&tmp, &path).map_err(|e| format!("cannot move {}: {}", tmp.display(), e))
 }
 
+/// True when a factory of this name is registered.
+pub fn exists(ctx: &Ctx, name: &str) -> bool {
+    load(ctx).map(|all| all.iter().any(|f| f.name == name)).unwrap_or(false)
+}
+
 fn find(ctx: &Ctx, name: &str) -> Result<Factory, String> {
     load(ctx)?.into_iter().find(|f| f.name == name)
         .ok_or_else(|| format!("no factory {}. penelope factory list shows the names.", name))

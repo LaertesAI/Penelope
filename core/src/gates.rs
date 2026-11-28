@@ -913,7 +913,7 @@ pub fn risk(ctx: &Ctx, name: &str, args: &Value) -> Option<Risk> {
                                                    || (tool.starts_with(v) && tool[v.len()..].starts_with(|c: char| c.is_ascii_uppercase())));
             (!reads).then(|| Risk { class: "mcp_action", what: format!("{} on {}", tool, arg(args, "server")) })
         }
-        "skill_new" | "tool_new" | "cluster_profile" => Some(Risk { class: "install", what: format!("{} {}", name, arg(args, "name")) }),
+        "skill_new" | "tool_new" | "cluster_profile" | "plugin_new" | "mod_new" | "factory_new" | "app_new" => Some(Risk { class: "install", what: format!("{} {}", name, arg(args, "name")) }),
         "screen" => match args["action"].as_str().unwrap_or("") {
             "snapshot" | "tools" => None,
             "open" => get(&arg(args, "url"), &Value::Null, "screen open"),

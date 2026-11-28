@@ -70,7 +70,7 @@ Links are kept in `.penelope/handoffs.json`. One entry holds the mode and the se
 
 Guards:
 
-- A hand-off from a model to a mode that has rights the caller lacks (`git_commit`, `pr_create`, `computer`, `screen`, `cursor`, the `cluster_*` writers, `tool_new`, `skill_new`) asks the person first. Without a way to ask it is refused. `/send` is the person's own act and asks nothing.
+- A hand-off from a model to a mode that has rights the caller lacks (`git_commit`, `pr_create`, `computer`, `screen`, `cursor`, the `cluster_*` writers, `tool_new`, `skill_new`, `plugin_new`, `mod_new`, `factory_new`, `app_new`) asks the person first. Without a way to ask it is refused. `/send` is the person's own act and asks nothing.
 - In `chat` and `agents` the `claude` turn gets no plugin MCP server, and `chat`, `agents` and `work` get no ScreenCodec tools (`work` keeps plugin servers because it has `mcp_call`).
 - A hand-off is a risky action of the class `delegate` when the turn holds outside text (level 0, such as a web page). The person must say yes. The sub-session starts with the same outside text, so its own calls are gated, and its result is stored at level 0. The output of `agents` clusters always counts as level 0.
 - The depth limit is 2. A sub-session at depth 2 gets the refusal `NOT handed off. Hand-offs are 2 deep already`. A mode cannot hand off to itself.

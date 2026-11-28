@@ -197,7 +197,7 @@ The 54 tools: `run`, `run_detail`, `job_start`, `job_read`, `job_stop`,
 `grep`, `tree`, `outline`, `lsp`, `ask_user`,
 `scout`, `scouts`, `plan`, `memory_go`, `memory_note`,
 `memory_forget`, `memory_map`, `skill_new`, `skill`, `git_commit`,
-`check`, `tool_new`, `tool_list`, `mcp_servers`, `mcp_call`,
+`check`, `tool_new`, `plugin_new`, `mod_new`, `factory_new`, `app_new`, `tool_list`, `mcp_servers`, `mcp_call`,
 `session_search`, `http_request`, `json_query`, `git_diff`, `clipboard`,
 `agent`, `cluster_start`, `cluster_spawn`, `cluster_ask`, `cluster_status`,
 `cluster_kill`, `cluster_dump`, `cluster_respawn`, `cluster_profile`, `computer`,
@@ -234,7 +234,7 @@ or output selects the plain chat by itself.
 | `ctrl+c` | empty the input, leave when it is empty |
 
 Commands: `/new` (or F5), `/model` (`r` role models, `e` effort), `/providers` (connect a provider), `/sessions`, `/setup`, `/undo`, `/jobs`,
-`/scout [auto|web|offer|off]`, `/crew`, `/map`, `/go TEXT`, `/note TEXT`, `/btw TEXT`, `/rules [session|global] TEXT`, `/forge TOPIC`,
+`/scout [auto|web|offer|off]`, `/crew`, `/map`, `/go TEXT`, `/note TEXT`, `/btw TEXT`, `/rules [session|global] TEXT`, `/forge TOPIC`, `/new plugin|mod|factory|app DESCRIPTION`,
 `/unravel`, `/forget TEXT`, `/stats`, `/cost`, `/context TEXT`, `/route [auto|fixed]`, `/escalate`, `/tools`, `/agents`, `/orchestrate GOAL`,
 `/cluster GOAL [--profile NAME]`, `/clusters`.
 `/brain [write]`, `/mcp [probe|add NAME COMMAND|remove NAME|allow NAME|deny NAME|call SERVER TOOL JSON]`,

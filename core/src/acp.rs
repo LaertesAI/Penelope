@@ -607,7 +607,7 @@ fn tool_kind(name: &str) -> &'static str {
     match head {
         "read" | "outline" => "read",
         "find" | "grep" | "tree" | "web_search" | "research" | "session_search" => "search",
-        "write" | "edit" | "undo" | "unzip" | "forge" | "tool_new" => "edit",
+        "write" | "edit" | "undo" | "unzip" | "forge" | "tool_new" | "plugin_new" | "mod_new" | "factory_new" | "app_new" => "edit",
         "run" | "job_start" | "job_stop" | "cursor" | "screen" => "execute",
         "fetch" => "fetch",
         "memory_go" | "memory_map" | "memory_note" | "plan" => "think",
