@@ -145,3 +145,16 @@ H4 aus dem Scheitern: Penelope meldet einen erfolgreichen Test nach einer Datei�
 H4 gemessen (`stopgreen-r2f`): default 17/20, 0,397226 EUR (0,023366 EUR je Treffer), stop-green 16/20, 0,382048 EUR (0,023878 EUR je Treffer). b = 0, c = 1, p = 1,0. c = 1 ist noch in der Vorhersage, die Kostenvorhersage von minus 10 % ist verworfen; 2,19 % teurer je Treffer. Über H1 bis H4 hat kein Stoppzeitpunkt Kosten gesenkt.
 
 H5 aus dem Muster: Der Kostenhebel liegt nicht im frühen Stoppen, sondern im Denkaufwand. In den gespeicherten Kalibrierungszeilen hat DeepSeek `effort-low` 18/20 gegen 17/20 und 0,0195417 gegen 0,0236368 EUR je Treffer, also minus 17,4 %. Vorhersage H5: auf dem 30 Aufgaben langen Hold-out zeigt `effort-low` mindestens 10 % weniger EUR je Treffer bei c höchstens 1 gegen `default`. Abbruch: c mindestens 2 oder weniger als 10 % EUR-Vorteil. 60 verschränkte Läufe, OpenCode Go.
+
+
+### H5 Teilmessung und Hypothesen H6 bis H9, 28.11.2026
+
+H5 Teilmessung: 49 von 60 Zeilen, 24 gepaarte Aufgaben. effort-low 23 Treffer gegen 21, b = 2, c = 0, p = 0,5. EUR je Treffer 0,017027 gegen 0,022789, minus 25,3 %. Elf Läufe fehlten wegen des wöchentlichen OpenCode-Go-Limits. Solange die Paare unvollständig sind, gilt H5 als Teilmessung, nicht als bestätigt.
+
+H6 (gebaut, ungemessen): `index-effort-low` kombiniert den Mitos-Werkzeugindex mit niedrigem Effort. Index allein senkte Tokens von 2,67 Mio. auf 1,33 Mio. je 20 Aufgaben, verlor aber Treffer (12/20). Effort-low hielt 18/20. Vorhersage: mindestens 17 Treffer und EUR je Treffer höchstens 0,015, c höchstens 1 gegen effort-low. Test: 20 Aufgaben, 40 Läufe, nach Ende des Limits.
+
+H7 (ungebaut): Textformat mit dem toleranten Leser und effort-low. Im gespeicherten exp2-Lauf erreichte Text 17/20. Vorhersage: mindestens 17 Treffer, EUR je Treffer höchstens 0,015, c höchstens 1 gegen effort-low. Abbruch: c mindestens 2 oder kein Tokenspareffekt von mindestens 20 %.
+
+H8 (ungebaut, tiefer): Adaptive Route. A3 zeigte, dass Haiku mit niedrigem Effort auf 28 Entwicklungsaufgaben dieselben 8 schweren Aufgaben löst wie Sonnet und 90 % weniger Listenpreis kostet. Vorhersage: ein Router, der leichte Aufgaben an Haiku und schwere an DeepSeek effort-low gibt, erreicht auf 50 gemischten Aufgaben mindestens dieselbe Trefferzahl wie DeepSeek allein bei höchstens 0,014 EUR je Treffer. Abbruch: zwei oder mehr Treffer weniger.
+
+H9 (ungebaut, tiefer): Der Werkzeugindex ist der größte Tokenblock. Vorhersage: `index-effort-low` benötigt höchstens 2,0 Mio. Token je 20 Aufgaben bei mindestens 17 Treffern. Abbruch: mehr als 2,3 Mio. Token oder weniger als 17 Treffer. Das ist eine schärfere Fassung von H6 mit einem Tokenziel statt eines Euroziels.

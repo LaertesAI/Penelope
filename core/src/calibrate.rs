@@ -102,7 +102,10 @@ pub fn variants(provider: &str, model: &str) -> Vec<Variant> {
     out.push(Variant { name: "prompt-short".into(), prompt: "short".into(), ..base.clone() });
     if provider != "claude-cli" {
         out.push(Variant { name: "rounds-24".into(), rounds: 24, ..base.clone() });
-        out.push(Variant { name: "stop-green".into(), stop_green: true, ..base });
+        out.push(Variant { name: "stop-green".into(), stop_green: true, ..base.clone() });
+        if default_effort == "high" && levels.contains(&"low") {
+            out.push(Variant { name: "index-effort-low".into(), tool_list: "index".into(), effort: "low".into(), ..base });
+        }
     }
     out
 }
@@ -988,12 +991,15 @@ mod tests {
     fn variants_change_one_factor_each() {
         let v = variants("opencode", "glm-5.3");
         let names: Vec<&str> = v.iter().map(|x| x.name.as_str()).collect();
-        assert_eq!(names, ["default", "text", "index", "effort-low", "prompt-short", "rounds-24", "stop-green"]);
+        assert_eq!(names, ["default", "text", "index", "effort-low", "prompt-short", "rounds-24", "stop-green", "index-effort-low"]);
         assert_eq!(v[0].effort, "high");
         for x in &v[1..] {
+            if x.name == "index-effort-low" { continue; }  // the one deliberate combination
             let diffs = [x.tool_format != v[0].tool_format, x.tool_list != v[0].tool_list, x.effort != v[0].effort, x.prompt != v[0].prompt, x.rounds != v[0].rounds, x.stop_green != v[0].stop_green];
             assert_eq!(diffs.iter().filter(|d| **d).count(), 1, "{} changes one factor", x.name);
         }
+        let combo = v.iter().find(|x| x.name == "index-effort-low").unwrap();
+        assert_eq!((combo.tool_list.as_str(), combo.effort.as_str()), ("index", "low"));
         // Kimi K3 has only "max", MiniMax M3 none: no effort variant. The claude command owns its tool loop.
         assert!(!variants("opencode", "kimi-k3").iter().any(|x| x.name.starts_with("effort")));
         assert!(!variants("opencode", "minimax-m3").iter().any(|x| x.name.starts_with("effort")));
