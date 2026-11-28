@@ -27,6 +27,9 @@ penelope update [--check]     check the update server, or install a newer signed
 penelope audit                look for keys and plain-http leaks in the settings folder
 penelope eval TASKS.jsonl --setup large|large-subagents|cluster|all [--runs PATH]
                               run the eval tasks, measure checks, tokens, euro and wall time; writes docs/RUNS.md
+penelope calibrate MODEL [--provider P] [--tasks FILE] [--n N] [--validate] [--out DIR] [--variants A,B] [--no-sandbox]
+                              run the tasks in each variant (tool format, tool list, effort, prompt, round cap) and store
+                              the best as .penelope/models/PROVIDER__MODEL.json; --validate compares it with the default, paired
 penelope replay ID --model MODEL
                               re-run the stored prompts of an eval run read-only; no file changed, no command or check run
 penelope input [install|enable|status]
@@ -592,6 +595,13 @@ fn main() {
                 Ok(text) => println!("{}", text),
                 Err(e) => { loom::warn(&e); std::process::exit(2); }
             }
+        }
+        "calibrate" => match calibrate::parse_args(&args[1..]).and_then(|o| calibrate::command(&ctx, &o)) {
+            Ok(text) => print!("{}", text),
+            Err(e) => { loom::warn(&e); std::process::exit(2); }
+        },
+        "calibrate-one" => {
+            if let Err(e) = calibrate::one(&ctx) { loom::warn(&e); std::process::exit(2); }
         }
         "replay" => {
             let id = args.get(1).cloned().unwrap_or_default();

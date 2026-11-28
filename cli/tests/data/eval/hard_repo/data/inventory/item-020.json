@@ -1,0 +1,9 @@
+{
+  "sku": "SKU-1020",
+  "warehouse": "hamburg",
+  "count": 30,
+  "tags": [
+    "cold",
+    "promo"
+  ]
+}

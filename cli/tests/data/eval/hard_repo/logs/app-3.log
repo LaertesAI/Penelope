@@ -1,0 +1,45 @@
+2026-11-01 08:26:10 INFO mail: retrying upstream
+2026-11-01 08:31:12 WARN search: queue full
+2026-11-01 09:16:30 ERROR mail: queue full
+2026-11-01 09:47:05 INFO auth: cache miss
+2026-11-01 10:56:43 INFO search: request done
+2026-11-01 13:37:26 INFO search: cache miss
+2026-11-01 13:44:53 WARN search: request done
+2026-11-01 14:12:31 INFO search: request done
+2026-11-01 14:25:59 WARN mail: request done
+2026-11-01 14:29:12 INFO auth: disk at 80%
+2026-11-01 14:43:46 INFO search: retrying upstream
+2026-11-01 17:15:42 INFO search: timeout after 30s
+2026-11-01 22:01:51 INFO billing: request done
+2026-11-02 09:22:26 ERROR auth: queue full
+2026-11-02 09:38:57 INFO mail: invoice 258 stored
+2026-11-02 09:44:34 ERROR billing: queue full
+2026-11-02 09:51:03 WARN search: request done
+2026-11-02 09:55:31 ERROR mail: invoice 202 stored
+2026-11-02 09:58:25 INFO auth: login failed for user=u024
+2026-11-02 14:02:39 INFO mail: invoice 268 stored
+2026-11-02 14:03:39 INFO billing: timeout after 30s
+2026-11-02 14:39:13 INFO mail: retrying upstream
+2026-11-02 14:57:33 WARN auth: timeout after 30s
+2026-11-02 17:04:55 ERROR auth: login failed for user=u022
+2026-11-02 22:03:09 ERROR auth: timeout after 30s
+2026-11-03 08:08:03 ERROR auth: timeout after 30s
+2026-11-03 08:19:42 ERROR search: disk at 96%
+2026-11-03 09:28:42 INFO auth: request done
+2026-11-03 09:41:21 WARN billing: request done
+2026-11-03 13:32:39 INFO search: cache miss
+2026-11-03 14:28:48 ERROR auth: disk at 92%
+2026-11-03 14:34:51 ERROR search: request done
+2026-11-03 14:52:36 WARN billing: queue full
+2026-11-03 17:20:15 WARN search: retrying upstream
+2026-11-03 22:13:12 INFO mail: cache miss
+2026-11-03 22:24:29 WARN auth: request done
+2026-11-03 22:47:56 INFO search: timeout after 30s
+2026-11-04 09:17:49 ERROR auth: timeout after 30s
+2026-11-04 10:17:45 ERROR billing: retrying upstream
+2026-11-04 10:19:12 INFO auth: disk at 87%
+2026-11-04 14:01:32 INFO mail: disk at 77%
+2026-11-04 14:10:57 ERROR auth: invoice 654 stored
+2026-11-04 17:14:02 INFO billing: cache miss
+2026-11-04 22:37:03 ERROR auth: login failed for user=u016
+2026-11-04 22:41:17 ERROR mail: disk at 88%

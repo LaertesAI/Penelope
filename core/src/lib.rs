@@ -20,6 +20,7 @@ pub mod autoroute;
 pub mod backend;
 pub mod brain;
 pub mod brief;
+pub mod calibrate;
 pub mod clarify;
 pub mod clusters;
 pub mod checker;

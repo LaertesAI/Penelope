@@ -84,8 +84,9 @@ fn first_line(text: &str) -> String {
 }
 
 /// The rules the main model works by. They depend on the setting "delegate": who does the searching.
-pub fn rules(ctx: &Ctx) -> String {
-    let look = match ctx.cfg["delegate"].as_str().unwrap_or("auto") {
+/// Rule 2 of `rules`: where lookups go under the `delegate` setting. The short prompt of a model profile reuses it.
+pub fn look_rule(ctx: &Ctx) -> &'static str {
+    match ctx.cfg["delegate"].as_str().unwrap_or("auto") {
         "off" => "2. Use web_search to find pages and fetch to read one. Use find, grep and read to look at files.",
         "offer" => "2. Hand every lookup that needs more than one step to scout: research on the web, the question where something is in the \
 project. scout runs on a weaker model with its own tools and returns a short report. For a single quick lookup use web_search, fetch, find, grep or read yourself.",
@@ -94,7 +95,11 @@ its own tools and returns a short report. You have no web tools of your own. For
         _ => "2. Every search goes to scout: research on the web, reading pages, finding files, the question where something is in the project. \
 Give scout the full question and say what you need back. scout runs on a weaker model with its own tools and returns a short report. \
 You have no search tools of your own, only tree and outline for a first look.",
-    };
+    }
+}
+
+pub fn rules(ctx: &Ctx) -> String {
+    let look = look_rule(ctx);
     let home = crate::platform::home_str();
     let cwd = std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_default();
     let cwd = match cwd.strip_prefix(&home) {
@@ -292,13 +297,21 @@ pub struct Chat {
     screen_used: bool,
     /// The work mode of this chat (`modes.rs`): chat, work, agents or code. Empty runs without a mode.
     pub mode: String,
+    /// The messages of the last turn that failed (a round cap, a provider error). The history drops them; the
+    /// calibration runner stores them, so a cap hit can be read afterwards.
+    pub failed_turn: Vec<Value>,
 }
 
 impl Chat {
+    /// The messages of the session so far, in the wire format of `history_kind`.
+    pub fn history(&self) -> &[Value] {
+        &self.history
+    }
+
     pub fn new() -> Chat {
         Chat { session: None, history: Vec::new(), history_kind: String::new(), input_tokens: 0, output_tokens: 0, turns: 0,
                cancel: Arc::new(AtomicBool::new(false)), pid: Arc::new(AtomicU32::new(0)), trace: Vec::new(),
-               routed: false, context_tokens: 0, route: crate::autoroute::RouteId::new(), gate_taint: None, mode: String::new(), stream: None, live_seq: 0, screen_missing: false, screen_used: false }
+               routed: false, context_tokens: 0, route: crate::autoroute::RouteId::new(), gate_taint: None, mode: String::new(), failed_turn: Vec::new(), stream: None, live_seq: 0, screen_missing: false, screen_used: false }
     }
 
     /// The outside text a hand-off carries into its sub-session.
@@ -378,6 +391,8 @@ impl Chat {
     }
 
     fn turn_once(&mut self, ctx: &Ctx, user: &str, memory: &str, on: &mut dyn FnMut(Event)) -> Result<String, String> {
+        let calibrated = crate::calibrate::apply(ctx);          // the model profile of `penelope calibrate`, when one exists
+        let ctx = &calibrated;
         if let Some(family) = crate::crew::family_of(&ctx.cfg["main"]) {
             return Err(format!("The main model is {} 1, one of the Laertes families. It is in training and cannot answer yet. \
 Choose a hosted model: penelope provider use NAME --role main.", family));
@@ -394,7 +409,7 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
         let _prompt = crate::timing::span("system prompt build");
         // The stable part holds the rules and the skill names: it is the same in every turn of a session. The dynamic part
         // holds what depends on this request. A long-lived claude process gets it in the user message.
-        let mut stable = crate::modes::compose(ctx, rules(ctx));
+        let mut stable = crate::modes::compose(ctx, crate::calibrate::rules_for(ctx));
         let skills = { let mut t = crate::timing::span("plugin skill index"); let x = crate::plugins::skill_index_compact(ctx); t.note(format!("{} chars", x.len())); x };
         if !skills.is_empty() {
             stable.push_str(&format!("\n\nInstalled skills (read one with the tool skill before you use it):\n{}", skills));
@@ -686,7 +701,9 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
             return Err(format!("this session is stored in the format {} and the main model now uses {}. Start a new session.", self.history_kind, kind));
         }
         let mine = mcp::main_tools(ctx);
-        let tools: Vec<Value> = mcp::tool_specs().as_array().unwrap().iter().filter(|t| mine.contains(&t["name"].as_str().unwrap_or(""))).cloned().collect();
+        let full: Vec<Value> = mcp::tool_specs().as_array().unwrap().iter().filter(|t| mine.contains(&t["name"].as_str().unwrap_or(""))).cloned().collect();
+        let (tools, system) = crate::calibrate::shape_tools(m, full.clone(), system.to_string());
+        let system = system.as_str();
         let before = self.history.len();
         self.history.push(crate::llm::user_message(user));
         self.history_kind = kind.clone();
@@ -694,10 +711,16 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
         let mut history = std::mem::take(&mut self.history);
         // Both closures report to the interface, so the events go through one shared cell.
         let events = std::cell::RefCell::new(on);
-        let out = crate::llm::run_loop(m, system, &mut history, &tools, 12, Some(&*self.cancel), &mut usage,
+        let rounds = m["max_rounds"].as_u64().filter(|r| (1..=64).contains(r)).unwrap_or(12) as usize;          // a model profile may raise the cap
+        let out = crate::llm::run_loop(m, system, &mut history, &tools, rounds, Some(&*self.cancel), &mut usage,
             &mut |call| {
+                // A text tool call carries its values as text; the schema of the tool gives numbers and bools back their type.
+                let typed;
+                let call = if call.id.starts_with("text-call-") { typed = crate::calibrate::typed_call(&full, call); &typed } else { call };
                 (*events.borrow_mut())(Event::ToolStart { id: call.id.clone(), name: short_name(&call.name), detail: tool_detail(&call.args) });
-                let called = if mine.contains(&call.name.as_str()) {
+                let called = if call.name == crate::calibrate::DESCRIBE && m["tool_list"].as_str() == Some("index") {
+                    crate::calibrate::describe(&full, &call.args)
+                } else if mine.contains(&call.name.as_str()) {
                     crate::tools::dispatch_retry(ctx, "lead", &call.name, &call.args)
                 } else {
                     (format!("NOT called. unknown tool {} — it is not in the tool list of this turn.", call.name), false)
@@ -713,7 +736,7 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
         self.context_tokens = usage.max_in;
         crate::cost::record(ctx, "lead", m["model"].as_str().unwrap_or(""), usage.tokens_in, usage.tokens_out);
         if out.is_err() {
-            self.history.truncate(before);          // a failed turn leaves no half exchange behind
+            self.failed_turn = self.history.split_off(before);          // a failed turn leaves no half exchange behind
             return out;
         }
         let id = self.session.get_or_insert_with(crate::sessions::new_id).clone();

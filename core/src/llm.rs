@@ -55,6 +55,12 @@ pub fn user_message(text: &str) -> Value {
 /// The messages that carry tool results back, in the format of the kind. The Messages API takes all results of one
 /// answer in a single user message. Chat completions take one message with the role `tool` per call.
 pub fn result_messages(kind: &str, results: &[(String, String, bool)]) -> Vec<Value> {
+    if kind == "text" {
+        // Text tool calls (`"tool_format": "text"`): the results go back as one user message of <tool_response> blocks.
+        let body: Vec<String> = results.iter().map(|(id, text, ok)| format!("<tool_response id=\"{}\"{}>\n{}\n</tool_response>", id,
+                                                                            if *ok { "" } else { " error=\"true\"" }, text)).collect();
+        return vec![user_message(&body.join("\n"))];
+    }
     if kind == "anthropic" {
         let blocks: Vec<Value> = results.iter().map(|(id, text, ok)| {
             let mut b = json!({"type": "tool_result", "tool_use_id": id, "content": text});
@@ -239,8 +245,14 @@ pub fn chat_cancel(model: &Value, system: &str, history: &[Value], tools: &[Valu
             return Err(format!("the answer holds no content: {}", v.to_string().chars().take(200).collect::<String>()));
         }
         let text = blocks.iter().filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join("\n").trim().to_string();
-        let calls = blocks.iter().filter(|b| b["type"] == "tool_use").map(|b| ToolCall {
+        let mut calls: Vec<ToolCall> = blocks.iter().filter(|b| b["type"] == "tool_use").map(|b| ToolCall {
             id: b["id"].as_str().unwrap_or("").to_string(), name: b["name"].as_str().unwrap_or("").to_string(), args: b["input"].clone() }).collect();
+        let mut text = text;
+        if calls.is_empty() && model["tool_format"].as_str() == Some("text") && (text.contains("<tool_call>") || text.contains(DSML)) {
+            let (found, rest) = text_tool_calls(&text);
+            calls = found;
+            text = rest;
+        }
         let u = &v["usage"];
         let tokens_in = ["input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"].iter().map(|k| u[*k].as_u64().unwrap_or(0)).sum();
         let detail = v["stop_details"]["category"].as_str().map(|c| format!(" (category {})", c)).unwrap_or_default();
@@ -290,9 +302,12 @@ pub fn chat_cancel(model: &Value, system: &str, history: &[Value], tools: &[Valu
             _ => json!({}),
         } }).collect();
     let mut text = message["content"].as_str().unwrap_or("").trim().to_string();
-    // A server without a tool-call parser hands Qwen's <tool_call> blocks back as text. They become calls here.
-    if calls.is_empty() && text.contains("<tool_call>") {
-        let (found, rest) = text_tool_calls(&text);
+    // A server without a tool-call parser hands Qwen's <tool_call> blocks back as text. They become calls here. The
+    // DSML and GLM templates count only in the text tool format: in native mode an answer that quotes such markup
+    // (from a README or a fetched page) stays text.
+    let templates = model["tool_format"].as_str() == Some("text");
+    if calls.is_empty() && (text.contains("<tool_call>") || (templates && text.contains(DSML))) {
+        let (found, rest) = text_tool_calls_with(&text, templates);
         calls = found;
         text = rest;
     }
@@ -304,7 +319,13 @@ pub fn chat_cancel(model: &Value, system: &str, history: &[Value], tools: &[Valu
 /// Tool calls written as text in the Qwen and Hermes format: one JSON object with `name` and `arguments` between
 /// `<tool_call>` and `</tool_call>`, any number per answer. A `<think>` block is dropped. Returns the calls and the text
 /// that is left, for example the reason after `none:` when no tool fits. A block that does not parse stays in the text.
+/// GLM's `<arg_key>` bodies and DeepSeek's DSML blocks count too.
 pub fn text_tool_calls(content: &str) -> (Vec<ToolCall>, String) {
+    text_tool_calls_with(content, true)
+}
+
+/// `text_tool_calls`; with `templates` false only the JSON block counts, the GLM and DSML templates stay text.
+pub fn text_tool_calls_with(content: &str, templates: bool) -> (Vec<ToolCall>, String) {
     let mut rest = content.to_string();
     if let (Some(start), Some(end)) = (rest.find("<think>"), rest.find("</think>")) {
         if end > start {
@@ -333,14 +354,125 @@ pub fn text_tool_calls(content: &str) -> (Vec<ToolCall>, String) {
                 };
                 calls.push(ToolCall { id: format!("text-call-{}", calls.len() + 1), name: v["name"].as_str().unwrap().to_string(), args });
             }
-            _ => left.push_str(&cursor[open..open + "<tool_call>".len() + close + "</tool_call>".len()]),
+            _ => match glm_call(body).filter(|_| templates) {
+                Some((name, args)) => calls.push(ToolCall { id: format!("text-call-{}", calls.len() + 1), name, args }),
+                None => left.push_str(&cursor[open..open + "<tool_call>".len() + close + "</tool_call>".len()]),
+            },
         }
         cursor = &after[close + "</tool_call>".len()..];
     }
     left.push_str(cursor);
+    if templates && calls.is_empty() && left.contains(DSML) {
+        let (found, rest) = dsml_tool_calls(&left);
+        calls = found;
+        left = rest;
+    }
     let text = left.trim();
     let text = text.strip_prefix("none:").map(str::trim).unwrap_or(text);
     (calls, text.to_string())
+}
+
+/// One call in GLM's own template, the body between `<tool_call>` and `</tool_call>`: the tool name, then pairs of
+/// `<arg_key>K</arg_key><arg_value>V</arg_value>`. GLM-5.3 mixes that template with JSON when the prompt shows JSON
+/// blocks, so the reader also takes `<arg_key>K": V</arg_value>`, attributes `K="V"`, and `name {json}` or
+/// `name({json})`: in 39 stored first answers it reads 37, the strict template 7 of 20. Every value stays text (a JSON
+/// string is unescaped), so `{"a": 1}` written as file content stays that text; `calibrate::typed_call` turns a value
+/// into a number, bool, array or object where the tool's schema asks for one. None when the body does not start with
+/// a tool name or holds text that is no pair.
+pub fn glm_call(body: &str) -> Option<(String, Value)> {
+    let name_re = regex::Regex::new(r"^\s*([A-Za-z_][A-Za-z0-9_.-]*)").unwrap();
+    let m = name_re.captures(body)?;
+    let name = m[1].to_string();
+    let mut rest = body[m.get(0)?.end()..].trim();
+    if let Some(inner) = rest.strip_prefix('(') {
+        rest = inner.trim_end().strip_suffix(')').unwrap_or(inner).trim();
+    }
+    if rest.starts_with('{') {
+        if let Some(Ok(Value::Object(o))) = serde_json::Deserializer::from_str(rest).into_iter::<Value>().next() {
+            return Some((name, Value::Object(o)));
+        }
+    }
+    let key = regex::Regex::new(r#"(?:^|<arg_key>|</arg_value>|"\s+)\s*"?([A-Za-z_][A-Za-z0-9_-]*)"?\s*(?:</arg_key>\s*<arg_value>|"\s*:\s*|:\s*|=\s*)"#).unwrap();
+    let keys: Vec<regex::Captures> = key.captures_iter(rest).collect();
+    if keys.is_empty() {
+        return rest.trim_matches(|c: char| c == '{' || c == '}' || c.is_whitespace()).is_empty().then(|| (name, json!({})));
+    }
+    if keys[0].get(0)?.start() > 0 && !rest[..keys[0].get(0)?.start()].trim().is_empty() {
+        return None;
+    }
+    let mut args = serde_json::Map::new();
+    for (i, k) in keys.iter().enumerate() {
+        let start = k.get(0)?.end();
+        let end = keys.get(i + 1).and_then(|n| n.get(0)).map(|n| n.start()).unwrap_or(rest.len());
+        args.insert(k[1].to_string(), json!(loose_value(&rest[start..end.max(start)])));
+    }
+    Some((name, Value::Object(args)))
+}
+
+/// The text of one loosely written value: closing tags and a trailing `}` or `)` go, a JSON string is unescaped, a
+/// JSON value keeps its text, other text loses its surrounding quotes.
+fn loose_value(raw: &str) -> String {
+    let v = raw.replace("</arg_value>", "").replace("</arg_key>", "");
+    let v = v.trim();
+    let mut stream = serde_json::Deserializer::from_str(v).into_iter::<Value>();
+    if let Some(Ok(x)) = stream.next() {
+        let end = stream.byte_offset();
+        if v[end..].trim().trim_matches(|c| c == '}' || c == ')' || c == '"').trim().is_empty() {
+            return match x {
+                Value::String(s) => s,
+                _ => v[..end].to_string(),
+            };
+        }
+    }
+    let v = v.strip_prefix('"').unwrap_or(v);
+    v.strip_suffix('"').unwrap_or(v).to_string()
+}
+
+/// The marker of DeepSeek's own text template for tool calls (fullwidth bars).
+pub const DSML: &str = "\u{ff5c}DSML\u{ff5c}";
+
+/// Tool calls in DeepSeek's DSML template, which DeepSeek V4 writes when no API tool field is set:
+/// `<｜DSML｜ invoke name="run">` with one `<｜DSML｜ parameter name="command" string="true">VALUE</｜DSML｜ parameter>`
+/// per argument, inside a `calls` or `function_calls` block. `string="true"` keeps the value as text; any other value is
+/// read as JSON and stays text when it does not parse. DeepSeek often closes a tag short (`</｜DSML｜>`), repeats a
+/// closing tag or leaves one out, so an invoke runs to the next invoke and a value to the next DSML tag. The text from
+/// the first to the last DSML tag leaves the answer; everything else stays.
+pub fn dsml_tool_calls(content: &str) -> (Vec<ToolCall>, String) {
+    let bar = "\u{ff5c}";
+    let open = format!("<{}DSML{}", bar, bar);
+    let close = format!("</{}DSML{}", bar, bar);
+    let invoke = regex::Regex::new(&format!(r#"<{b}DSML{b}\s*invoke\s+name="([^"]+)"\s*>"#, b = bar)).unwrap();
+    let param = regex::Regex::new(&format!(r#"<{b}DSML{b}\s*parameter\s+name="([^"]+)"(?:\s+string="(true|false)")?\s*>"#, b = bar)).unwrap();
+    let starts: Vec<regex::Captures> = invoke.captures_iter(content).collect();
+    let mut calls = Vec::new();
+    for (i, m) in starts.iter().enumerate() {
+        let from = m.get(0).map(|x| x.end()).unwrap_or(0);
+        let to = starts.get(i + 1).and_then(|n| n.get(0)).map(|n| n.start()).unwrap_or(content.len());
+        let body = &content[from..to];
+        let mut args = serde_json::Map::new();
+        for p in param.captures_iter(body) {
+            let vstart = p.get(0).map(|x| x.end()).unwrap_or(0);
+            let tail = &body[vstart..];
+            // The value ends at the next DSML tag, open or close.
+            let vend = [tail.find(&close), tail.find(&open)].into_iter().flatten().min().unwrap_or(tail.len());
+            let raw = &tail[..vend];
+            let value = if p.get(2).map(|s| s.as_str()) == Some("true") {
+                json!(raw)
+            } else {
+                serde_json::from_str(raw.trim()).unwrap_or_else(|_| json!(raw))
+            };
+            args.insert(p[1].to_string(), value);
+        }
+        calls.push(ToolCall { id: format!("text-call-{}", calls.len() + 1), name: m[1].to_string(), args: Value::Object(args) });
+    }
+    if calls.is_empty() {
+        return (Vec::new(), content.to_string());
+    }
+    let first = [content.find(&open), content.find(&close)].into_iter().flatten().min().unwrap_or(0);
+    let last_tag = content.rfind(&open).max(content.rfind(&close)).unwrap_or(first);
+    let last = content[last_tag..].find('>').map(|i| last_tag + i + 1).unwrap_or(content.len());
+    let rest = format!("{}{}", &content[..first], &content[last..]);
+    (calls, rest.trim().to_string())
 }
 
 /// The tool loop. `history` grows by every message of the turn. `exec` runs one tool call and returns its text and
@@ -357,7 +489,7 @@ pub fn run_loop(model: &Value, system: &str, history: &mut Vec<Value>, tools: &[
 pub fn run_loop_with(model: &Value, system: &str, history: &mut Vec<Value>, tools: &[Value], rounds: usize, cancel: Option<&AtomicBool>, usage: &mut Usage,
                      tick: &mut dyn FnMut(&Usage) -> Option<String>,
                      exec: &mut dyn FnMut(&ToolCall) -> (String, bool), on_text: &mut dyn FnMut(&str)) -> Result<String, String> {
-    let kind = kind_of(model).to_string();
+    let kind = if model["tool_format"].as_str() == Some("text") { "text".to_string() } else { kind_of(model).to_string() };
     for round in 0..rounds {
         if cancel.map(|c| c.load(Ordering::SeqCst)).unwrap_or(false) {
             return Err("stopped".to_string());
@@ -444,6 +576,75 @@ pub fn run_loop_with(model: &Value, system: &str, history: &mut Vec<Value>, tool
 #[cfg(test)]
 mod text_call_tests {
     use super::*;
+
+    #[test]
+    fn glm_arg_key_blocks_become_calls() {
+        // GLM-5.3 in a calibration run with the text tool format (hard-fix-median), plus a typed value.
+        let answer = "<tool_call>read<arg_key>path</arg_key><arg_value>app/mathutil.py</arg_value></tool_call>\
+<tool_call>run<arg_key>command</arg_key><arg_value>python3 tests/test_median.py</arg_value><arg_key>timeout</arg_key><arg_value>30</arg_value></tool_call>";
+        let (calls, rest) = text_tool_calls(answer);
+        assert_eq!(calls.len(), 2);
+        assert_eq!((calls[0].name.as_str(), calls[0].args["path"].as_str()), ("read", Some("app/mathutil.py")));
+        assert_eq!((calls[1].args["command"].as_str(), &calls[1].args["timeout"]), (Some("python3 tests/test_median.py"), &json!("30")));
+        assert!(rest.is_empty());
+        // A string that looks like JSON stays the string: write gets the file content as written.
+        let (write, _) = text_tool_calls("<tool_call>write<arg_key>path</arg_key><arg_value>x.json</arg_value><arg_key>text</arg_key><arg_value>{\"a\": 1}</arg_value></tool_call>");
+        assert_eq!(write[0].args["text"], json!("{\"a\": 1}"));
+        let (edit, _) = text_tool_calls("<tool_call>edit<arg_key>old</arg_key><arg_value>30</arg_value><arg_key>new</arg_key><arg_value>true</arg_value></tool_call>");
+        assert_eq!((&edit[0].args["old"], &edit[0].args["new"]), (&json!("30"), &json!("true")));
+        // Without templates (native mode) the GLM body stays text.
+        let (none, _) = text_tool_calls_with("<tool_call>read<arg_key>path</arg_key><arg_value>a</arg_value></tool_call>", false);
+        assert!(none.is_empty());
+        // GLM's mixed forms from the calibration runs: a JSON key inside arg_key, attributes, name plus JSON.
+        let mixed = [
+            ("read<arg_key>path\": \"config/settings.json\"</arg_value>", "read", json!({"path": "config/settings.json"})),
+            ("run<arg_key>command=\"ls logs; wc -l logs/*.log\"</arg_value>cwd=\"/w\"", "run", json!({"command": "ls logs; wc -l logs/*.log", "cwd": "/w"})),
+            ("read cwd=\"/w\" path=\"data/sales.csv\"", "read", json!({"cwd": "/w", "path": "data/sales.csv"})),
+            ("run {\"command\": \"cat a.py\"}</arg_value><arg_key>cwd\": \"/w\"}</arg_value>", "run", json!({"command": "cat a.py"})),
+            ("read({\"path\": \"data/sales.csv\"})", "read", json!({"path": "data/sales.csv"})),
+            ("tree<arg_key>depth\": 4}</arg_value>", "tree", json!({"depth": "4"})),
+            ("edit<arg_key>edits\":[{\"new\":\"b\",\"old\":\"a\"}]</arg_value><arg_key>path</arg_key><arg_value>c.json</arg_value>", "edit",
+             json!({"edits": "[{\"new\":\"b\",\"old\":\"a\"}]", "path": "c.json"})),
+            ("tree{\"depth\": 3}{}</arg_value>", "tree", json!({"depth": 3})),
+        ];
+        for (body, name, args) in mixed {
+            let (calls, _) = text_tool_calls(&format!("<tool_call>{}</tool_call>", body));
+            assert_eq!(calls.len(), 1, "{}", body);
+            assert_eq!((calls[0].name.as_str(), &calls[0].args), (name, &args), "{}", body);
+        }
+        // Prose in a block is no call.
+        let (none, _) = text_tool_calls("<tool_call>I would now read the file to see what it holds.</tool_call>");
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn deepseek_dsml_blocks_become_calls() {
+        // The answer DeepSeek V4.1 Flash wrote in a calibration run with the text tool format (hard-fix-median).
+        let answer = "I'll start by looking at the project.\n\n<\u{ff5c}DSML\u{ff5c} calls>\n<\u{ff5c}DSML\u{ff5c} invoke name=\"run\">\n\
+<\u{ff5c}DSML\u{ff5c} parameter name=\"command\" string=\"true\">cat app/mathutil.py && echo \"---\"</\u{ff5c}DSML\u{ff5c} parameter>\n\
+<\u{ff5c}DSML\u{ff5c} parameter name=\"timeout\" string=\"false\">30</\u{ff5c}DSML\u{ff5c} parameter>\n</\u{ff5c}DSML\u{ff5c} invoke>\n\
+<\u{ff5c}DSML\u{ff5c}invoke name=\"read\">\n<\u{ff5c}DSML\u{ff5c}parameter name=\"path\" string=\"true\">tests/test_median.py</\u{ff5c}DSML\u{ff5c}parameter>\n\
+</\u{ff5c}DSML\u{ff5c}invoke>\n</\u{ff5c}DSML\u{ff5c} calls>";
+        let (calls, rest) = text_tool_calls(answer);
+        assert_eq!(calls.len(), 2);
+        assert_eq!((calls[0].name.as_str(), calls[0].args["command"].as_str()), ("run", Some("cat app/mathutil.py && echo \"---\"")));
+        assert_eq!(calls[0].args["timeout"], json!(30));
+        assert_eq!((calls[1].name.as_str(), calls[1].args["path"].as_str()), ("read", Some("tests/test_median.py")));
+        assert_eq!(rest, "I'll start by looking at the project.");
+        // Text with the marker and no invoke block stays as it is.
+        let (none, same) = text_tool_calls("a \u{ff5c}DSML\u{ff5c} marker");
+        assert!(none.is_empty() && same == "a \u{ff5c}DSML\u{ff5c} marker");
+        // Short and missing closing tags, as DeepSeek wrote them in the second calibration round (hard-log-warn, hard-pipe-p2).
+        let b = "\u{ff5c}";
+        let sloppy = format!("Next.\n<{b}DSML{b} calls>\n<{b}DSML{b} invoke name=\"read\">\n<{b}DSML{b} parameter name=\"limit\" string=\"false\">200</{b}DSML{b}>\n\
+<{b}DSML{b} parameter name=\"path\" string=\"true\">logs/app-3.log</{b}DSML{b}>\n<{b}DSML{b} invoke name=\"read\">\n\
+<{b}DSML{b} parameter name=\"path\" string=\"true\">data/numbers.txt</{b}DSML{b}>\n</{b}DSML{b}>\n</{b}DSML{b} calls>", b = b);
+        let (calls, rest) = text_tool_calls(&sloppy);
+        assert_eq!(calls.len(), 2);
+        assert_eq!((&calls[0].args["limit"], calls[0].args["path"].as_str()), (&json!(200), Some("logs/app-3.log")));
+        assert_eq!(calls[1].args["path"], "data/numbers.txt");
+        assert_eq!(rest, "Next.");
+    }
 
     #[test]
     fn two_blocks_after_a_thought_become_two_calls() {
