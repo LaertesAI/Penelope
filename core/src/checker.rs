@@ -136,7 +136,7 @@ pub fn run_command_in(command: &str, dir: &Path, roots: &[PathBuf], timeout: u64
 
 /// `run_command_in`, inside bubblewrap when `sandbox` names the writable worktree.
 fn run_command_with(command: &str, dir: &Path, roots: &[PathBuf], timeout: u64, sandbox: Option<&Path>) -> Run {
-    let base = std::env::temp_dir().join(format!("penelope-check-out-{}", unique()));
+    let base = crate::platform::tmp_dir().join(format!("penelope-check-out-{}", unique()));
     let (out_path, err_path) = (base.with_extension("out"), base.with_extension("err"));
     let fail = |e: String| Run { ok: false, code: -1, timed_out: false, tail: e, skipped: false };
     let (Ok(out), Ok(err)) = (fs::File::create(&out_path), fs::File::create(&err_path)) else {
@@ -221,7 +221,7 @@ fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
 
 /// An empty folder for `core.hooksPath`, so `git worktree add` runs no post-checkout hook of the user (husky and the like).
 fn no_hooks() -> PathBuf {
-    let d = std::env::temp_dir().join("penelope-check-no-hooks");
+    let d = crate::platform::tmp_dir().join("penelope-check-no-hooks");
     let _ = fs::create_dir_all(&d);
     d
 }
@@ -242,10 +242,10 @@ struct Sandbox {
 impl Sandbox {
     fn new(repo: &Path) -> Result<Sandbox, String> {
         let id = unique();
-        let dir = std::env::temp_dir().join(format!("penelope-check-{}", id));
+        let dir = crate::platform::tmp_dir().join(format!("penelope-check-{}", id));
         let hooks = format!("core.hooksPath={}", no_hooks().to_string_lossy());
         git(repo, &["-c", &hooks, "worktree", "add", "--detach", "--quiet", &dir.to_string_lossy(), "HEAD"])?;
-        let sandbox = Sandbox { repo: repo.to_path_buf(), dir, excludes: std::env::temp_dir().join(format!("penelope-check-{}.exclude", id)) };
+        let sandbox = Sandbox { repo: repo.to_path_buf(), dir, excludes: crate::platform::tmp_dir().join(format!("penelope-check-{}.exclude", id)) };
         sandbox.bring_ignored();
         Ok(sandbox)
     }
@@ -474,7 +474,7 @@ impl Candidate {
                 let exclude = format!(":(exclude){}", job.test_rel);
                 let diff = git(&job.top, &["diff", "HEAD", "--binary", "--", ".", &exclude])?;
                 if !diff.trim().is_empty() {
-                    let patch = std::env::temp_dir().join(format!("penelope-check-{}.diff", unique()));
+                    let patch = crate::platform::tmp_dir().join(format!("penelope-check-{}.diff", unique()));
                     fs::write(&patch, &diff).map_err(|e| e.to_string())?;
                     let applied = git(&sandbox.dir, &["apply", "--whitespace=nowarn", &patch.to_string_lossy()]);
                     let _ = fs::remove_file(&patch);

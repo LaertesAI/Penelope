@@ -161,11 +161,11 @@ impl Default for RouteId {
     }
 }
 
-/// Penelope's own state directory, outside every workspace. `PENELOPE_STATE_DIR` overrides it.
+/// Penelope's own state directory, `~/.penelope/state`, outside every workspace. `PENELOPE_STATE_DIR` overrides it.
 pub fn state_dir() -> std::path::PathBuf {
     match std::env::var("PENELOPE_STATE_DIR") {
         Ok(p) if !p.trim().is_empty() => std::path::PathBuf::from(p),
-        _ => std::env::temp_dir().join("penelope-state"),
+        _ => crate::platform::penelope_home().join("state"),
     }
 }
 

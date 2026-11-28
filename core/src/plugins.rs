@@ -1100,7 +1100,7 @@ fn install_zip_file(ctx: &Ctx, archive: &Path, name: &str) -> String {
 
 fn install_zip_url(ctx: &Ctx, target: &str, name: &str) -> String {
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
-    let tmp = std::env::temp_dir().join(format!("penelope-plugin-{}-{}.zip", std::process::id(), stamp));
+    let tmp = crate::platform::tmp_dir().join(format!("penelope-plugin-{}-{}.zip", std::process::id(), stamp));
     if let Some(path) = target.strip_prefix("file://") {
         let path = PathBuf::from(path);
         let report = install_zip_file(ctx, &path, name);

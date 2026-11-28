@@ -73,7 +73,7 @@ Caveats:
 ## Limits
 
 - Test results and strikes reach the chat as small signed files in Penelope's state folder (`PENELOPE_STATE_DIR`, default
-  `penelope-state` in the temp folder), one folder per chat, outside the workspace. The chat takes each file by
+  `~/.penelope/state`), one folder per chat, outside the workspace. The chat takes each file by
   renaming it. A file with a wrong signature is ignored, and `write` and `edit` refuse that folder. A command run
   through `run` is not blocked from writing there; the signature key is the only guard against that.
 - The context size of a turn is its fullest single step: input, cache creation and cache read tokens. For an API turn
