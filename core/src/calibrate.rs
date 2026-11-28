@@ -11,6 +11,8 @@
 //! - `prompt-short`: a 6-line system prompt in place of the 11 rules of `backend::rules`; rule 2 (where lookups go)
 //!   is the same line as in the full rules.
 //! - `rounds-24`: 24 tool-call rounds per turn in place of the task's `max_steps`.
+//! - `stop-green` (only with `--variants`, never in a stored profile): after a round that changed a file, the runner runs
+//!   the task's own check in the sandbox; when it passes, the turn ends with no further model call.
 //!
 //! The claude command runs its own tool loop, so a `claude-cli` model gets only the effort and prompt variants, and
 //! its turns have no round cap.
@@ -58,21 +60,24 @@ pub struct Variant {
     pub prompt: String,
     /// The most tool-call rounds of one turn through an HTTP endpoint; 0 keeps the built-in 12.
     pub rounds: u64,
+    /// `green` ends the turn after a round that changed a file when the task check passes; empty keeps the turn open.
+    pub stop: String,
 }
 
 impl Variant {
     pub fn default_for(effort: &str) -> Variant {
-        Variant { name: "default".into(), tool_format: "native".into(), tool_list: "full".into(), effort: effort.into(), prompt: "current".into(), rounds: 0 }
+        Variant { name: "default".into(), tool_format: "native".into(), tool_list: "full".into(), effort: effort.into(), prompt: "current".into(), rounds: 0, stop: String::new() }
     }
 
     pub fn to_json(&self) -> Value {
-        json!({"variant": self.name, "tool_format": self.tool_format, "tool_list": self.tool_list, "effort": self.effort, "prompt": self.prompt, "rounds": self.rounds})
+        json!({"variant": self.name, "tool_format": self.tool_format, "tool_list": self.tool_list, "effort": self.effort, "prompt": self.prompt, "rounds": self.rounds, "stop": self.stop})
     }
 
     pub fn from_json(v: &Value) -> Variant {
         let s = |k: &str, d: &str| v[k].as_str().filter(|x| !x.is_empty()).unwrap_or(d).to_string();
         Variant { name: s("variant", "default"), tool_format: s("tool_format", "native"), tool_list: s("tool_list", "full"),
-                  effort: v["effort"].as_str().unwrap_or("").to_string(), prompt: s("prompt", "current"), rounds: v["rounds"].as_u64().unwrap_or(0) }
+                  effort: v["effort"].as_str().unwrap_or("").to_string(), prompt: s("prompt", "current"), rounds: v["rounds"].as_u64().unwrap_or(0),
+                  stop: v["stop"].as_str().unwrap_or("").to_string() }
     }
 }
 
@@ -101,6 +106,15 @@ pub fn variants(provider: &str, model: &str) -> Vec<Variant> {
         out.push(Variant { name: "rounds-24".into(), rounds: 24, ..base });
     }
     out
+}
+
+/// Variants that run only when `--variants` names them. They need the task's check or change what a run measures, so
+/// no profile stores them and a calibration over the default set leaves them out.
+pub fn extra_variants(provider: &str, model: &str) -> Vec<Variant> {
+    if provider == "claude-cli" {
+        return Vec::new();
+    }
+    vec![Variant { name: "stop-green".into(), stop: "green".into(), ..Variant::default_for(crate::providers::default_effort(provider, model)) }]
 }
 
 fn safe(text: &str) -> String {
@@ -154,6 +168,9 @@ pub fn apply(ctx: &Ctx) -> Ctx {
     m["tool_format"] = json!(p.tool_format);
     m["tool_list"] = json!(p.tool_list);
     m["prompt"] = json!(p.prompt);
+    if !p.stop.is_empty() {
+        m["stop"] = json!(p.stop);
+    }
     if p.rounds > 0 {
         m["max_rounds"] = json!(p.rounds);
     }
@@ -235,6 +252,75 @@ When the task is done, answer without a block.\n\nTools, one JSON object per lin
         block.push('\n');
     }
     (Vec::new(), format!("{}{}", system, block))
+}
+
+/// The task check as the harness runs it inside a turn (`stop-green`): the command, its limit and where it runs.
+/// `prepare` writes it to `calibrate-stop.json` in the run's root; the turn reads it back.
+pub struct StopGreen {
+    command: String,
+    timeout: u64,
+    sandbox: bool,
+    work: PathBuf,
+    workdir: PathBuf,
+    log: PathBuf,
+    state_file: PathBuf,
+    seen: u64,
+    checks: u32,
+}
+
+/// A hash of the path, size and modification time of every file below `dir`, without `.git` and caches.
+pub fn fingerprint(dir: &Path) -> u64 {
+    use std::hash::{Hash, Hasher};
+    fn walk(dir: &Path, base: &Path, out: &mut Vec<(String, u64, u128)>) {
+        let Ok(rd) = fs::read_dir(dir) else { return };
+        for e in rd.flatten() {
+            let path = e.path();
+            let name = e.file_name().to_string_lossy().to_string();
+            let Ok(meta) = e.metadata() else { continue };
+            if meta.is_dir() {
+                if name != ".git" && name != "__pycache__" && name != ".pytest_cache" {
+                    walk(&path, base, out);
+                }
+            } else {
+                let mtime = meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_nanos()).unwrap_or(0);
+                out.push((path.strip_prefix(base).unwrap_or(&path).to_string_lossy().to_string(), meta.len(), mtime));
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(dir, dir, &mut files);
+    files.sort();
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    files.hash(&mut h);
+    h.finish()
+}
+
+impl StopGreen {
+    /// The stop rule of this turn: Some when the main setting says `"stop": "green"` and the run root holds a check.
+    pub fn load(ctx: &Ctx, main: &Value) -> Option<StopGreen> {
+        if main["stop"].as_str() != Some("green") {
+            return None;
+        }
+        let v: Value = serde_json::from_str(&fs::read_to_string(ctx.root.join("calibrate-stop.json")).ok()?).ok()?;
+        let workdir = PathBuf::from(v["workdir"].as_str()?);
+        Some(StopGreen { command: v["command"].as_str()?.to_string(), timeout: v["timeout"].as_u64().unwrap_or(60), sandbox: v["sandbox"].as_bool().unwrap_or(false),
+                         work: PathBuf::from(v["work"].as_str()?), seen: fingerprint(&workdir), workdir, log: ctx.root.join("stop-check.log"),
+                         state_file: ctx.root.join("stop-green.json"), checks: 0 })
+    }
+
+    /// Called after the tools of one round ran. A round that changed a file under the working folder runs the check;
+    /// a passing check returns the text that ends the turn.
+    pub fn after_round(&mut self) -> Option<String> {
+        let now = fingerprint(&self.workdir);
+        if now == self.seen {
+            return None;
+        }
+        self.checks += 1;
+        let (passed, _) = run_check(&self.command, self.sandbox, &self.work, &self.workdir, self.timeout, &self.log);
+        self.seen = fingerprint(&self.workdir);
+        let _ = fs::write(&self.state_file, json!({"checks": self.checks, "stopped": passed}).to_string());
+        passed.then(|| "Stopped by the harness: the task check passes.".to_string())
+    }
 }
 
 /// One task of a run: which task, which variant, and the folders.
@@ -478,6 +564,12 @@ pub fn prepare(base: &Value, model: &Value, out: &Path, task: &crate::eval::Task
     }
     let workdir = workdir.canonicalize().unwrap_or(workdir);
     fs::write(root.join("calibrate-prompt.txt"), task_text(task, &workdir)).map_err(|e| format!("cannot write the prompt: {}", e))?;
+    if variant.stop == "green" {
+        let work_abs = dir.join("work");
+        let stop = json!({"command": task.check, "timeout": task.check_timeout_seconds, "sandbox": sandbox,
+                          "work": work_abs.canonicalize().unwrap_or(work_abs).to_string_lossy(), "workdir": workdir.to_string_lossy()});
+        fs::write(root.join("calibrate-stop.json"), stop.to_string()).map_err(|e| format!("cannot write the stop check: {}", e))?;
+    }
     Ok(TaskRun { task: task.clone(), variant: variant.clone(), dir, workdir, root, turn_timeout, sandbox })
 }
 
@@ -547,19 +639,19 @@ pub fn sandboxed(command: &str, work: &Path, dir: &Path) -> Command {
 /// Runs the check in the work folder, bounded by the task's timeout. The check runs code the model wrote, so it goes
 /// into the sandbox when the run has one.
 pub fn check(run: &TaskRun) -> (bool, String) {
-    let log = run.dir.join("check.log");
-    let mut cmd = if run.sandbox {
-        let work = run.dir.join("work");
-        sandboxed(&run.task.check, &work.canonicalize().unwrap_or(work), &run.workdir)
-    } else {
-        crate::platform::shell(&run.task.check)
-    };
-    cmd.current_dir(&run.workdir);
-    match run_bounded(cmd, Duration::from_secs(run.task.check_timeout_seconds), &log) {
+    let work = run.dir.join("work");
+    run_check(&run.task.check, run.sandbox, &work.canonicalize().unwrap_or(work), &run.workdir, run.task.check_timeout_seconds, &run.dir.join("check.log"))
+}
+
+/// One check command in the working folder with a time limit: in bubblewrap with `work` writable, or on the host.
+pub fn run_check(command: &str, sandbox: bool, work: &Path, workdir: &Path, timeout_secs: u64, log: &Path) -> (bool, String) {
+    let mut cmd = if sandbox { sandboxed(command, work, workdir) } else { crate::platform::shell(command) };
+    cmd.current_dir(workdir);
+    match run_bounded(cmd, Duration::from_secs(timeout_secs), log) {
         Ok(b) => {
-            let text: String = fs::read_to_string(&log).unwrap_or_default().trim().chars().take(600).collect();
+            let text: String = fs::read_to_string(log).unwrap_or_default().trim().chars().take(600).collect();
             if b.timed_out {
-                (false, format!("check timed out after {} s {}", run.task.check_timeout_seconds, text))
+                (false, format!("check timed out after {} s {}", timeout_secs, text))
             } else {
                 (b.status.map(|s| s.success()).unwrap_or(false), text)
             }
@@ -880,7 +972,7 @@ pub fn parse_args(args: &[String]) -> Result<Options, String> {
 pub fn same_setting(a: &Variant, b: &Variant, default_effort: &str) -> bool {
     let effort = |v: &Variant| if v.effort.is_empty() { default_effort.to_string() } else { v.effort.clone() };
     let rounds = |v: &Variant| if v.rounds == 0 { None } else { Some(v.rounds) };
-    (&a.tool_format, &a.tool_list, effort(a), &a.prompt, rounds(a)) == (&b.tool_format, &b.tool_list, effort(b), &b.prompt, rounds(b))
+    (&a.tool_format, &a.tool_list, effort(a), &a.prompt, rounds(a), &a.stop) == (&b.tool_format, &b.tool_list, effort(b), &b.prompt, rounds(b), &b.stop)
 }
 
 /// `penelope calibrate`: calibrate (default) or validate the stored profile against the default (`--validate`).
@@ -922,7 +1014,11 @@ model wrote. Install bubblewrap, or pass --no-sandbox to run both on this machin
     } else {
         all.clone()
     };
+    let extra = extra_variants(&provider, &o.model);
     if !o.only.is_empty() {
+        if !o.validate {
+            variants.extend(extra.iter().cloned());
+        }
         variants.retain(|v| o.only.contains(&v.name));
     }
     if variants.is_empty() {
@@ -961,7 +1057,7 @@ model wrote. Install bubblewrap, or pass --no-sandbox to run both on this machin
     let chosen = select(&scores);
     text.push_str(&table(&scores, Some(chosen)));
     // A profile needs the default as the baseline and every variant that applies, each on every task.
-    let complete = variants[0].name == "default" && variants.len() == all.len() && missing == 0;
+    let complete = variants[0].name == "default" && variants.len() == all.len() && missing == 0 && !variants.iter().any(|v| !v.stop.is_empty());
     if !complete {
         text.push_str("no profile written: the run lacks the default, a variant or a task (it needs every variant on every task)\n");
         return Ok(text);
@@ -1022,7 +1118,8 @@ mod tests {
         assert_eq!(names, ["default", "text", "index", "effort-low", "prompt-short", "rounds-24"]);
         assert_eq!(v[0].effort, "high");
         for x in &v[1..] {
-            let diffs = [x.tool_format != v[0].tool_format, x.tool_list != v[0].tool_list, x.effort != v[0].effort, x.prompt != v[0].prompt, x.rounds != v[0].rounds];
+            let diffs = [x.tool_format != v[0].tool_format, x.tool_list != v[0].tool_list, x.effort != v[0].effort, x.prompt != v[0].prompt, x.rounds != v[0].rounds,
+                         x.stop != v[0].stop];
             assert_eq!(diffs.iter().filter(|d| **d).count(), 1, "{} changes one factor", x.name);
         }
         // Kimi K3 has only "max", MiniMax M3 none: no effort variant. The claude command owns its tool loop.
@@ -1414,6 +1511,100 @@ mod tests {
         assert!(err.contains("another calibrate process"), "{}", err);
         drop(held);
         assert!(run_all(&plan, &[], &[], &|_| Turn::default(), &|_| {}).is_ok());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn stop_green_is_an_extra_variant_with_one_factor_changed() {
+        let base = variants("opencode", "deepseek-v4.1-flash");
+        assert!(!base.iter().any(|v| v.name == "stop-green"), "a plain calibration leaves it out");
+        let extra = extra_variants("opencode", "deepseek-v4.1-flash");
+        assert_eq!(extra.len(), 1);
+        let x = &extra[0];
+        assert_eq!(x.name, "stop-green");
+        let d = &base[0];
+        assert_eq!((&x.tool_format, &x.tool_list, &x.effort, &x.prompt, x.rounds), (&d.tool_format, &d.tool_list, &d.effort, &d.prompt, d.rounds));
+        assert_eq!(x.stop, "green");
+        assert!(!same_setting(x, d, &d.effort), "a validation of stop-green against the default is no A/A");
+        assert!(extra_variants("claude-cli", "haiku").is_empty(), "the claude command owns its tool loop");
+        assert_eq!(Variant::from_json(&x.to_json()), *x, "the profile file keeps the stop rule");
+    }
+
+    #[test]
+    fn the_fingerprint_sees_files_and_ignores_git_and_caches() {
+        let dir = temp("fingerprint");
+        fs::write(dir.join("a.txt"), "one").unwrap();
+        let first = fingerprint(&dir);
+        assert_eq!(fingerprint(&dir), first, "nothing changed");
+        fs::create_dir_all(dir.join(".git")).unwrap();
+        fs::create_dir_all(dir.join("__pycache__")).unwrap();
+        fs::write(dir.join(".git").join("x"), "1").unwrap();
+        fs::write(dir.join("__pycache__").join("x.pyc"), "1").unwrap();
+        assert_eq!(fingerprint(&dir), first, ".git and caches are no change");
+        fs::write(dir.join("a.txt"), "three").unwrap();
+        assert_ne!(fingerprint(&dir), first, "a new size is a change");
+        let second = fingerprint(&dir);
+        fs::write(dir.join("b.txt"), "x").unwrap();
+        assert_ne!(fingerprint(&dir), second, "a new file is a change");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn call_json(name: &str, args: Value) -> (u16, String) {
+        (200, json!({"choices": [{"finish_reason": "tool_calls", "message": {"role": "assistant", "content": null, "tool_calls": [
+            {"id": "c1", "type": "function", "function": {"name": name, "arguments": args.to_string()}}]}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 2}}).to_string())
+    }
+
+    /// A stop-green run: the task check is `grep -qx ok out.txt` in the copy; the fake model gets the given replies.
+    fn stop_green_turn(name: &str, script: &dyn Fn(&Path) -> Vec<(u16, String)>) -> (String, usize, Value, PathBuf) {
+        let dir = temp(name);
+        let repo = dir.join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        fs::write(repo.join("note.txt"), "x\n").unwrap();
+        let mut t = task(&repo, "t", "grep -qx ok out.txt", 30);
+        t.max_steps = 6;
+        let variant = extra_variants("openai", "test-model").remove(0);
+        let model = json!({"kind": "openai", "base_url": "http://127.0.0.1:9/v1", "model": "test-model", "api_key_env": ""});
+        let run = prepare(&json!({}), &model, &dir.join("out"), &t, &variant, Duration::from_secs(30)).unwrap();
+        let (address, seen) = crate::llm::fake::serve(script(&run.workdir));
+        let mut ctx = crate::config::load(&run.root);
+        ctx.cfg["sandbox"] = json!("off");
+        ctx.cfg["main"]["base_url"] = json!(format!("{}/v1", address));
+        let stop: Value = serde_json::from_str(&fs::read_to_string(run.root.join("calibrate-stop.json")).unwrap()).unwrap();
+        assert_eq!(stop["command"], "grep -qx ok out.txt");
+        let answer = crate::backend::Chat::new().turn_with(&ctx, "Write ok into out.txt.", "", &mut |_| {}).unwrap();
+        let requests = seen.lock().unwrap().len();
+        let state: Value = fs::read_to_string(run.root.join("stop-green.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(Value::Null);
+        (answer, requests, state, dir)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stop_green_ends_the_turn_after_the_round_that_turns_the_check_green() {
+        // Round 1 only reads (no file changed, no check), round 2 writes a wrong value (check fails, the turn goes on),
+        // round 3 writes the right value (check passes, the turn ends with no fourth model call).
+        let (answer, requests, state, dir) = stop_green_turn("stop-green-ends", &|work| {
+            let out = work.join("out.txt").to_string_lossy().to_string();
+            vec![call_json("read", json!({"path": work.join("note.txt").to_string_lossy()})),
+                 call_json("write", json!({"path": out, "text": "no\n"})),
+                 call_json("write", json!({"path": out, "text": "ok\n"})),
+                 reply("never asked")]
+        });
+        assert_eq!(requests, 3, "the fourth reply is never requested");
+        assert!(answer.starts_with("Stopped by the harness"), "{}", answer);
+        assert_eq!(state["checks"], 2, "the read round runs no check: {}", state);
+        assert_eq!(state["stopped"], true);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stop_green_leaves_a_red_check_to_the_model() {
+        let (answer, requests, state, dir) = stop_green_turn("stop-green-red", &|work| {
+            vec![call_json("write", json!({"path": work.join("out.txt").to_string_lossy(), "text": "no\n"})), reply("I give up.")]
+        });
+        assert_eq!((answer.as_str(), requests), ("I give up.", 2));
+        assert_eq!((state["checks"].clone(), state["stopped"].clone()), (json!(1), json!(false)));
         let _ = fs::remove_dir_all(&dir);
     }
 

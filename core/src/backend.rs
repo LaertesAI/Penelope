@@ -712,7 +712,9 @@ Choose a hosted model: penelope provider use NAME --role main.", family));
         // Both closures report to the interface, so the events go through one shared cell.
         let events = std::cell::RefCell::new(on);
         let rounds = m["max_rounds"].as_u64().filter(|r| (1..=64).contains(r)).unwrap_or(12) as usize;          // a model profile may raise the cap
-        let out = crate::llm::run_loop(m, system, &mut history, &tools, rounds, Some(&*self.cancel), &mut usage,
+        let mut stop = crate::calibrate::StopGreen::load(ctx, m);          // calibration variant stop-green only
+        let out = crate::llm::run_loop_full(m, system, &mut history, &tools, rounds, Some(&*self.cancel), &mut usage, &mut |_| None,
+            &mut || stop.as_mut().and_then(|s| s.after_round()),
             &mut |call| {
                 // A text tool call carries its values as text; the schema of the tool gives numbers and bools back their type.
                 let typed;
