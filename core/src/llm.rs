@@ -492,7 +492,7 @@ pub fn run_loop_with(model: &Value, system: &str, history: &mut Vec<Value>, tool
     let kind = if model["tool_format"].as_str() == Some("text") { "text".to_string() } else { kind_of(model).to_string() };
     let stop_green = model["stop_green"].as_bool().unwrap_or(false);
     let mut changed = false;
-    let mut green = false;
+    let mut greens = 0;
     for round in 0..rounds {
         if cancel.map(|c| c.load(Ordering::SeqCst)).unwrap_or(false) {
             return Err("stopped".to_string());
@@ -546,6 +546,14 @@ pub fn run_loop_with(model: &Value, system: &str, history: &mut Vec<Value>, tool
                 exec(call)
             };
             usage.steps += 1;
+            let real_change = crate::tools::is_real_change(&call.name, ok, &text);
+            if real_change {
+                changed = true;
+            }
+            let green_here = crate::tools::is_green_check(&call.name, &call.args, ok, &text, changed);
+            if green_here {
+                greens += 1;
+            }
             if crate::tools::is_test_stop(&text) {
                 if stop_text.is_none() {
                     stop_text = Some(text.clone());
@@ -556,24 +564,34 @@ pub fn run_loop_with(model: &Value, system: &str, history: &mut Vec<Value>, tool
             } else {
                 results.push((call.id.clone(), text, ok));
             }
-            if ok && matches!(call.name.as_str(), "write" | "edit") {
-                changed = true;
-            }
-            if crate::tools::is_green_check(&call.name, ok, &results.last().map(|x| x.1.as_str()).unwrap_or(""), changed) {
-                green = true;
-            }
         }
         history.extend(result_messages(&kind, &results));
-        if stop_green && green {
-            let final_reply = match chat_cancel(model, system, history, &[], cancel) {
+        if stop_green && greens >= 2 {
+            let mut final_reply = match chat_cancel(model, system, history, &[], cancel) {
                 Ok(reply) => reply,
                 Err(e) if e == "stopped" => return Err(e),
                 Err(e) => return Ok(format!("The check passed; the final answer could not be written: {}", e)),
             };
             usage.tokens_in += final_reply.tokens_in;
             usage.tokens_out += final_reply.tokens_out;
-            history.push(final_reply.message);
-            return Ok(if final_reply.text.trim().is_empty() { "The check passed after the change.".to_string() } else { final_reply.text });
+            history.push(final_reply.message.clone());
+            if crate::tools::is_tool_like(&final_reply.text) {
+                // A tool call in a tool-free answer is not a final answer. Ask once in plain text; if that also
+                // fails, keep the loop alive instead of returning syntax as the result.
+                history.push(user_message("Write the final answer in plain text. Do not call any tool."));
+                final_reply = match chat_cancel(model, system, history, &[], cancel) {
+                    Ok(reply) => reply,
+                    Err(e) if e == "stopped" => return Err(e),
+                    Err(e) => return Ok(format!("The final answer could not be written: {}", e)),
+                };
+                usage.tokens_in += final_reply.tokens_in;
+                usage.tokens_out += final_reply.tokens_out;
+                history.push(final_reply.message);
+            }
+            if !crate::tools::is_tool_like(&final_reply.text) {
+                return Ok(if final_reply.text.trim().is_empty() { "The check passed after the change.".to_string() } else { final_reply.text });
+            }
+            greens = 0;
         }
         if let Some(stop) = stop_text {
             let final_reply = match chat_cancel(model, system, history, &[], cancel) {

@@ -118,3 +118,9 @@ Rang 6, Web-Research: mindestens vier Primärquellen mit Lesestatus, jede mit ei
 ### Ergebnis der Regelprüfung, 28.11.2026
 
 Mit der im Auftrag gemeinten Regel (höchstens ein Treffer weniger) wechselt 1 von 4 Modellen die Variante, nur GLM auf `effort-low`. Die Vorhersage mindestens 2 ist verworfen, die Abbruchregel greift. Bei der versehentlich wörtlich formulierten Regel (mindestens ein Treffer weniger) wären es 3 von 4; diese Lesart ist verworfen. Die Tabellenzahlen selbst sind aus 340 Rohzeilen reproduzierbar. Die 12 % Annahme der Powerrechnung ist nicht aus den Daten gestützt; ex-ante mit D ~ Bin(N, 0,12) sind es 19,1 % Power bei 50, 76,5 % bei 142 und 80,2 % bei 153 Aufgaben.
+
+### Hypothese H2 aus dem Scheitern von H1, 28.11.2026
+
+H1 scheiterte mit c = 3. Zwei der drei Verluste (`hard-json-1`, `hard-inv-totals`) kamen nicht von einer echten Prüfung: ein fehlgeschlagener Edit oder ein `echo` mit Exit 0 wurde als grün gewertet, und die Endantwort war roher DSML-Code. H2: `stop-green-confirm` zählt nur echte Testbefehle (`pytest`, `python -m`, `cargo test`, `check`, `verify_fix`) nach einer echten Dateiänderung und verlangt zwei grüne Signale. Danach muss die Endantwort textlich sein; sonst wird erneut zum Textfinale aufgefordert und der Lauf ggf. fortgesetzt.
+
+Vorhersage: c höchstens 1 gegen `default`, EUR je bestandener Aufgabe höchstens so hoch wie im Default, mindestens 2 der 3 H1-Verluste werden Treffer. Abbruch: c mindestens 2 oder EUR je Treffer über dem Default. 20 verschränkte Paare, 40 Läufe, OpenCode Go. Kein drittes Experiment nach diesem Lauf.
