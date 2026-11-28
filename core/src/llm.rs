@@ -489,6 +489,15 @@ pub fn run_loop(model: &Value, system: &str, history: &mut Vec<Value>, tools: &[
 pub fn run_loop_with(model: &Value, system: &str, history: &mut Vec<Value>, tools: &[Value], rounds: usize, cancel: Option<&AtomicBool>, usage: &mut Usage,
                      tick: &mut dyn FnMut(&Usage) -> Option<String>,
                      exec: &mut dyn FnMut(&ToolCall) -> (String, bool), on_text: &mut dyn FnMut(&str)) -> Result<String, String> {
+    run_loop_full(model, system, history, tools, rounds, cancel, usage, tick, &mut || None, exec, on_text)
+}
+
+/// `run_loop_with` plus `after_round`, called once after the tools of a round ran and their results joined the history.
+/// A returned text ends the turn with that answer and no further model call (calibration variant `stop-green`).
+#[allow(clippy::too_many_arguments)]
+pub fn run_loop_full(model: &Value, system: &str, history: &mut Vec<Value>, tools: &[Value], rounds: usize, cancel: Option<&AtomicBool>, usage: &mut Usage,
+                     tick: &mut dyn FnMut(&Usage) -> Option<String>, after_round: &mut dyn FnMut() -> Option<String>,
+                     exec: &mut dyn FnMut(&ToolCall) -> (String, bool), on_text: &mut dyn FnMut(&str)) -> Result<String, String> {
     let kind = if model["tool_format"].as_str() == Some("text") { "text".to_string() } else { kind_of(model).to_string() };
     for round in 0..rounds {
         if cancel.map(|c| c.load(Ordering::SeqCst)).unwrap_or(false) {
@@ -568,6 +577,9 @@ pub fn run_loop_with(model: &Value, system: &str, history: &mut Vec<Value>, tool
                 return Ok(final_reply.text);
             }
             return Ok(stop);
+        }
+        if let Some(done) = after_round() {
+            return Ok(done);
         }
     }
     Err(format!("stopped after {} rounds of tool calls", rounds))

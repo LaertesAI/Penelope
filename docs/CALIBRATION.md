@@ -31,6 +31,13 @@ Each variant changes one factor of the default.
 The claude command runs its own tool loop over MCP, so `claude-cli` models get only `effort-low` and `prompt-short`.
 Their turns have no round cap.
 
+`stop-green` (HTTP models, `--variants default,stop-green` only) changes one more factor. A calibration over the full
+set leaves it out and no profile stores it, because the stop needs the task's own check. After every round in which a
+file below the working folder changed (size or modification time, `.git` and caches left out), the runner runs the task
+check in bubblewrap. When it passes, the turn ends with no further model call. The check count and the stop are
+written to `stop-green.json` in the run's `.penelope/`. User tasks have no such check, so the variant measures a
+ceiling, not a feature.
+
 ## Selection rule
 
 A variant replaces the default in two cases:
@@ -329,3 +336,79 @@ four models. It finds cost settings (low effort) and parser gaps (DSML), and it 
   when its lower bound beats the default. Test: two calibration runs per model pick the same profile for 4 of 4 models.
 - GLM text: a reader for unclosed blocks and `name":{json}`, or a prompt that shows GLM's own `<arg_key>` template.
   Test: at least 12 of 20 on `hard_calib` against the default's 19.
+
+
+## Experiment 3, 2026-11-28, after PR 70 (the DRY RUN fix)
+
+Before PR 70, `run` returned "DRY RUN. E:TaintedSink" in 884 of 1,314 native calls and `verify_fix` "CHECK NOT RUN" in
+134 of 135 (zero-cost report 28.11.). Predictions with numbers and abort rules: `predictions.md` on this branch,
+committed before the first run. Installed binary `penelope`, main 22d1290. Run data: `~/.penelope/tmp/calib-28/`.
+
+### Test 1. Sanity, Haiku (claude-cli), 3 tasks of `hard_calib`
+
+| Check | Result |
+|---|---|
+| Passed | 3 of 3 (`hard-fix-clamp`, `hard-rename-load-rows`, `hard-fix-median`) |
+| `run` calls with "DRY RUN" | 0 |
+| `verify_fix` with "CHECK NOT RUN" | 0; `check/log.jsonl` of each run holds real results (`before_exit` 1, `after_exit` 0, status `passed`) |
+| Calls per run | `run` 1 to 4, `verify_fix` 1 to 2 (from the claude transcripts of the 3 sessions, deduplicated) |
+
+Prediction held (0 DRY RUN, at least 2 of 3 pass). The abort rule did not fire. The same count over the 60 runs of test 2
+(124 `run` calls, 8 `verify_fix` calls): 0 DRY RUN, 0 CHECK NOT RUN.
+
+### Test 2. F94 re-measure, Haiku, `default` against `effort-low`, 30 tasks of `hard_holdout`, interleaved
+
+| Arm | Passed | Tokens in | Tokens out | EUR | Wall s (sum) | Tool calls per run |
+|---|---|---|---|---|---|---|
+| default | 30 | 287,866 | 87,431 | 0.5336 | 719 | 8.73 |
+| effort-low | 30 | 222,607 | 44,030 | 0.3259 | 380 | 5.47 |
+
+b = 0, c = 0, exact McNemar p = 1.000 over 30 pairs. Against default: input -22.7 %, output -49.6 %, EUR -38.9 %
+(bootstrap 95 % CI -44.8 % to -32.5 %), wall -47.1 % (CI -57.1 % to -35.6 %), tool calls per run -37 %.
+
+| Prediction | Result |
+|---|---|
+| Passes default 29 to 30, effort-low 28 to 30, b + c at most 3, p at least 0.25 | held: 30 and 30, b + c = 0 |
+| Input -5 % to -15 % | missed: -22.7 % |
+| Output -25 % to -40 % | missed: -49.6 % |
+| EUR -25 % to -45 % | held: -38.9 % |
+| Wall -30 % to -50 % | held: -47.1 % |
+
+The earlier figures (EUR -40.0 %, wall -44.8 %, 30 against 29 passed) hold with a working `run`. The saving comes from
+fewer rounds (tool calls -37 %) and half the output tokens. The hold-out is saturated: Haiku passed 30 of 30 in both
+arms, so it shows no pass difference at all, in either direction. In the default arm 2.77 of 8.73 calls (31.7 %) come
+after the last `edit` or `write`, in effort-low 1.67 of 5.47 (30.5 %). `verify_fix` ran 7 times in default and once in
+effort-low; the model verifies with `run`.
+
+### Tests 3 and 4. `stop-green` and the fixed default, DeepSeek v4.1 flash, 20 tasks of `hard_calib`
+
+Not run. OpenCode Go answered status 429 on the first two runs (2026-11-28 15:04): "usage limit reached (weekly,
+resets in 1d 9h)". The runner leaves no row on a 429, so nothing in `results.jsonl` is a result. The pair runs through
+`~/.penelope/tmp/calib-28/t3.sh`: the binary built from this branch, `--variants default,stop-green --n 20 --jobs 2`,
+repeated every 30 minutes until all 40 rows exist. The tests of the hook:
+`stop_green_ends_the_turn_after_the_round_that_turns_the_check_green` (the read round runs no check, a wrong write runs
+it and the turn goes on, the right write ends the turn with 3 of 4 scripted replies requested),
+`stop_green_leaves_a_red_check_to_the_model`, `the_fingerprint_sees_files_and_ignores_git_and_caches`,
+`stop_green_is_an_extra_variant_with_one_factor_changed`.
+
+The predictions for both tests stand in `predictions.md`. Test 4 compares the default arm of this run with the 84
+stored pre-fix default rows of `~/.penelope/tmp/deepseek/stopgreen-r2*` (76 passed, 9.87 rounds, 126,038 input tokens per run).
+
+### New hypotheses (test 5)
+
+1. Non-inferiority of low effort on a set with headroom. The hold-out cannot show a loss (30 of 30 twice, 29 of 30
+   once). Claim: on the 28 SWE-bench tasks where Haiku with effort-low solved 9, `default` solves at most 2 tasks more
+   (c - b at most 2) and effort-low saves at least 30 % EUR. Abort after 14 pairs at c - b of 3 or more. Cheapest
+   test: 28 interleaved pairs, claude subscription, about 2 h wall.
+2. A stop hint through the tool result for the claude command. Rejected first version: put the hint into the
+   `verify_fix` result. Haiku calls `verify_fix` in 6 of 30 default runs and 1 of 30 effort-low runs, so the hint
+   reaches 20 % and 3 % of the runs and saves at most 0.1 call per run. Improved version: the MCP `run` and `edit`
+   results append "The task check passes. Write the final answer now." when the check of the task passes (check
+   command in the MCP server's environment, calibration only). Claim: calls after the last change fall from 2.77 to at
+   most 1.2 per run (default), tool calls per run -15 % or more, c - b at most 1. Abort when Haiku keeps calling tools
+   after the hint in more than 50 % of the green runs. Cheapest test: 30 hold-out pairs, Haiku default with and
+   without the hint.
+3. The verification tail is a constant share of the rounds. Haiku default 31.7 % and effort-low 30.5 % of the calls
+   come after the last change (zero-cost count on the 60 runs). Claim: on DeepSeek with a working `run`, `stop-green`
+   saves 25 % to 35 % of the rounds per passing run and no more than 39 % (the replay ceiling from before PR 70).
+   It is rejected when the saving is below 15 % or above 45 %. Cheapest test: tests 3 and 4 as predicted, no new run.
