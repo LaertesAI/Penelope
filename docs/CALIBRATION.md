@@ -2,7 +2,10 @@
 
 `penelope calibrate MODEL` runs a task set in several variants and stores the winning variant as the model's profile.
 Penelope reads the profile before every turn on that model. On the four models measured here, the selection rule keeps
-the default for every model. ROUND2_SUMMARY
+the default for every model. Two interventions after the review moved
+pass counts. 24 rounds in place of 12 lifted DeepSeek from 42 to 47 of 50 tasks (b = 7, c = 2, p = 0.18) at 69 % more
+euro. A tolerant reader for DeepSeek's own DSML template lifted the text tool format from 9 to 17 of 20 (b = 9, c = 1,
+p = 0.021); on the 30 held-out tasks text passed 27 against the default's 26.
 
 ```bash
 penelope calibrate glm-5.3 --provider opencode --tasks cli/tests/data/eval/hard_calib.jsonl --n 20
@@ -147,11 +150,12 @@ rows before the cleanup: pass counts, b, c, p, tokens, EUR and wall time match. 
 | Model | default | text | index | effort-low | prompt-short | First rule chose | Current rule chooses |
 |---|---|---|---|---|---|---|---|
 | deepseek-v4.1-flash | 17 | 0 | 12 | 18 | 17 | effort-low (+1) | default |
-| glm-5.3 | 19 | 0 | GLM_INDEX | 19 | 18 | default (effort-low at 80.5 % of the tokens) | default |
+| glm-5.3 | 19 | 0 | 14 | 19 | 18 | default (effort-low at 80.5 % of the tokens) | default |
 | kimi-k3 | 20 | 5 | 16 | no levels | 18 | default | default |
 | haiku (claude-cli) | 20 | n/a | n/a | 18 | 20 | default | default |
 
-GLM_INDEX_NOTE
+GLM's index row ended once on the provider (`hard-rename-format-money`, 13 of 20 with that row as a failure). The
+row was removed and the task ran again on 2026-11-28 with the current binary; it passed, so GLM index is 14 of 20.
 
 Tokens in and out, EUR and wall time of the calibration runs:
 
@@ -164,7 +168,7 @@ Tokens in and out, EUR and wall time of the calibration runs:
 | deepseek-v4.1-flash | prompt-short | 2,443,396 | 66,890 | 0.3741 | 982 | 13 |
 | glm-5.3 | default | 1,986,722 | 45,767 | 0.3992 | 1337 | 12 |
 | glm-5.3 | text | 144,293 | 1,034 | 0.0273 | 129 | 0 |
-| glm-5.3 | index | 937,241 | 39,217 | 0.2013 | 1357 | 14 |
+| glm-5.3 | index | 988,587 | 40,119 | 0.2114 | 1056 | 15 |
 | glm-5.3 | effort-low | 1,612,418 | 23,135 | 0.3137 | 618 | 8 |
 | glm-5.3 | prompt-short | 2,031,693 | 48,344 | 0.4094 | 1229 | 14 |
 | kimi-k3 | default | 2,789,381 | 117,401 | 1.8098 | 1890 | 15 |
@@ -175,7 +179,7 @@ Tokens in and out, EUR and wall time of the calibration runs:
 | haiku | effort-low | 256,848 | 37,168 | 0.0407 | 390 | no cap |
 | haiku | prompt-short | 275,355 | 59,264 | 0.0526 | 457 | no cap |
 
-The GLM index row is the first run (19 tasks, 937,241 in); the refilled task is in the note above.
+The GLM index row holds the refilled task. The first run's 1357 s included the provider failure.
 
 ### Validation, held-out tasks of `hard_holdout.jsonl`, paired
 
@@ -232,7 +236,7 @@ The pooled test belongs over the models whose arms differ. Kimi's and Haiku's ar
    20 of 20 stored answers and no Hermes block. GLM wrote `<arg_key>`/`<arg_value>` in 17 of 20; the other 3 use
    `run command="..."` attributes or a broken pair. 7 of 20 GLM answers parse with the new parser. Kimi used the
    `<tool_call>` JSON block in 5 of 20 and passed those 5.
-3. The Mitos index cuts tokens by 46 to 52 % and loses 4 to 6 of 20 tasks: DeepSeek 17 to 12, GLM 19 to 13, Kimi 20 to
+3. The Mitos index cuts tokens by 46 to 50 % and loses 4 to 5 of 20 tasks: DeepSeek 17 to 12, GLM 19 to 14, Kimi 20 to
    16. DeepSeek's index runs hit the cap in 20 of 20. That `tool_describe` calls cost the rounds is likely; experiment 1
    kept no transcript to count them.
 4. `prompt-short` shows no difference that n = 20 can detect: 17, 18 and 18 against 17, 19 and 20, Kimi 2 fewer. The
@@ -244,8 +248,84 @@ The pooled test belongs over the models whose arms differ. Kimi's and Haiku's ar
 6. DeepSeek tried to reverse the SHA-256 in checks: 8 probe scripts (`hashprobe.py`, `probe.py`, `_probe_hash.py`,
    `hash_formats.py` and others). All 8 runs failed, and the probes cost rounds under the cap.
 
-ROUND2
+## Experiment 2, after the review, 2026-11-27 23:22 to 2026-11-28 03:50
+
+Binary with the review fixes (`bin5`, then `bin7` with the tolerant readers). Arms of one model ran interleaved, task
+by task, in one process. The OpenCode Go window was closed until 02:55; the runner waited it out by itself.
+
+| Test | Model, set | Arms | Passed | b | c | p | Tokens, EUR, wall |
+|---|---|---|---|---|---|---|---|
+| Round cap | DeepSeek, all 50 | default / rounds-24 | 42 / 47 | 7 | 2 | 0.180 | EUR +68.6 % (CI +45.8 % to +91.7 %), tokens per pass +50.8 %, cap failures 8 / 3 |
+| Round cap | DeepSeek, calib 20 | default / rounds-24 | 16 / 19 | 3 | 0 | 0.250 | EUR 0.3694 / 0.6065 |
+| Round cap | DeepSeek, hold-out 30 | default / rounds-24 | 26 / 28 | 4 | 2 | 0.688 | EUR 0.5804 / 0.9950 |
+| A/A | DeepSeek, all 50 | stored default / fresh default | 42 / 42 | 4 | 4 | 1.000 | discordance 8 of 50 (16 %) |
+| Low effort | Haiku, hold-out 30 | default / effort-low | 30 / 29 | 0 | 1 | 1.000 | EUR −40.0 % (CI −46.9 % to −32.3 %), wall −44.8 % (CI −53.2 % to −34.3 %) |
+| Text, strict DSML reader | DeepSeek, calib 20 | fresh default / text | 16 / 9 | | | | 8 of 11 failures ended on DSML the reader skipped |
+| Text, tolerant DSML reader | DeepSeek, calib 20 | strict / tolerant | 9 / 17 | 9 | 1 | 0.021 | |
+| Text, tolerant DSML reader | DeepSeek, calib 20 | fresh default / text | 16 / 17 | 2 | 1 | 1.000 | tokens per pass −14.5 % |
+| Text, tolerant DSML reader | DeepSeek, hold-out 30 | fresh default / text | 26 / 27 | 3 | 2 | 1.000 | tokens per pass −19.9 %, EUR −10.5 % (CI −23.4 % to +8.5 %), cap hits 19 / 10 |
+| Text, strict GLM reader | GLM, calib 20 | stored default / text | 19 / 0 | | | | GLM mixes its template with JSON |
+| Text, loose GLM reader | GLM, calib 20 | stored default / text | 19 / 6 | | | | 39 stored first answers: 37 parse |
+| Index, refilled row | GLM, calib 20 | default / index | 19 / 14 | 1 | 6 | 0.125 | |
+
+Offline, on stored rows:
+
+- Check in bubblewrap: the checks of all 540 rows with a run folder, rerun in the sandbox, give the stored result 540 times.
+- Sequential calibration: a variant drops out once its deficit against the default reaches the A/A band of the tasks
+  seen so far. In 20 random task orders it picks the same variant as the full run in 20 of 20 for all four models. It
+  uses 66 %, 67 %, 61 % and 99 % of the runs (DeepSeek, GLM, Kimi, Haiku) and 87 %, 86 %, 77 % and 99 % of the tokens.
+  It drops the cheap losers (`text` before the reader fix, `index`); the token budget of a 5-hour window barely moves.
+- Selection rule on the stored calibration rows: default for all four models.
+
+### Verdicts
+
+- Round cap (F1 as an intervention): the prediction b ≥ 6 and c = 0 is rejected, c = 2. b = 7 against c = 2 has p =
+  0.18 on 50 pairs. Cap failures fell from 8 to 3, at 69 % more euro. In both c tasks (`hard-cli-revenue`,
+  `hard-rename-total-by-region`) the default passed at its 12-round cap and the 24-round arm ran to 24 and failed: more
+  rounds can also undo a passing state. All 8 default failures were cap hits; 24 rounds turned 7 into passes, and 3
+  runs failed at 24.
+- Own templates (H3 improved): DeepSeek's text format with a reader for DSML comes within 2 tasks of native: 17 of 20
+  against 17 (stored) and 16 (fresh) on the calibration set, 27 of 30 against 26 on the hold-out. Confirmed for
+  DeepSeek. The tolerant reader was written after reading the round-2 answers on the calibration set; the hold-out run
+  is the out-of-sample test. GLM is rejected: 6 of 20 against the bar of 7, and its answers stay malformed (unclosed
+  blocks, `read":{...}`, `<|im_end|>`).
+- Low effort as a cost setting: confirmed on euro for Haiku as for DeepSeek. Pass parity is not shown for any model:
+  Haiku lost 1 of 30, DeepSeek's difference spans −4 to +6.
+- A/A band: DeepSeek's fresh default against its stored default differs on 8 of 50 tasks (16 %), b = c = 4. The
+  band's 14 % fits; at 16 % `aa_band(20)` stays 4.
+- Sequential calibration: same pick in 20 of 20 orders, but 61 % to 67 % of the runs on HTTP models; the claim "at most
+  60 % of the runs" is rejected.
+
+## Final table
+
+| Model | Profile under the current rule | Calibration default, best variant | Hold-out default, other arm | Measured lever |
+|---|---|---|---|---|
+| deepseek-v4.1-flash | default | 17, effort-low 18 | 25 and 26, effort-low 26, rounds-24 28, text 27 | rounds-24: +5 of 50 at +69 % EUR; text with DSML reader: equal passes, −20 % tokens per pass |
+| glm-5.3 | default | 19, effort-low 19 | 23 of 25, effort-low 22 | effort-low: −22 % EUR (arms not interleaved) |
+| kimi-k3 | default | 20, none above | 26 of 28 and 24 (A/A) | none; at the ceiling |
+| haiku (claude-cli) | default | 20, prompt-short 20 | 29, 30 (A/A), effort-low 29 of 30 | effort-low: −40 % EUR, −45 % wall, 1 task lost |
+
+Hypotheses of experiment 1: H1 rejected (no power), H2 rejected (noise of identical arms), H3 rejected as run and
+confirmed for DeepSeek with a reader for its own template. Calibration as built does not raise the pass rate on these
+four models. It finds cost settings (low effort) and parser gaps (DSML), and it measures each model's run-to-run noise.
+
 
 ## Next ideas, each with its test
 
-NEXT
+- Rounds with a stop on progress: grant 4 more rounds while the last 4 rounds changed a file or moved the check
+  result, up to 24. Test: against `default` on all 50 tasks for DeepSeek, interleaved. It holds when b ≥ 5, c ≤ 1 and
+  tokens per pass stay within +20 % (`rounds-24` gave b = 7, c = 2 at +51 %).
+- Text as DeepSeek's profile: `text` with the DSML reader on all 50 tasks, 3 interleaved repeats against `default`.
+  It holds when the pass difference CI lies above −10 points and tokens per pass fall by at least 10 %.
+- Non-inferiority of low effort: 144 interleaved hold-out pairs per model (DeepSeek, GLM, Haiku). It holds when the EUR
+  CI upper bound is below −10 % and the pass-difference lower bound above −10 points.
+- A gain claim needs headroom and n: a task set where the default passes 50 to 70 %, at least 193 interleaved pairs per
+  model. Kimi (20 of 20) and Haiku (30 of 30) leave no room on the hard set.
+- Index with a free describe: `tool_describe` calls cost no round. Test against `default` on `hard_calib` for DeepSeek
+  and GLM; it holds at c − b ≤ 1 with at least 35 % fewer tokens. `history.json` now counts the describe calls.
+- Hidden check text: show the check by name only and keep the SHA-256 out of the prompt. The 8 hash probes of
+  experiment 1 all failed. Test: probe files and cap hits on the 5 `hard-cli` tasks, 6 runs per arm, DeepSeek.
+- A profile with a confidence record: the profile stores b, c and the A/A band (done); `apply` could use a variant only
+  when its lower bound beats the default. Test: two calibration runs per model pick the same profile for 4 of 4 models.
+- GLM text: a reader for unclosed blocks and `name":{json}`, or a prompt that shows GLM's own `<arg_key>` template.
+  Test: at least 12 of 20 on `hard_calib` against the default's 19.
