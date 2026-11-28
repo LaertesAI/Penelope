@@ -103,6 +103,9 @@ fn signature(text: &str) -> String {
     w.join(" ")
 }
 
+/// How many `.corrupt-` and `.bad-` copies of one file stay; older ones are removed.
+const KEEP_COPIES: usize = 5;
+
 fn stamp_of(path: &Path) -> Option<(u128, u64)> {
     let m = fs::metadata(path).ok()?;
     let t = m.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos();
@@ -203,6 +206,8 @@ impl Memory {
     pub fn open_at(dir: &Path) -> Memory {
         let dir = dir.to_path_buf();
         let _ = fs::create_dir_all(dir.join("notes"));
+        crate::fslock::sweep(&dir);
+        crate::fslock::sweep(&dir.join("notes"));
         let (mut map, mut map_error, damaged) = load_map(&dir);
         if damaged {
             // Repair under the lock, so two processes do not both rename and write. The first one wins; the second
@@ -215,6 +220,7 @@ impl Memory {
                         let had = dir.join("map.json").exists();
                         let renamed = !had || fs::rename(dir.join("map.json"), &kept).is_ok();
                         let written = crate::fslock::write_atomic(&dir.join("map.json"), serde_json::to_string_pretty(&again).unwrap().as_bytes()).is_ok();
+                        crate::fslock::prune(&dir, "map.json.corrupt-", KEEP_COPIES);
                         eprintln!("penelope: the memory map in {} was damaged; rebuilt it from {} note files{}", dir.display(),
                                   again.as_object().map(|m| m.len().saturating_sub(1)).unwrap_or(0),
                                   if had && renamed && written { format!("; the old file is {}", kept.display()) } else if !written { " (could not write it back: the folder is read-only?)".to_string() } else { String::new() });
@@ -394,6 +400,9 @@ impl Memory {
             if std::str::from_utf8(&old).is_err() {
                 let name = file.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
                 let _ = fs::write(file.with_file_name(format!("{}.bad-{}", name, secs())), &old);
+                if let Some(parent) = file.parent() {
+                    crate::fslock::prune(parent, &format!("{}.bad-", name), KEEP_COPIES);
+                }
             }
         }
         crate::fslock::write_atomic(file, body.as_bytes()).map_err(|e| format!("cannot write {}: {}", file.display(), e))
@@ -453,7 +462,7 @@ impl Memory {
         let file = self.note_file(&id);
         let mut body = read_text(&file).unwrap_or_else(|| format!("# {}\n\n", id));
         let line = text.trim().replace('\n', " ");
-        let known = body.lines().any(|l| l == format!("- {}", line)) || body.contains(&line);
+        let known = body.lines().any(|l| l == format!("- {}", line));
         if !known {
             if !body.ends_with('\n') {
                 body.push('\n'); // a half-written last line stays a line of its own
@@ -761,6 +770,38 @@ mod tests {
         assert!(ids.contains(&"base/first".to_string()) && ids.contains(&"shared/topic".to_string()) && (0..8).all(|k| ids.contains(&format!("own/w{}", k))), "{:?}", ids);
         let left: Vec<String> = fs::read_dir(&m.dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).filter(|n| n.contains(".tmp-") || n == "memory.lock").collect();
         assert!(left.is_empty(), "{:?}", left);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_short_note_inside_a_longer_line_is_still_stored() {
+        let root = temp_root("substring");
+        let mut m = Memory::open(&root);
+        m.try_note("a/b", "use banana peels").unwrap();
+        m.try_note("a/b", "banana").unwrap();
+        m.try_note("a/b", "banana").unwrap(); // the same line twice is one note
+        assert_eq!(m.notes_at("a/b"), vec!["use banana peels".to_string(), "banana".to_string()]);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn corrupt_copies_and_temporaries_do_not_pile_up() {
+        let root = temp_root("copies");
+        let mut m = Memory::open(&root);
+        m.note("a/b", "fact");
+        let map = root.join("memory").join("map.json");
+        for t in 0..8u64 {
+            fs::write(root.join("memory").join(format!("map.json.corrupt-{}", 100 + t)), b"old").unwrap();
+        }
+        let tmp = root.join("memory").join(".map.json.tmp-9-9");
+        fs::write(&tmp, b"half").unwrap();
+        fs::File::options().write(true).open(&tmp).unwrap().set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(7200)).unwrap();
+        fs::write(&map, b"{ broken").unwrap();
+        let m = Memory::open(&root);
+        assert_eq!(m.waypoints().len(), 2);
+        let kept = fs::read_dir(root.join("memory")).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().starts_with("map.json.corrupt-")).count();
+        assert_eq!(kept, KEEP_COPIES);
+        assert!(!tmp.exists(), "an hour-old temporary of a killed writer is removed");
         let _ = fs::remove_dir_all(&root);
     }
 

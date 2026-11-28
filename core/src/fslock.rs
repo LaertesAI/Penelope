@@ -9,26 +9,60 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
-/// How long a call waits for a lock before it gives up with an error.
-const WAIT: Duration = Duration::from_secs(10);
 /// A lock file older than this was left by a process that died.
 const STALE_SECS: u64 = 30;
+/// How long a call waits for a lock before it gives up with an error. Longer than `STALE_SECS`, so a lock left by a
+/// killed process is taken over instead of failing the call.
+const WAIT: Duration = Duration::from_secs(STALE_SECS + 5);
 /// A folder that refuses the lock file for this many tries is read-only. A Windows file that another thread deletes
 /// answers `PermissionDenied` for a moment, so a few tries are normal. The pause between them is fixed and short, so
 /// the error comes in about 10 ms on every system.
 const DENIED_TRIES: u32 = 5;
 
-pub struct Lock(PathBuf);
+/// A held lock. The file holds a token `PID-COUNTER-NANOS`; only the holder of that token removes it.
+pub struct Lock {
+    path: PathBuf,
+    token: String,
+}
+
+fn new_token() -> String {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let nanos = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    format!("{}-{}-{}", std::process::id(), n, nanos)
+}
+
+/// Whether the lock file at `path` was left by a dead process: older than `STALE_SECS`, or (Linux) written by a
+/// process id that no longer exists. A file whose age or owner cannot be read is not stale.
+fn is_stale(path: &Path) -> bool {
+    let old = fs::metadata(path).and_then(|m| m.modified()).ok()
+        .and_then(|t| SystemTime::now().duration_since(t).ok()).map(|age| age.as_secs() > STALE_SECS).unwrap_or(false);
+    if old {
+        return true;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let pid = fs::read_to_string(path).ok().and_then(|t| t.split('-').next().and_then(|p| p.trim().parse::<u32>().ok()));
+        if let Some(pid) = pid {
+            return !Path::new(&format!("/proc/{}", pid)).exists();
+        }
+    }
+    false
+}
 
 impl Lock {
-    /// Takes the lock `dir/name`. Waits up to 10 seconds, with a short growing pause. An error names the file and the reason.
+    /// Takes the lock `dir/name`. Waits up to 35 seconds, with a short growing pause. An error names the file and the reason.
     pub fn take(dir: &Path, name: &str) -> Result<Lock, String> {
         let path = dir.join(name);
+        let token = new_token();
         let deadline = Instant::now() + WAIT;
         let (mut pause, mut denied) = (1u64, 0u32);
         loop {
             match fs::OpenOptions::new().write(true).create_new(true).open(&path) {
-                Ok(_) => return Ok(Lock(path)),
+                Ok(mut f) => {
+                    let _ = f.write_all(token.as_bytes());
+                    return Ok(Lock { path, token });
+                }
                 Err(e) if matches!(e.kind(), std::io::ErrorKind::AlreadyExists | std::io::ErrorKind::PermissionDenied) => {
                     if e.kind() == std::io::ErrorKind::PermissionDenied {
                         denied += 1;
@@ -40,11 +74,19 @@ impl Lock {
                             continue;
                         }
                     }
-                    // An age that cannot be read (the file is gone or locked) is not stale.
-                    let stale = fs::metadata(&path).and_then(|m| m.modified()).ok()
-                        .and_then(|t| SystemTime::now().duration_since(t).ok()).map(|age| age.as_secs() > STALE_SECS).unwrap_or(false);
-                    if stale {
-                        let _ = fs::remove_file(&path);
+                    if is_stale(&path) {
+                        // Rename first: of two waiters that saw the same stale file only one rename succeeds, so the
+                        // second cannot delete the lock the first has just created. The moved file is checked again;
+                        // a live lock that slipped in between is put back.
+                        let moved = dir.join(format!("{}.stale-{}", name, token));
+                        if fs::rename(&path, &moved).is_ok() {
+                            if is_stale(&moved) {
+                                let _ = fs::remove_file(&moved);
+                            } else {
+                                let _ = fs::hard_link(&moved, &path);
+                                let _ = fs::remove_file(&moved);
+                            }
+                        }
                     } else {
                         std::thread::sleep(Duration::from_millis(pause));
                         pause = (pause * 2).min(20);
@@ -53,7 +95,7 @@ impl Lock {
                 Err(e) => return Err(format!("cannot lock {}: {}", path.display(), e)),
             }
             if Instant::now() >= deadline {
-                return Err(format!("{} stayed locked for 10 seconds", path.display()));
+                return Err(format!("{} stayed locked for {} seconds", path.display(), WAIT.as_secs()));
             }
         }
     }
@@ -61,7 +103,37 @@ impl Lock {
 
 impl Drop for Lock {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
+        // A lock that was taken over as stale belongs to someone else now: leave it.
+        if fs::read_to_string(&self.path).map(|t| t == self.token).unwrap_or(false) {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+}
+
+/// Removes the files `dir/PREFIX*` except the `keep` newest by name. Names end in a timestamp, so name order is age.
+pub fn prune(dir: &Path, prefix: &str, keep: usize) {
+    let Ok(read) = fs::read_dir(dir) else { return };
+    let mut names: Vec<String> = read.flatten().map(|e| e.file_name().to_string_lossy().to_string()).filter(|n| n.starts_with(prefix)).collect();
+    names.sort();
+    let drop = names.len().saturating_sub(keep);
+    for n in names.into_iter().take(drop) {
+        let _ = fs::remove_file(dir.join(n));
+    }
+}
+
+/// Removes temporary files `.NAME.tmp-*` and stale lock remains `*.lock.stale-*` older than an hour in `dir`: what a
+/// killed writer left between its temporary write and its rename.
+pub fn sweep(dir: &Path) {
+    let Ok(read) = fs::read_dir(dir) else { return };
+    for e in read.flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        if !((name.starts_with('.') && name.contains(".tmp-")) || name.contains(".lock.stale-")) {
+            continue;
+        }
+        let old = e.metadata().and_then(|m| m.modified()).ok().and_then(|t| SystemTime::now().duration_since(t).ok()).map(|a| a.as_secs() > 3600).unwrap_or(false);
+        if old {
+            let _ = fs::remove_file(e.path());
+        }
     }
 }
 
@@ -74,6 +146,7 @@ pub fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
     let result = (|| {
         let mut f = fs::File::create(&tmp)?;
         f.write_all(data)?;
+        f.sync_all()?; // the bytes are on disk before the rename makes them the file
         if let Ok(meta) = fs::metadata(path) {
             let _ = fs::set_permissions(&tmp, meta.permissions());
         }
@@ -143,6 +216,53 @@ mod tests {
         assert!(t.elapsed() < Duration::from_secs(2), "took {:?}", t.elapsed());
         assert!(write_atomic(&dir.join("f"), b"x").is_err());
         fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_lock_of_a_dead_owner_is_taken_over_once() {
+        let dir = temp("stale");
+        fs::write(dir.join("x.lock"), b"999999999-0-0").unwrap(); // no such process
+        let old = SystemTime::now() - Duration::from_secs(STALE_SECS + 5);
+        fs::File::options().write(true).open(dir.join("x.lock")).unwrap().set_modified(old).unwrap();
+        let t = Instant::now();
+        let lock = Lock::take(&dir, "x.lock").unwrap();
+        assert!(t.elapsed() < Duration::from_secs(2), "took {:?}", t.elapsed());
+        assert_eq!(fs::read_to_string(dir.join("x.lock")).unwrap(), lock.token);
+        let names: Vec<String> = fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        assert_eq!(names, vec!["x.lock".to_string()], "{:?}", names);
+        drop(lock);
+        assert!(!dir.join("x.lock").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_lock_that_was_taken_over_is_not_removed_by_its_old_owner() {
+        let dir = temp("takeover");
+        let first = Lock::take(&dir, "x.lock").unwrap();
+        fs::write(dir.join("x.lock"), b"someone-else").unwrap(); // the next owner after a takeover
+        drop(first);
+        assert_eq!(fs::read_to_string(dir.join("x.lock")).unwrap(), "someone-else");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prune_keeps_the_newest_and_sweep_removes_old_temporaries() {
+        let dir = temp("prune");
+        for t in 100..110 {
+            fs::write(dir.join(format!("map.json.corrupt-{}", t)), b"x").unwrap();
+        }
+        prune(&dir, "map.json.corrupt-", 3);
+        let mut left: Vec<String> = fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        left.sort();
+        assert_eq!(left, vec!["map.json.corrupt-107", "map.json.corrupt-108", "map.json.corrupt-109"]);
+        let tmp = dir.join(".map.json.tmp-1-1");
+        fs::write(&tmp, b"x").unwrap();
+        sweep(&dir);
+        assert!(tmp.exists(), "a fresh temporary may belong to a running writer");
+        fs::File::options().write(true).open(&tmp).unwrap().set_modified(SystemTime::now() - Duration::from_secs(7200)).unwrap();
+        sweep(&dir);
+        assert!(!tmp.exists());
         let _ = fs::remove_dir_all(&dir);
     }
 }
