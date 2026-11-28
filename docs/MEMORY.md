@@ -105,6 +105,8 @@ Level 3 (person) nodes appear only with `--allow-person` (Kerkis) or `--include-
 
 With the flag the same queries return level 3 pointers (20 of 20) and the export holds them (25 at 100 notes, 3,000 at 50,000). `memory find` on the command line is the person's own tool and shows level 3 notes without a flag; that did not change.
 
+Kerkis `memory_search` and `memory_get` also keep level 3 log entries in without `--allow-person`: search caps `l_max` at 2, and get answers "NOT shown". Before 28.11.2026 both returned them.
+
 One change in the export: without `--include-person` the notes are no longer read at all. Before, the 3,000-node cap was filled with notes that the export then dropped, so a default export of a 50,000-entry memory held 0 nodes. It now holds the newest 3,000 entries.
 
 ## What was fixed

@@ -198,21 +198,23 @@ fn reply(value: Value, level: u8) -> Result<Reply, Fail> {
 
 fn dispatch(ctx: &Ctx, allow_person: bool, name: &str, a: &Value) -> Result<Reply, Fail> {
     match name {
-        "memory_search" => search(ctx, a),
+        "memory_search" => search(ctx, allow_person, a),
         "memory_find" => find(ctx, allow_person, a),
-        "memory_get" => get(ctx, a),
+        "memory_get" => get(ctx, allow_person, a),
         "memory_add" => add(ctx, allow_person, a),
         "memory_status" => status(ctx, a),
         other => Err(Fail::Params(format!("unknown tool {}", other))),
     }
 }
 
-fn search(ctx: &Ctx, a: &Value) -> Result<Reply, Fail> {
+fn search(ctx: &Ctx, allow_person: bool, a: &Value) -> Result<Reply, Fail> {
     let query = text_arg(a, "query")?.to_lowercase();
     let l_max = match a.get("l_max") {
         None | Some(Value::Null) => 3,
         Some(_) => level_arg(a, "l_max")?,
     };
+    // Entries of the person (level 3) leave the server only with --allow-person.
+    let l_max = if allow_person { l_max } else { l_max.min(2) };
     let limit = match a.get("limit") {
         None | Some(Value::Null) => 20,
         Some(v) => match v.as_u64() {
@@ -282,7 +284,7 @@ fn find(ctx: &Ctx, allow_person: bool, a: &Value) -> Result<Reply, Fail> {
     reply(json!({"returned": rows.len(), "pointers": rows}), level)
 }
 
-fn get(ctx: &Ctx, a: &Value) -> Result<Reply, Fail> {
+fn get(ctx: &Ctx, allow_person: bool, a: &Value) -> Result<Reply, Fail> {
     let id = text_arg(a, "id")?;
     let Some((cluster, line)) = id.rsplit_once(':') else {
         return Err(Fail::Params("id must look like CLUSTER:LINE".into()));
@@ -290,6 +292,9 @@ fn get(ctx: &Ctx, a: &Value) -> Result<Reply, Fail> {
     let line: usize = line.parse().ok().filter(|n| *n >= 1).ok_or_else(|| Fail::Params("id must end in a line number from 1".into()))?;
     let cluster = cluster_name(cluster)?;
     match read_entry(ctx, &cluster, line) {
+        Some(entry) if entry.level == 3 && !allow_person => {
+            Err(Fail::Refused(format!("NOT shown. {} line {} is a note of the person (level 3); start the server with --allow-person.", cluster, line)))
+        }
         Some(entry) => reply(entry.json(), entry.level),
         None => Err(Fail::Refused(format!("NOT found. {} has no entry on line {}.", cluster, line))),
     }
@@ -492,7 +497,7 @@ mod tests {
 
     #[test]
     fn entries_written_by_a_cluster_are_found_with_null_fields() {
-        let (dir, p) = server("legacy", false);
+        let (dir, p) = server("legacy", true);
         let cdir = dir.join(".penelope/clusters/c1-5");
         fs::create_dir_all(&cdir).unwrap();
         fs::write(cdir.join("memory.log"), "{\"t\":5,\"C\":\"c1-5\",\"L\":0,\"text\":\"tls handshake failed\"}\nnot json\n{\"t\":6,\"C\":\"c1-5\",\"L\":3,\"text\":\"user wants tests first\"}\n").unwrap();
@@ -504,6 +509,23 @@ mod tests {
         assert!(found["entries"][0]["ENT"].is_null());
         assert_eq!(payload(&out[1])["L"], 0);
         assert_eq!(payload(&out[2])["total"], 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn entries_of_the_person_stay_in_without_the_flag() {
+        let (dir, p) = server("person-read", false);
+        let cdir = dir.join(".penelope/clusters/c1-6");
+        fs::create_dir_all(&cdir).unwrap();
+        fs::write(cdir.join("memory.log"), "{\"t\":5,\"C\":\"c1-6\",\"L\":1,\"text\":\"tests run in ci\"}\n{\"t\":6,\"C\":\"c1-6\",\"L\":3,\"text\":\"user wants tests first\"}\n").unwrap();
+        let out = exchange(&p, &[call(1, "memory_search", json!({"query": "tests"})), call(2, "memory_search", json!({"query": "tests", "l_max": 3})),
+                                 call(3, "memory_get", json!({"id": "c1-6:2"})), call(4, "memory_get", json!({"id": "c1-6:1"}))]);
+        assert_eq!(payload(&out[0])["total"], 1);
+        assert_eq!(payload(&out[0])["entries"][0]["L"], 1);
+        assert_eq!(payload(&out[1])["total"], 1, "l_max 3 does not open level 3 without the flag");
+        assert_eq!(out[2]["result"]["isError"], true);
+        assert!(out[2]["result"]["content"][0]["text"].as_str().unwrap().starts_with("NOT shown"));
+        assert_eq!(payload(&out[3])["L"], 1);
         let _ = fs::remove_dir_all(&dir);
     }
 
