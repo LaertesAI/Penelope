@@ -104,3 +104,48 @@ Claude Code allein, Haiku 5.5 mit `effort: low`, 28 Entwicklungsaufgaben: 9/28. 
 ## Ergebnis A1
 
 Preise neu: Haiku 5.5 0,10/0,50, Sonnet 5.5 2,00/10,00 USD je Mio. Auf den 28 Aufgaben: large 1,5065, cluster Basis 0,3138, K9 0,1446 EUR. Die alten Werte 2,2597, 2,5108, 1,1567 waren mit den Preisen von Haiku 4.5 und Sonnet 4.6 gerechnet.
+
+---
+
+# Predictions: DRY RUN re-test and stop-green, 2026-11-28
+
+Written before any run. Branch `feat/stop-green` from main 22d1290. Tests 1, 2 and 4 use the installed `penelope` (main 22d1290, PR 70 included). Test 3 uses the binary built from this branch. Run data: `~/.penelope/tmp/calib-28/`. EUR are computed list prices, no money moves.
+
+## Test 1. Sanity, 3 haiku tasks (claude-cli)
+
+- Prediction: 0 results of `run` contain "DRY RUN" in the 3 run folders. `verify_fix` calls, if any, return a real result and never "CHECK NOT RUN". At least 2 of 3 tasks pass.
+- Abort rule: one "DRY RUN" in a `run` result, or one "CHECK NOT RUN" from `verify_fix`, aborts tests 2 to 4. If all 3 runs make no `run` and no `verify_fix` call, the proof is empty and 3 more tasks run.
+
+## Test 2. F94 re-measure, Haiku, default vs effort-low, 30 hold-out tasks, interleaved
+
+Earlier numbers (suspect): default 29 and 30 of 30, effort-low 29 of 30, EUR -40 % (CI -47 % to -32 %), wall -45 %.
+
+- Passes: default 29 to 30, effort-low 28 to 30. b + c at most 3. Exact McNemar p at least 0.25.
+- Tokens: input -5 % to -15 % (the calibration set gave -9 %), output -25 % to -40 %.
+- EUR -25 % to -45 % (point -35 %). Wall -30 % to -50 % (point -40 %).
+- Abort rule: default passes under 80 % of the first 15 tasks (12 or fewer) means the environment is broken. Stop and look. A usage window with a reset time is waited out, never skipped.
+- The claim "effort-low costs at most 1 task" stands at c - b of 1 or less. It is refuted at c - b of 3 or more.
+
+## Test 3. stop-green, DeepSeek v4.1 flash, 20 hard_calib tasks, interleaved, 2 parallel
+
+Variant `stop-green`: after a round in which a file under the work folder changed (size or mtime), the runner runs the task check in bubblewrap. If it passes, the turn ends at once, with no further model call. One factor differs from `default`.
+Hypothesis from the zero-cost replay (28.11., before the DRY RUN fix): input tokens -25 % or more, rounds -3 per passing run, passes not lower by more than 1.
+
+- My point prediction is lower than the hypothesis. Since PR 70 the model sees real test output and stops by itself sooner: default 7 to 9 rounds per run (stored pre-fix default 9.87).
+- stop-green saves 1.5 to 2.5 rounds per passing run (point 2.0) and 15 % to 25 % of input tokens (point -20 %). Probability that -25 % holds: 35 %.
+- Passes: on the same trajectory stop-green cannot pass less than default, so noise decides. c - b between -1 and +2. P(stop-green at least default - 1) = 85 %.
+- The check passes at least once in 90 % of stop-green runs and ends the turn in 75 % to 90 % of them.
+- Abort rule: after 10 task pairs, c - b of 3 or more rejects the variant and stops the test. If the hook ends 0 of the first 5 stop-green runs, stop and debug it.
+- Status 429: the runner writes no row. The same command runs again after a wait. No 429 run counts as a failure.
+
+## Test 4. Fixed default vs stored pre-fix default rows, same 20 hard_calib tasks
+
+Stored arm: all pre-fix default rows on hard_calib (84 runs in the stopgreen batches, 76 passed = 90.5 %, 9.87 rounds, 126,038 input tokens per run). New arm: the default arm of test 3.
+
+- Pass rate: new 17 to 19 of 20. No change beyond noise (at most 2 tasks apart).
+- Rounds per run: new 7 to 9 against 9.87. Input tokens per run: -10 % to -30 %.
+- Decision rule: the fix changed rounds if the mean differs by 1.0 or more and the paired sign test over the 20 task means has p below 0.05. It changed the pass rate if the new count lies outside the exact binomial 95 % interval of the stored rate (15 to 20 of 20 at 0.905).
+
+## Test 5. Hypotheses
+
+Written after the results, in the register and in docs/CALIBRATION.md.
