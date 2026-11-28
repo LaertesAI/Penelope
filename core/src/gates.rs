@@ -26,7 +26,7 @@
 //!
 //! The gate asks only where no other dialog asks: a command that `run_policy` already sends to the person, or a write
 //! under `edit_policy` "ask", keeps its own question. Config `gates`: "ask" (default), "dry" (never ask, always a dry
-//! run) or "off". Config `gates_yes`: "call" (default, a yes lets this one call run) or "turn" (a yes stops the gate
+//! run), "sandbox" (a `run` inside bubblewrap passes, every other call asks) or "off". Config `gates_yes`: "call" (default, a yes lets this one call run) or "turn" (a yes stops the gate
 //! for the rest of the turn, the literal reading of P10). Counts go to `stats.json` under `gates`.
 
 use crate::config::Ctx;
@@ -378,9 +378,17 @@ fn mode(ctx: &Ctx) -> &str {
     match &ctx.cfg["gates"] {
         Value::String(s) if matches!(s.as_str(), "off" | "false" | "no" | "0") => "off",
         Value::String(s) if s == "dry" => "dry",
+        Value::String(s) if s == "sandbox" => "sandbox",
         Value::Bool(false) => "off",
         _ => "ask",
     }
+}
+
+/// True when `run` goes into bubblewrap: read-only root, one writable work folder, no network. A command in there
+/// cannot fetch a page or send a byte out, so its output is not outside text and a tainted session can run it. Without
+/// bubblewrap on the PATH `tools::run` refuses the command, so nothing runs unsandboxed under this setting.
+fn in_sandbox(ctx: &Ctx) -> bool {
+    ctx.cfg["sandbox"].as_str() == Some("bwrap")
 }
 
 fn arg(args: &Value, key: &str) -> String {
@@ -959,7 +967,7 @@ pub fn level_of(ctx: &Ctx, name: &str, args: &Value) -> u8 {
             }
         }
         "grep" | "git_diff" => if level0_files(ctx).is_empty() { 1 } else { 0 },
-        "run" => if crate::tools::is_safe(&arg(args, "command")) && level0_files(ctx).is_empty() { 1 } else { 0 },
+        "run" => if (crate::tools::is_safe(&arg(args, "command")) || in_sandbox(ctx)) && level0_files(ctx).is_empty() { 1 } else { 0 },
         "web_search" | "research" | "deep_research" | "skill" | "session_search" | "computer" | "agent" | "hand_off" | "cluster_ask" | "cluster_dump" | "cluster_status"
         | "mcp_servers" => 0,
         "clipboard" => if args["action"].as_str() == Some("read") { 0 } else { 1 },
@@ -1035,6 +1043,12 @@ pub fn check_with(ctx: &Ctx, name: &str, args: &Value, ask: &mut dyn FnMut(&Risk
     if other_dialog(ctx, name, args) {
         return None;
     }
+    // Config `gates` "sandbox" (calibrate and eval runs): a `run` inside bubblewrap has no network and writes only the
+    // work folder, so outside text cannot make it leak or fetch. Without `sandbox` "bwrap" the mode asks as before.
+    if mode(ctx) == "sandbox" && name == "run" && in_sandbox(ctx) {
+        record(ctx, risk.class, "sandboxed");
+        return None;
+    }
     if anchored(ctx, &risk, name, args) {
         record(ctx, risk.class, "anchored");
         return None;
@@ -1084,8 +1098,19 @@ mod bench;
 mod tests {
     use super::*;
 
+    /// `LIVE_SEQ` is one counter per process. Tests that apply live files take this lock and start from 0, so a test
+    /// that ran first with a higher seq does not make the next test's file look old.
+    static LIVE_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn fresh_live_seq() -> std::sync::MutexGuard<'static, ()> {
+        let guard = LIVE_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        LIVE_SEQ.store(0, std::sync::atomic::Ordering::SeqCst);
+        guard
+    }
+
     #[test]
     fn a_new_seq_in_the_live_file_starts_a_new_turn_in_a_long_lived_server() {
+        let _live = fresh_live_seq();
         let dir = std::env::temp_dir().join(format!("penelope-live-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -1112,6 +1137,7 @@ mod tests {
 
     #[test]
     fn a_forged_live_file_changes_nothing() {
+        let _live = fresh_live_seq();
         let dir = std::env::temp_dir().join(format!("penelope-forge-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -1135,6 +1161,56 @@ mod tests {
         apply_live(&path, nonce);
         assert_eq!(user_text(), "Fix the typo");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_compound_read_command_in_the_sandbox_is_project_text_and_taints_nothing() {
+        let (mut c, dir) = ctx("sbxlevel", "auto");
+        let cwd = dir.to_string_lossy().to_string();
+        let args = json!({"command": "ls -la; echo ---; cat data/sales.csv | head -5", "cwd": cwd});
+        begin_session();
+        assert_eq!(level_of(&c, "run", &args), 0, "without a sandbox the shell operators keep it outside text");
+        c.cfg["sandbox"] = json!("bwrap");
+        assert_eq!(level_of(&c, "run", &args), 1);
+        observe(&c, "run", &args);
+        assert!(snapshot().is_none(), "the run is no source of taint");
+        c.cfg["sandbox"] = json!("off");
+        observe(&c, "run", &args);
+        assert_eq!(snapshot().map(|t| t.source.starts_with("run ")), Some(true), "unsandboxed it still taints");
+        begin_session();
+    }
+
+    #[test]
+    fn gates_sandbox_lets_a_run_pass_in_bubblewrap_and_nothing_else() {
+        let (mut c, dir) = ctx("sbxgate", "auto");
+        let cwd = dir.to_string_lossy().to_string();
+        let test = json!({"command": "python3 -c \"import app; app.main()\"", "cwd": cwd});
+        let mut nobody = |_: &Risk, _: &str| None;
+        // real outside text in the session (a web result), headless, no sandbox: dry run
+        begin_session();
+        taint("web_search rust news");
+        let refusal = check_with(&c, "run", &test, &mut nobody).expect("an unsandboxed headless run stays a dry run");
+        assert!(refusal.starts_with("DRY RUN. E:TaintedSink shell"), "{}", refusal);
+        // the mode alone does not lift it: it needs the sandbox too
+        c.cfg["gates"] = json!("sandbox");
+        assert!(check_with(&c, "run", &test, &mut nobody).is_some(), "mode sandbox without bwrap still gates");
+        // both set: the run passes although outside text is in the session
+        c.cfg["sandbox"] = json!("bwrap");
+        assert_eq!(check_with(&c, "run", &test, &mut nobody), None);
+        // bwrap alone (a normal session that chose the sandbox) keeps the gate
+        c.cfg["gates"] = json!("ask");
+        assert!(check_with(&c, "run", &test, &mut nobody).is_some());
+        // the other sinks stay gated under mode sandbox
+        c.cfg["gates"] = json!("sandbox");
+        assert!(check_with(&c, "pr_create", &json!({"title": "x", "body": "y"}), &mut nobody).is_some());
+        assert!(check_with(&c, "http_request", &json!({"url": "https://x.example/a", "method": "POST", "body": "k"}), &mut nobody).is_some());
+        begin_session();
+    }
+
+    #[test]
+    fn calibrate_and_eval_runs_set_the_sandbox_gate_mode() {
+        let cfg = crate::calibrate::run_config(&json!({}), &json!({"model": "m"}));
+        assert_eq!(cfg["gates"], "sandbox");
     }
 
     #[test]

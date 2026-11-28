@@ -387,6 +387,23 @@ cluster or a subagent of your own; do the task here and then stop.\n\nTask: {}",
 
 const COPY_SKIP: &[&str] = &[".git", "target", "node_modules", ".venv", "venv", "__pycache__", ".penelope"];
 
+/// The copy leaves `.git` out, so `verify_fix` and `git_diff` found no repository. A fresh repository with one commit of
+/// the untouched copy gives them a base. Without git on the PATH the copy stays plain and those tools say so.
+fn init_git(work: &Path) {
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(["-c", "user.name=penelope", "-c", "user.email=penelope@localhost", "-c", "commit.gpgsign=false"])
+            .args(args)
+            .current_dir(work)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    };
+    let _ = git(&["init", "-q"]) && git(&["add", "-A"]) && git(&["commit", "-q", "--allow-empty", "-m", "calibration base"]);
+}
+
 fn copy_tree(src: &Path, dst: &Path) -> Result<(), String> {
     fs::create_dir_all(dst).map_err(|e| format!("cannot make {}: {}", dst.display(), e))?;
     for entry in fs::read_dir(src).map_err(|e| format!("cannot read {}: {}", src.display(), e))?.flatten() {
@@ -420,6 +437,7 @@ pub fn run_config(base: &Value, model: &Value) -> Value {
     cfg["route"] = json!("fixed");
     cfg["edit_policy"] = json!("all");
     cfg["run_policy"] = json!("all");
+    cfg["gates"] = json!("sandbox");
     cfg["sandbox"] = json!(if sandbox_available() { "bwrap" } else { "off" });
     cfg["auto_learn"] = json!(false);
     cfg["auto_skills"] = json!(false);
@@ -450,6 +468,7 @@ pub fn prepare(base: &Value, model: &Value, out: &Path, task: &crate::eval::Task
     }
     if task.copy {
         copy_tree(&task.repo, &work)?;
+        init_git(&work);
     } else {
         return Err(format!("task {} sets copy false; calibration runs only on copies", task.id));
     }
@@ -965,6 +984,23 @@ model wrote. Install bubblewrap, or pass --no-sandbox to run both on this machin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_work_copy_is_a_git_repository_with_one_base_commit() {
+        if std::process::Command::new("git").arg("--version").output().is_err() {
+            return;
+        }
+        let work = std::env::temp_dir().join(format!("penelope-calib-git-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&work);
+        fs::create_dir_all(&work).unwrap();
+        fs::write(work.join("app.py"), "print(1)\n").unwrap();
+        init_git(&work);
+        let head = std::process::Command::new("git").args(["rev-parse", "HEAD"]).current_dir(&work).output().unwrap();
+        assert!(head.status.success(), "verify_fix needs a repository with a base commit");
+        let status = std::process::Command::new("git").args(["status", "--porcelain"]).current_dir(&work).output().unwrap();
+        assert!(String::from_utf8_lossy(&status.stdout).trim().is_empty(), "the base commit holds the whole copy");
+        let _ = fs::remove_dir_all(&work);
+    }
 
     fn temp(name: &str) -> PathBuf {
         let base = std::env::var("PENELOPE_CALIBRATE_TEST_DIR").map(PathBuf::from).unwrap_or_else(|_| std::env::temp_dir());
