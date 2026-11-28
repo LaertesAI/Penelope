@@ -706,8 +706,11 @@ pub fn memory_note_scope(ctx: &Ctx, path: &str, text: &str, scope: &str) -> Stri
     let text = &guard(ctx, text);
     let mut local = Memory::open(&ctx.root);
     let shared = scope == "global" || (scope == "auto" && crate::memory::scope_for(text) == "global");
-    let id = if shared { crate::memory::shared(ctx).note(path, text) } else { local.note(path, text) };
-    format!("noted at {}{}", id, if shared { " (shared by every project)" } else { "" })
+    let written = if shared { crate::memory::shared(ctx).try_note(path, text) } else { local.try_note(path, text) };
+    match written {
+        Ok(id) => format!("noted at {}{}", id, if shared { " (shared by every project)" } else { "" }),
+        Err(e) => format!("NOT noted. {}", e),
+    }
 }
 
 /// Takes back one note by its text, in this project or in the shared memory.

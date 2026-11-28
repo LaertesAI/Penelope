@@ -24,7 +24,7 @@ const TEXT_CHARS: usize = 2000;
 pub fn specs() -> Vec<Value> {
     vec![
         json!({"name": "memory_search",
-               "description": "Search the Kerkis memory logs of all clusters. Every word of the query must appear in an entry; newest first.",
+               "description": "Search the Kerkis memory logs of all clusters. Every word of the query must appear in an entry; newest first. If no entry holds every word, the answer has mode ranked: the entries that hold the rarest words of the query, best first.",
                "inputSchema": {"type": "object", "properties": {
                    "query": {"type": "string", "description": "words to find, all required, case-insensitive"},
                    "l_max": {"type": "integer", "minimum": 0, "maximum": 3, "description": "keep only entries whose origin level L is at most this"},
@@ -122,6 +122,42 @@ fn read_log(ctx: &Ctx, cluster: &str) -> Vec<Entry> {
     }).collect()
 }
 
+/// One line of a log without reading the rest into memory. The line number counts every line, the way `read_log` does.
+fn read_entry(ctx: &Ctx, cluster: &str, line: usize) -> Option<Entry> {
+    use std::io::BufRead;
+    let file = fs::File::open(clusters_dir(ctx).join(cluster).join("memory.log")).ok()?;
+    let mut reader = std::io::BufReader::new(file);
+    let mut raw = Vec::new();
+    for _ in 0..line {
+        raw.clear();
+        if reader.read_until(b'\n', &mut raw).ok()? == 0 {
+            return None;
+        }
+    }
+    let text = String::from_utf8_lossy(&raw);
+    let v: Value = serde_json::from_str(text.trim_end_matches(['\n', '\r'])).ok()?;
+    let body = v["text"].as_str()?;
+    Some(Entry { id: format!("{}:{}", cluster, line), cluster: cluster.to_string(), t: v["t"].as_u64().unwrap_or(0),
+                 level: v["L"].as_u64().unwrap_or(1).min(3) as u8, line, text: body.to_string() })
+}
+
+/// The number of lines of a log and whether its last line has no newline, counted in 64 KB blocks.
+fn count_lines(path: &std::path::Path) -> (usize, bool) {
+    use std::io::Read;
+    let Ok(mut f) = fs::File::open(path) else { return (0, false) };
+    let (mut buf, mut newlines, mut last) = (vec![0u8; 65536], 0usize, b'\n');
+    loop {
+        match f.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                newlines += buf[..n].iter().filter(|b| **b == b'\n').count();
+                last = buf[n - 1];
+            }
+        }
+    }
+    (newlines, last != b'\n')
+}
+
 fn cluster_names(ctx: &Ctx) -> Vec<String> {
     let Ok(read) = fs::read_dir(clusters_dir(ctx)) else { return Vec::new() };
     let mut names: Vec<String> = read.flatten().filter(|e| e.path().is_dir()).map(|e| e.file_name().to_string_lossy().to_string()).collect();
@@ -162,21 +198,23 @@ fn reply(value: Value, level: u8) -> Result<Reply, Fail> {
 
 fn dispatch(ctx: &Ctx, allow_person: bool, name: &str, a: &Value) -> Result<Reply, Fail> {
     match name {
-        "memory_search" => search(ctx, a),
+        "memory_search" => search(ctx, allow_person, a),
         "memory_find" => find(ctx, allow_person, a),
-        "memory_get" => get(ctx, a),
+        "memory_get" => get(ctx, allow_person, a),
         "memory_add" => add(ctx, allow_person, a),
         "memory_status" => status(ctx, a),
         other => Err(Fail::Params(format!("unknown tool {}", other))),
     }
 }
 
-fn search(ctx: &Ctx, a: &Value) -> Result<Reply, Fail> {
+fn search(ctx: &Ctx, allow_person: bool, a: &Value) -> Result<Reply, Fail> {
     let query = text_arg(a, "query")?.to_lowercase();
     let l_max = match a.get("l_max") {
         None | Some(Value::Null) => 3,
         Some(_) => level_arg(a, "l_max")?,
     };
+    // Entries of the person (level 3) leave the server only with --allow-person.
+    let l_max = if allow_person { l_max } else { l_max.min(2) };
     let limit = match a.get("limit") {
         None | Some(Value::Null) => 20,
         Some(v) => match v.as_u64() {
@@ -189,17 +227,38 @@ fn search(ctx: &Ctx, a: &Value) -> Result<Reply, Fail> {
         None => cluster_names(ctx),
     };
     let words: Vec<&str> = query.split_whitespace().collect();
-    let mut hits: Vec<Entry> = names.iter().flat_map(|n| read_log(ctx, n)).filter(|e| {
-        let lower = e.text.to_lowercase();
-        e.level <= l_max && words.iter().all(|w| lower.contains(w))
-    }).collect();
-    // Newest first; within one second the line number decides, as a number, so line 2 comes before line 10.
-    hits.sort_by(|x, y| y.t.cmp(&x.t).then_with(|| x.cluster.cmp(&y.cluster)).then_with(|| x.line.cmp(&y.line)));
+    let all: Vec<Entry> = names.iter().flat_map(|n| read_log(ctx, n)).filter(|e| e.level <= l_max).collect();
+    let lowered: Vec<String> = all.iter().map(|e| e.text.to_lowercase()).collect();
+    let mut picked: Vec<usize> = (0..all.len()).filter(|&i| words.iter().all(|w| lowered[i].contains(w))).collect();
+    let mut mode = "all-words";
+    if picked.is_empty() {
+        // No entry holds every word: the question is a paraphrase. Fall back to the entries that hold the rarest words
+        // of the query, best first. A word found in more than 5 percent of the entries (and more than 3) does not
+        // discriminate, so it neither selects nor ranks.
+        let content: Vec<&str> = words.iter().copied().filter(|w| w.chars().count() > 1 && !crate::graph::FIND_STOP.contains(w)).collect();
+        let limit_df = (all.len() / 20).max(3);
+        let weighted: Vec<(&str, f64)> = content.iter().filter_map(|w| {
+            let df = lowered.iter().filter(|t| t.contains(w)).count();
+            (df >= 1 && df <= limit_df).then(|| (*w, (1.0 + all.len() as f64 / df as f64).ln()))
+        }).collect();
+        let mut ranked: Vec<(f64, usize)> = (0..all.len()).filter_map(|i| {
+            let score: f64 = weighted.iter().filter(|(w, _)| lowered[i].contains(w)).map(|(_, idf)| idf).sum();
+            (score > 0.0).then_some((score, i))
+        }).collect();
+        ranked.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal).then_with(|| all[b.1].t.cmp(&all[a.1].t)));
+        picked = ranked.into_iter().map(|(_, i)| i).collect();
+        mode = "ranked";
+    }
+    let mut hits: Vec<&Entry> = picked.into_iter().map(|i| &all[i]).collect();
+    if mode == "all-words" {
+        // Newest first; within one second the line number decides, as a number, so line 2 comes before line 10.
+        hits.sort_by(|x, y| y.t.cmp(&x.t).then_with(|| x.cluster.cmp(&y.cluster)).then_with(|| x.line.cmp(&y.line)));
+    }
     let total = hits.len();
     hits.truncate(limit);
     // The call carries the weakest level among the entries: a gate that stops level 0 text sees it.
     let level = hits.iter().map(|e| e.level).min().unwrap_or(1);
-    reply(json!({"total": total, "returned": hits.len(), "entries": hits.iter().map(Entry::json).collect::<Vec<_>>()}), level)
+    reply(json!({"total": total, "returned": hits.len(), "mode": mode, "entries": hits.iter().map(|e| e.json()).collect::<Vec<_>>()}), level)
 }
 
 /// Pointers to the nodes of the knowledge graph (`graph.rs`) that hold an answer. The project and shared notes are
@@ -225,57 +284,19 @@ fn find(ctx: &Ctx, allow_person: bool, a: &Value) -> Result<Reply, Fail> {
     reply(json!({"returned": rows.len(), "pointers": rows}), level)
 }
 
-fn get(ctx: &Ctx, a: &Value) -> Result<Reply, Fail> {
+fn get(ctx: &Ctx, allow_person: bool, a: &Value) -> Result<Reply, Fail> {
     let id = text_arg(a, "id")?;
     let Some((cluster, line)) = id.rsplit_once(':') else {
         return Err(Fail::Params("id must look like CLUSTER:LINE".into()));
     };
     let line: usize = line.parse().ok().filter(|n| *n >= 1).ok_or_else(|| Fail::Params("id must end in a line number from 1".into()))?;
     let cluster = cluster_name(cluster)?;
-    match read_log(ctx, &cluster).into_iter().find(|e| e.id == format!("{}:{}", cluster, line)) {
+    match read_entry(ctx, &cluster, line) {
+        Some(entry) if entry.level == 3 && !allow_person => {
+            Err(Fail::Refused(format!("NOT shown. {} line {} is a note of the person (level 3); start the server with --allow-person.", cluster, line)))
+        }
         Some(entry) => reply(entry.json(), entry.level),
         None => Err(Fail::Refused(format!("NOT found. {} has no entry on line {}.", cluster, line))),
-    }
-}
-
-/// An exclusive lock on one cluster's memory files, held while an id is chosen and the entry is appended. The lock is
-/// a file created with `create_new`, which is atomic on every platform and works between processes. A lock older
-/// than 30 seconds belongs to a dead process and is removed.
-struct Lock(PathBuf);
-
-impl Lock {
-    fn take(dir: &std::path::Path) -> Result<Lock, String> {
-        let path = dir.join("memory.lock");
-        // On Windows a lock file that another thread is deleting answers PermissionDenied, and a new one can fail with
-        // AlreadyExists for a moment; both mean "try again". The wait ends after 10 seconds.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        let mut pause = 1u64;
-        loop {
-            match fs::OpenOptions::new().write(true).create_new(true).open(&path) {
-                Ok(_) => return Ok(Lock(path)),
-                Err(e) if matches!(e.kind(), std::io::ErrorKind::AlreadyExists | std::io::ErrorKind::PermissionDenied) => {
-                    // An age that cannot be read (the file is gone or locked) is not stale.
-                    let stale = fs::metadata(&path).and_then(|m| m.modified()).ok()
-                        .and_then(|t| std::time::SystemTime::now().duration_since(t).ok()).map(|age| age.as_secs() > 30).unwrap_or(false);
-                    if stale {
-                        let _ = fs::remove_file(&path);
-                    } else {
-                        std::thread::sleep(std::time::Duration::from_millis(pause));
-                        pause = (pause * 2).min(20);
-                    }
-                }
-                Err(e) => return Err(format!("cannot lock {}: {}", path.display(), e)),
-            }
-            if std::time::Instant::now() >= deadline {
-                return Err(format!("{} stayed locked for 10 seconds", path.display()));
-            }
-        }
-    }
-}
-
-impl Drop for Lock {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
     }
 }
 
@@ -298,7 +319,7 @@ fn add(ctx: &Ctx, allow_person: bool, a: &Value) -> Result<Reply, Fail> {
     let text = format!("\n## memory · {}\nENT: {}\nATT: {}\nVAL: {}\nSRC: mcp\nREF: {}\n", ent, ent, att, val, reference);
     let dir = clusters_dir(ctx).join(&cluster);
     fs::create_dir_all(&dir).map_err(|e| Fail::Refused(format!("NOT added. cannot create {}: {}", dir.display(), e)))?;
-    let _lock = Lock::take(&dir).map_err(|e| Fail::Refused(format!("NOT added. {}", e)))?;
+    let _lock = crate::fslock::Lock::take(&dir, "memory.lock").map_err(|e| Fail::Refused(format!("NOT added. {}", e)))?;
     // The same two appends as clusters::mem_put: memory.md is the prompt view, memory.log the event log.
     fs::OpenOptions::new().create(true).append(true).open(dir.join("memory.md"))
         .and_then(|mut f| f.write_all(text.as_bytes()))
@@ -306,11 +327,10 @@ fn add(ctx: &Ctx, allow_person: bool, a: &Value) -> Result<Reply, Fail> {
     let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let line = json!({"t": t, "C": cluster, "L": level, "text": text}).to_string();
     let log = dir.join("memory.log");
-    let existing = fs::read(&log).unwrap_or_default();
     // A torn last line (no newline) is closed first, so the new entry does not glue to it. The line count is read
     // under the lock, so two writers never get the same id.
-    let torn = !existing.is_empty() && !existing.ends_with(b"\n");
-    let before = String::from_utf8_lossy(&existing).lines().count();
+    let (newlines, torn) = count_lines(&log);
+    let before = newlines + usize::from(torn);
     let prefix = if torn { "\n" } else { "" };
     fs::OpenOptions::new().create(true).append(true).open(&log)
         .and_then(|mut f| f.write_all(format!("{}{}\n", prefix, line).as_bytes()))
@@ -477,7 +497,7 @@ mod tests {
 
     #[test]
     fn entries_written_by_a_cluster_are_found_with_null_fields() {
-        let (dir, p) = server("legacy", false);
+        let (dir, p) = server("legacy", true);
         let cdir = dir.join(".penelope/clusters/c1-5");
         fs::create_dir_all(&cdir).unwrap();
         fs::write(cdir.join("memory.log"), "{\"t\":5,\"C\":\"c1-5\",\"L\":0,\"text\":\"tls handshake failed\"}\nnot json\n{\"t\":6,\"C\":\"c1-5\",\"L\":3,\"text\":\"user wants tests first\"}\n").unwrap();
@@ -489,6 +509,23 @@ mod tests {
         assert!(found["entries"][0]["ENT"].is_null());
         assert_eq!(payload(&out[1])["L"], 0);
         assert_eq!(payload(&out[2])["total"], 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn entries_of_the_person_stay_in_without_the_flag() {
+        let (dir, p) = server("person-read", false);
+        let cdir = dir.join(".penelope/clusters/c1-6");
+        fs::create_dir_all(&cdir).unwrap();
+        fs::write(cdir.join("memory.log"), "{\"t\":5,\"C\":\"c1-6\",\"L\":1,\"text\":\"tests run in ci\"}\n{\"t\":6,\"C\":\"c1-6\",\"L\":3,\"text\":\"user wants tests first\"}\n").unwrap();
+        let out = exchange(&p, &[call(1, "memory_search", json!({"query": "tests"})), call(2, "memory_search", json!({"query": "tests", "l_max": 3})),
+                                 call(3, "memory_get", json!({"id": "c1-6:2"})), call(4, "memory_get", json!({"id": "c1-6:1"}))]);
+        assert_eq!(payload(&out[0])["total"], 1);
+        assert_eq!(payload(&out[0])["entries"][0]["L"], 1);
+        assert_eq!(payload(&out[1])["total"], 1, "l_max 3 does not open level 3 without the flag");
+        assert_eq!(out[2]["result"]["isError"], true);
+        assert!(out[2]["result"]["content"][0]["text"].as_str().unwrap().starts_with("NOT shown"));
+        assert_eq!(payload(&out[3])["L"], 1);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -644,6 +681,146 @@ mod tests {
         assert!(crate::mcpserv::build(&ctx, "kerkis", &["--allow-persons".to_string()]).is_err());
         assert!(crate::mcpserv::build(&ctx, "kerkis", &["--allow-person".to_string()]).is_ok());
         assert!(crate::mcpserv::build(&ctx, "nope", &[]).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn write_log(dir: &std::path::Path, cluster: &str, lines: &[(&str, &str, &str)]) {
+        let d = dir.join(".penelope").join("clusters").join(cluster);
+        fs::create_dir_all(&d).unwrap();
+        let mut body = String::new();
+        for (i, (ent, att, val)) in lines.iter().enumerate() {
+            let text = format!("\n## memory · {}\nENT: {}\nATT: {}\nVAL: {}\nSRC: mcp\nREF: x\n", ent, ent, att, val);
+            body.push_str(&json!({"t": 1000 + i, "C": cluster, "L": 1, "text": text}).to_string());
+            body.push('\n');
+        }
+        fs::write(d.join("memory.log"), body).unwrap();
+    }
+
+    /// A memory of `n` waypoints, written as files: through `note` every call would rewrite the whole map.
+    fn write_waypoints(dir: &std::path::Path, n: usize) {
+        let mem = dir.join(".penelope").join("memory");
+        fs::create_dir_all(mem.join("notes")).unwrap();
+        let mut map = serde_json::Map::new();
+        let mut areas: Vec<Value> = Vec::new();
+        map.insert(String::new(), json!({"title": "start", "signs": [], "children": []}));
+        for a in 0..n.div_ceil(50) {
+            let area = format!("area{}", a);
+            let kids: Vec<String> = (a * 50..((a + 1) * 50).min(n)).map(|i| format!("{}/topic{}", area, i)).collect();
+            for (j, id) in kids.iter().enumerate() {
+                let i = a * 50 + j;
+                map.insert(id.clone(), json!({"title": format!("topic{}", i), "signs": [format!("subject{}", i)], "children": []}));
+                fs::write(mem.join("notes").join(format!("{}.md", id.replace('/', "__"))), format!("# {}\n\n- note about subject{}\n", id, i)).unwrap();
+            }
+            map.insert(area.clone(), json!({"title": area, "signs": [], "children": kids}));
+            areas.push(json!(area));
+        }
+        map.insert(String::new(), json!({"title": "start", "signs": [], "children": areas}));
+        fs::write(mem.join("map.json"), serde_json::to_string(&Value::Object(map)).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_paraphrase_falls_back_to_the_rarest_words_and_an_exact_query_stays_exact() {
+        let (dir, p) = server("fallback", false);
+        let mut rows: Vec<(String, String, String)> = (0..60).map(|i| (format!("noise{}", i), "owner".to_string(), format!("someone{}", i))).collect();
+        rows.push(("zqparser".to_string(), "owner".to_string(), "Anna".to_string()));
+        let refs: Vec<(&str, &str, &str)> = rows.iter().map(|(a, b, c)| (a.as_str(), b.as_str(), c.as_str())).collect();
+        write_log(&dir, "c1-1", &refs);
+        let out = exchange(&p, &[call(1, "memory_search", json!({"query": "zqparser owner"})),
+                                 call(2, "memory_search", json!({"query": "who is responsible for zqparser"})),
+                                 call(3, "memory_search", json!({"query": "the owner of nothing known"}))]);
+        let exact = payload(&out[0]);
+        assert_eq!(exact["mode"], "all-words");
+        assert_eq!(exact["entries"][0]["ENT"], "zqparser");
+        let ranked = payload(&out[1]);
+        assert_eq!(ranked["mode"], "ranked");
+        assert_eq!(ranked["entries"][0]["ENT"], "zqparser", "{}", ranked);
+        let none = payload(&out[2]);
+        assert_eq!(none["total"], 0, "a word found in every entry discriminates nothing: {}", none);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn memory_find_sees_a_fact_beyond_the_old_cap_and_still_hides_level_three() {
+        let (dir, p) = server("bigfind", false);
+        let rows: Vec<(String, String, String)> = (0..4200).map(|i| (format!("filler{}", i), "owner".to_string(), format!("value{}", i))).collect();
+        let mut refs: Vec<(&str, &str, &str)> = rows.iter().map(|(a, b, c)| (a.as_str(), b.as_str(), c.as_str())).collect();
+        refs.insert(10, ("zqrareentity", "port", "8123"));   // line 11 of 4,201: outside the newest 500 and the old 3,000 cap
+        write_log(&dir, "c1-1", &refs);
+        write_waypoints(&dir, 3500);
+        let out = exchange(&p, &[call(1, "memory_find", json!({"query": "port of zqrareentity"})),
+                                 call(2, "memory_find", json!({"query": "subject3499"}))]);
+        let found = payload(&out[0]);
+        assert_eq!(found["pointers"][0]["id"], "c1-1:11", "{}", found);
+        assert!(out[1]["result"]["content"][0]["text"].as_str().unwrap().starts_with("unknown:"), "level 3 notes stay hidden without --allow-person");
+        let _ = fs::remove_dir_all(&dir);
+        let (dir2, allowed) = server("bigfind-person", true);
+        write_waypoints(&dir2, 3500);
+        let out = exchange(&allowed, &[call(1, "memory_find", json!({"query": "subject3499"}))]);
+        assert_eq!(payload(&out[0])["pointers"][0]["id"], "p:area69/topic3499");   // 3,500 waypoints and 4,200 lines: more than the cap of 3,000
+        let _ = fs::remove_dir_all(&dir2);
+    }
+
+    #[test]
+    fn memory_get_reads_one_line_and_a_torn_or_missing_line_is_not_found() {
+        let (dir, p) = server("getline", false);
+        write_log(&dir, "c1-1", &[("a", "x", "1"), ("b", "x", "2"), ("c", "x", "3")]);
+        let log = dir.join(".penelope/clusters/c1-1/memory.log");
+        let mut body = fs::read(&log).unwrap();
+        body.extend_from_slice(b"{\"t\": 1, \"text\": \"torn");   // no newline: a write that was cut
+        fs::write(&log, body).unwrap();
+        let out = exchange(&p, &[call(1, "memory_get", json!({"id": "c1-1:2"})), call(2, "memory_get", json!({"id": "c1-1:4"})), call(3, "memory_get", json!({"id": "c1-1:9"}))]);
+        assert_eq!(payload(&out[0])["ENT"], "b");
+        assert_eq!(out[1]["result"]["isError"], true);
+        assert_eq!(out[2]["result"]["isError"], true);
+        // the next add closes the torn line and gets line 5
+        let add = exchange(&p, &[call(1, "memory_add", add_args(1))]);
+        assert_eq!(payload(&add[0])["id"], "kerkis-memory:1");
+        let add = exchange(&p, &[call(1, "memory_add", json!({"ENT": "e", "ATT": "a", "VAL": "v", "level": 1, "source": "s", "cluster": "c1-1"}))]);
+        assert_eq!(payload(&add[0])["id"], "c1-1:5");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn memory_add_in_a_read_only_cluster_says_why_and_does_not_wait() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, p) = server("readonly", false);
+        write_log(&dir, "c1-1", &[("a", "x", "1")]);
+        let cdir = dir.join(".penelope/clusters/c1-1");
+        fs::set_permissions(&cdir, fs::Permissions::from_mode(0o555)).unwrap();
+        if fs::write(cdir.join("probe"), b"x").is_ok() {
+            let _ = fs::remove_dir_all(&dir);
+            return;
+        }
+        let t = std::time::Instant::now();
+        let out = exchange(&p, &[call(1, "memory_add", json!({"ENT": "e", "ATT": "a", "VAL": "v", "level": 1, "source": "s", "cluster": "c1-1"})),
+                                 call(2, "memory_get", json!({"id": "c1-1:1"}))]);
+        let text = out[0]["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.starts_with("NOT added.") && text.contains("cannot lock") && t.elapsed().as_secs() < 3, "{} after {:?}", text, t.elapsed());
+        assert_eq!(payload(&out[1])["ENT"], "a", "reading still works");
+        fs::set_permissions(&cdir, fs::Permissions::from_mode(0o755)).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_export_without_the_person_flag_is_not_filled_by_the_notes_it_leaves_out() {
+        let dir = temp("exportcap");
+        write_waypoints(&dir, 3500);
+        write_log(&dir, "c1-1", &[("a", "x", "1"), ("b", "x", "2")]);
+        let mut ctx = crate::config::load(&dir.join(".penelope"));
+        ctx.cfg["global_memory"] = json!(dir.join("global").to_string_lossy());
+        let export = |extra: &[&str]| -> Value {
+            let mut args: Vec<String> = vec!["--format".into(), "json".into()];
+            args.extend(extra.iter().map(|a| a.to_string()));
+            args.push("-".into());
+            serde_json::from_str(&crate::graph::export_cmd(&ctx, &args).unwrap()).unwrap()
+        };
+        let open = export(&[]);
+        let nodes = open["nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 2, "the two log entries, no note: {}", nodes.len());
+        assert!(nodes.iter().all(|n| n["level"].as_u64().unwrap() < 3));
+        let person = export(&["--include-person"]);
+        assert!(person["nodes"].as_array().unwrap().len() >= 3000 && person["truncated"] == true);
         let _ = fs::remove_dir_all(&dir);
     }
 }
