@@ -103,4 +103,58 @@ Claude Code allein, Haiku 5.5 mit `effort: low`, 28 Entwicklungsaufgaben: 9/28. 
 
 ## Ergebnis A1
 
-Preise neu: Haiku 5.5 0,10/0,50, Sonnet 5.5 2,00/10,00 USD je Mio. Auf den 28 Aufgaben: large 1,5065, cluster Basis 0,3138, K9 0,1446 EUR. Die alten Werte 2,2597, 2,5108, 1,1567 waren mit den Preisen von Haiku 4.5 und Sonnet 4.6 gerechnet.
+## Research Loop 3, Rang 5: Auswahlregel auf gespeicherten Zeilen
+
+Stand 28.11.2026, vor dem Nachrechnen. Keine neuen Modellläufe in diesem Schritt. Daten: `~/.cache/penelope-calibrate-runs/exp`.
+
+Neue Regel: Eine Variante gewinnt, wenn `eur / bestandene Aufgabe` höchstens 80 % des Defaults ist und die Variante höchstens eine Aufgabe weniger besteht als der Default (ein Aufgabe Spielraum). Bei 0 bestandenen Aufgaben im Default gibt es keine Auswahl. Bei mehreren Gewinnern: mehr bestandene Aufgaben, dann weniger EUR je Treffer, dann Default. Die alte Regel erlaubt einen Gewinn von `aa_band` Aufgaben oder Gleichstand bei höchstens 80 % der Token.
+
+Vorhersage: Die neue Regel wählt bei mindestens 2 der 4 Modelle eine andere Variante als die alte. Abbruch: bei 0 oder 1 Unterschied wird die Regel nicht weiterverfolgt.
+
+Rauschmessung: Eine zweite Kalibrierung je Modell ist nötig, bevor die neue Regel übernommen wird. Vorhersage: A/A-Unterschied mindestens 1 Aufgabe bei mindestens einem Modell. Abbruch: A/A überall 0, dann ist die Auswahl nicht von Rauschen zu trennen.
+
+Rang 6, Web-Research: mindestens vier Primärquellen mit Lesestatus, jede mit einer prüfbaren Hypothese für Penelope und einem numerischen Ziel. Kein neues Modell, keine Bezahlung.
+
+### Ergebnis der Regelprüfung, 28.11.2026
+
+Mit der im Auftrag gemeinten Regel (höchstens ein Treffer weniger) wechselt 1 von 4 Modellen die Variante, nur GLM auf `effort-low`. Die Vorhersage mindestens 2 ist verworfen, die Abbruchregel greift. Bei der versehentlich wörtlich formulierten Regel (mindestens ein Treffer weniger) wären es 3 von 4; diese Lesart ist verworfen. Die Tabellenzahlen selbst sind aus 340 Rohzeilen reproduzierbar. Die 12 % Annahme der Powerrechnung ist nicht aus den Daten gestützt; ex-ante mit D ~ Bin(N, 0,12) sind es 19,1 % Power bei 50, 76,5 % bei 142 und 80,2 % bei 153 Aufgaben.
+
+### Hypothese H2 aus dem Scheitern von H1, 28.11.2026
+
+H1 scheiterte mit c = 3. Zwei der drei Verluste (`hard-json-1`, `hard-inv-totals`) kamen nicht von einer echten Prüfung: ein fehlgeschlagener Edit oder ein `echo` mit Exit 0 wurde als grün gewertet, und die Endantwort war roher DSML-Code. H2: `stop-green-confirm` zählt nur echte Testbefehle (`pytest`, `python -m`, `cargo test`, `check`, `verify_fix`) nach einer echten Dateiänderung und verlangt zwei grüne Signale. Danach muss die Endantwort textlich sein; sonst wird erneut zum Textfinale aufgefordert und der Lauf ggf. fortgesetzt.
+
+Vorhersage: c höchstens 1 gegen `default`, EUR je bestandener Aufgabe höchstens so hoch wie im Default, mindestens 2 der 3 H1-Verluste werden Treffer. Abbruch: c mindestens 2 oder EUR je Treffer über dem Default. 20 verschränkte Paare, 40 Läufe, OpenCode Go. Kein drittes Experiment nach diesem Lauf.
+
+
+### Ergebnis H2 und Hypothese H3, 28.11.2026
+
+H2 gemessen (`stopgreen-r2d`): default 17/20, 0,372410 EUR, 0,021906 EUR je Treffer. stop-green 18/20, 0,412383 EUR, 0,022910 EUR je Treffer. b = 1, c = 0, p = 1,0. Das Ziel c = 0 ist erreicht, das Kostenziel nicht: 4,59 % teurer je Treffer, gepaarte EUR-Differenz +0,001999 mit Bootstrap-CI [−0,000174, 0,004259]. Die Abbruchregel „EUR je Treffer über dem Default" greift. Nur 1 der 3 alten Verluste kam zurück, nicht 2.
+
+H3 aus dem Scheitern: Die zweite Bestätigung und der zusätzliche Textfinale-Durchlauf kosten mehr Token. Ein einziger echter Test nach einer echten Dateiänderung soll genügen; die Scheinerkennung (`cat`, `echo`, fehlgeschlagener Edit) und die Textfinale-Regel bleiben. Vorhersage: c höchstens 1, Treffer mindestens 17, EUR je Treffer höchstens so hoch wie im Default. Abbruch: c mindestens 2 oder EUR je Treffer über dem Default. 20 verschränkte Paare, 40 Läufe.
+
+
+### Ergebnis H3 und Hypothese H4, 28.11.2026
+
+H3 gemessen (`stopgreen-r2e`): beide Arme 20/20, default 0,394852 EUR (0,019743 EUR je Treffer), stop-green 0,442358 EUR (0,022118 EUR je Treffer). b = 0, c = 0. Das Kostenziel ist verworfen: 12,0 % teurer je Treffer. 13 von 20 stop-green-Läufen liefen trotzdem bis zum 12-Runden-Deckel, das Signal wurde also selten erkannt.
+
+H4 aus dem Scheitern: Penelope meldet einen erfolgreichen Test nach einer Dateiänderung in der Antwort des Schreibwerkzeugs (`after_edit`: „tests passed"), nicht immer als eigenen `run`-Aufruf. H4 akzeptiert dieses Signal nach einer echten Änderung, weiterhin ohne zweite Bestätigung, aber mit Textfinale. Vorhersage: Treffer mindestens 19, c höchstens 1, EUR je Treffer mindestens 10 % unter dem Default. Abbruch: c mindestens 2 oder EUR je Treffer nicht mindestens 10 % niedriger. 20 verschränkte Paare, 40 Läufe.
+
+
+### Ergebnis H4 und Hypothese H5, 28.11.2026
+
+H4 gemessen (`stopgreen-r2f`): default 17/20, 0,397226 EUR (0,023366 EUR je Treffer), stop-green 16/20, 0,382048 EUR (0,023878 EUR je Treffer). b = 0, c = 1, p = 1,0. c = 1 ist noch in der Vorhersage, die Kostenvorhersage von minus 10 % ist verworfen; 2,19 % teurer je Treffer. Über H1 bis H4 hat kein Stoppzeitpunkt Kosten gesenkt.
+
+H5 aus dem Muster: Der Kostenhebel liegt nicht im frühen Stoppen, sondern im Denkaufwand. In den gespeicherten Kalibrierungszeilen hat DeepSeek `effort-low` 18/20 gegen 17/20 und 0,0195417 gegen 0,0236368 EUR je Treffer, also minus 17,4 %. Vorhersage H5: auf dem 30 Aufgaben langen Hold-out zeigt `effort-low` mindestens 10 % weniger EUR je Treffer bei c höchstens 1 gegen `default`. Abbruch: c mindestens 2 oder weniger als 10 % EUR-Vorteil. 60 verschränkte Läufe, OpenCode Go.
+
+
+### H5 Teilmessung und Hypothesen H6 bis H9, 28.11.2026
+
+H5 Teilmessung: 49 von 60 Zeilen, 24 gepaarte Aufgaben. effort-low 23 Treffer gegen 21, b = 2, c = 0, p = 0,5. EUR je Treffer 0,017027 gegen 0,022789, minus 25,3 %. Elf Läufe fehlten wegen des wöchentlichen OpenCode-Go-Limits. Solange die Paare unvollständig sind, gilt H5 als Teilmessung, nicht als bestätigt.
+
+H6 (gebaut, ungemessen): `index-effort-low` kombiniert den Mitos-Werkzeugindex mit niedrigem Effort. Index allein senkte Tokens von 2,67 Mio. auf 1,33 Mio. je 20 Aufgaben, verlor aber Treffer (12/20). Effort-low hielt 18/20. Vorhersage: mindestens 17 Treffer und EUR je Treffer höchstens 0,015, c höchstens 1 gegen effort-low. Test: 20 Aufgaben, 40 Läufe, nach Ende des Limits.
+
+H7 (ungebaut): Textformat mit dem toleranten Leser und effort-low. Im gespeicherten exp2-Lauf erreichte Text 17/20. Vorhersage: mindestens 17 Treffer, EUR je Treffer höchstens 0,015, c höchstens 1 gegen effort-low. Abbruch: c mindestens 2 oder kein Tokenspareffekt von mindestens 20 %.
+
+H8 (ungebaut, tiefer): Adaptive Route. A3 zeigte, dass Haiku mit niedrigem Effort auf 28 Entwicklungsaufgaben dieselben 8 schweren Aufgaben löst wie Sonnet und 90 % weniger Listenpreis kostet. Vorhersage: ein Router, der leichte Aufgaben an Haiku und schwere an DeepSeek effort-low gibt, erreicht auf 50 gemischten Aufgaben mindestens dieselbe Trefferzahl wie DeepSeek allein bei höchstens 0,014 EUR je Treffer. Abbruch: zwei oder mehr Treffer weniger.
+
+H9 (ungebaut, tiefer): Der Werkzeugindex ist der größte Tokenblock. Vorhersage: `index-effort-low` benötigt höchstens 2,0 Mio. Token je 20 Aufgaben bei mindestens 17 Treffern. Abbruch: mehr als 2,3 Mio. Token oder weniger als 17 Treffer. Das ist eine schärfere Fassung von H6 mit einem Tokenziel statt eines Euroziels.

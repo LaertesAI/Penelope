@@ -418,6 +418,43 @@ pub fn is_test_stop(text: &str) -> bool {
     text.trim_start().starts_with(TEST_STOP) || text.contains(&format!("\n{}: STOP.", TEST_STOP))
 }
 
+/// A final answer must be text. Some models answer a tool-free follow-up with the tool syntax they were using
+/// before; that text is not an answer and must not end the turn.
+pub fn is_tool_like(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    text.contains("<｜DSML｜") || lower.contains("<tool_call") || lower.contains("\"tool_calls\"")
+        || lower.contains("<arg_key>") || lower.contains("<function>")
+}
+
+/// True only for a real file change, not for a failed edit that reports "NOT changed".
+pub fn is_real_change(call: &str, ok: bool, text: &str) -> bool {
+    if !ok || !matches!(call, "write" | "edit") {
+        return false;
+    }
+    let lower = text.to_ascii_lowercase();
+    !lower.contains("not changed") && !lower.contains("not wrote")
+}
+
+/// True for a green test after a real file change. A plain `cat` or `echo` that exits 0 is not a check: the command
+/// must look like a test runner. The stop-green variant needs two such checks before it ends a turn.
+pub fn is_green_check(call: &str, args: &serde_json::Value, ok: bool, text: &str, changed: bool) -> bool {
+    if !ok || !changed || !matches!(call, "run" | "test" | "check" | "verify_fix" | "write" | "edit") {
+        return false;
+    }
+    let command = args["command"].as_str().unwrap_or("").to_ascii_lowercase();
+    let markers = ["pytest", "python3 -m", "python -m", "make test", "npm test", "cargo test", "./tests", "test_", "verify", "check"];
+    let is_check_tool = matches!(call, "check" | "verify_fix");
+    if !matches!(call, "write" | "edit") && !is_check_tool && !markers.iter().any(|m| command.contains(m)) {
+        return false;
+    }
+    let lower = text.to_ascii_lowercase();
+    if matches!(call, "write" | "edit") {
+        // `after_edit` reports a passing test in the answer of the write/edit tool. This is the common case.
+        return lower.contains("tests passed") || lower.contains("pass:") || lower.contains("all tests pass");
+    }
+    lower.contains("exit code 0") || lower.contains("exit code: 0") || lower.contains("pass:") || lower.contains("all tests pass")
+}
+
 fn attempts_of(v: &serde_json::Value) -> usize {
     v["test_attempts"].as_u64().unwrap_or(3).clamp(1, 20) as usize
 }
@@ -1229,6 +1266,25 @@ pub fn scouts(ctx: &Ctx, tasks: &serde_json::Value, cwd: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn a_green_check_needs_a_change_a_test_command_and_two_signals() {
+        assert!(!is_green_check("run", &json!({"command":"echo hi"}), true, "exit code 0", true));
+        assert!(!is_green_check("run", &json!({"command":"cat -A x"}), true, "exit code 0", true));
+        assert!(!is_green_check("read", &json!({}), true, "exit code 0", true));
+        assert!(!is_green_check("run", &json!({"command":"pytest tests"}), false, "exit code 0", true));
+        assert!(!is_green_check("run", &json!({"command":"pytest tests"}), true, "exit code 1", true));
+        assert!(is_green_check("run", &json!({"command":"python3 -m pytest tests"}), true, "$ pytest\nexit code 0", true));
+        assert!(is_green_check("check", &json!({}), true, "PASS: 3 tests", true));
+        assert!(is_green_check("write", &json!({}), true, "done: create x.py\ntests passed.", true));
+        assert!(!is_green_check("write", &json!({}), true, "done: create x.py", true));
+        assert!(!is_real_change("edit", true, "NOT changed, no replacement made."));
+        assert!(is_real_change("write", true, "done: create x.py"));
+        assert!(is_tool_like("<｜DSML｜ calls>\n<｜DSML｜ invoke name=\"run\">"));
+        assert!(is_tool_like("{\"tool_calls\": []}"));
+        assert!(!is_tool_like("Done. The test passes."));
+    }
 
     #[test]
     fn a_short_request_or_a_question_is_not_sent_to_the_weaker_model_for_learning() {
