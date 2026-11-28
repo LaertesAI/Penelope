@@ -1098,8 +1098,19 @@ mod bench;
 mod tests {
     use super::*;
 
+    /// `LIVE_SEQ` is one counter per process. Tests that apply live files take this lock and start from 0, so a test
+    /// that ran first with a higher seq does not make the next test's file look old.
+    static LIVE_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn fresh_live_seq() -> std::sync::MutexGuard<'static, ()> {
+        let guard = LIVE_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        LIVE_SEQ.store(0, std::sync::atomic::Ordering::SeqCst);
+        guard
+    }
+
     #[test]
     fn a_new_seq_in_the_live_file_starts_a_new_turn_in_a_long_lived_server() {
+        let _live = fresh_live_seq();
         let dir = std::env::temp_dir().join(format!("penelope-live-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -1126,6 +1137,7 @@ mod tests {
 
     #[test]
     fn a_forged_live_file_changes_nothing() {
+        let _live = fresh_live_seq();
         let dir = std::env::temp_dir().join(format!("penelope-forge-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
