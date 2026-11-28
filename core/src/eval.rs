@@ -406,6 +406,7 @@ fn widen_eval_config(ctx: &Ctx) -> Result<EvalConfig, String> {
     let mut cfg: Value = before.as_deref().and_then(|s| serde_json::from_str(s).ok()).unwrap_or_else(|| ctx.cfg.clone());
     cfg["edit_policy"] = json!("all");
     cfg["run_policy"] = json!("all");
+    cfg["gates"] = json!("sandbox");
     cfg["sandbox"] = json!("bwrap");
     fs::write(&path, serde_json::to_string_pretty(&cfg).map_err(|e| format!("cannot encode the eval config: {}", e))?)
         .map_err(|e| format!("cannot write {}: {}", path.display(), e))?;
@@ -420,6 +421,7 @@ fn eval_context(ctx: &Ctx, setup: &str) -> Ctx {
     // rest of the machine read-only, makes only the task folder writable and cuts the network. Both setups get the
     // same policy, so the table measures the setup and not the permission prompt.
     run.cfg["run_policy"] = json!("all");
+    run.cfg["gates"] = json!("sandbox");
     run.cfg["sandbox"] = json!("bwrap");
     run.cfg["auto_learn"] = json!(false);
     run.cfg["auto_skills"] = json!(false);

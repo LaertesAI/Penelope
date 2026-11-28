@@ -420,6 +420,7 @@ pub fn run_config(base: &Value, model: &Value) -> Value {
     cfg["route"] = json!("fixed");
     cfg["edit_policy"] = json!("all");
     cfg["run_policy"] = json!("all");
+    cfg["gates"] = json!("sandbox");
     cfg["sandbox"] = json!(if sandbox_available() { "bwrap" } else { "off" });
     cfg["auto_learn"] = json!(false);
     cfg["auto_skills"] = json!(false);
