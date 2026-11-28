@@ -506,7 +506,9 @@ fn scan_every_file(stage: &Path) -> Result<String, String> {
                if tools > 0 { format!("; {} declared tool{} passed the tool rules", tools, if tools == 1 { "" } else { "s" }) } else { String::new() }))
 }
 
-fn walk_files(root: &Path, at: &Path, depth: usize, each: &mut dyn FnMut(&Path, &[u8]) -> Result<(), String>) -> Result<(), String> {
+type Visit<'a> = dyn FnMut(&Path, &[u8]) -> Result<(), String> + 'a;
+
+fn walk_files(root: &Path, at: &Path, depth: usize, each: &mut Visit) -> Result<(), String> {
     let mut entries: Vec<_> = fs::read_dir(at).map_err(|e| format!("NOT created. cannot read {}: {}", at.display(), e))?.flatten().collect();
     entries.sort_by_key(|e| e.file_name());
     for entry in entries {
