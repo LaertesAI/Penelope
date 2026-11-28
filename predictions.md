@@ -138,3 +138,10 @@ H3 aus dem Scheitern: Die zweite Bestätigung und der zusätzliche Textfinale-Du
 H3 gemessen (`stopgreen-r2e`): beide Arme 20/20, default 0,394852 EUR (0,019743 EUR je Treffer), stop-green 0,442358 EUR (0,022118 EUR je Treffer). b = 0, c = 0. Das Kostenziel ist verworfen: 12,0 % teurer je Treffer. 13 von 20 stop-green-Läufen liefen trotzdem bis zum 12-Runden-Deckel, das Signal wurde also selten erkannt.
 
 H4 aus dem Scheitern: Penelope meldet einen erfolgreichen Test nach einer Dateiänderung in der Antwort des Schreibwerkzeugs (`after_edit`: „tests passed"), nicht immer als eigenen `run`-Aufruf. H4 akzeptiert dieses Signal nach einer echten Änderung, weiterhin ohne zweite Bestätigung, aber mit Textfinale. Vorhersage: Treffer mindestens 19, c höchstens 1, EUR je Treffer mindestens 10 % unter dem Default. Abbruch: c mindestens 2 oder EUR je Treffer nicht mindestens 10 % niedriger. 20 verschränkte Paare, 40 Läufe.
+
+
+### Ergebnis H4 und Hypothese H5, 28.11.2026
+
+H4 gemessen (`stopgreen-r2f`): default 17/20, 0,397226 EUR (0,023366 EUR je Treffer), stop-green 16/20, 0,382048 EUR (0,023878 EUR je Treffer). b = 0, c = 1, p = 1,0. c = 1 ist noch in der Vorhersage, die Kostenvorhersage von minus 10 % ist verworfen; 2,19 % teurer je Treffer. Über H1 bis H4 hat kein Stoppzeitpunkt Kosten gesenkt.
+
+H5 aus dem Muster: Der Kostenhebel liegt nicht im frühen Stoppen, sondern im Denkaufwand. In den gespeicherten Kalibrierungszeilen hat DeepSeek `effort-low` 18/20 gegen 17/20 und 0,0195417 gegen 0,0236368 EUR je Treffer, also minus 17,4 %. Vorhersage H5: auf dem 30 Aufgaben langen Hold-out zeigt `effort-low` mindestens 10 % weniger EUR je Treffer bei c höchstens 1 gegen `default`. Abbruch: c mindestens 2 oder weniger als 10 % EUR-Vorteil. 60 verschränkte Läufe, OpenCode Go.
