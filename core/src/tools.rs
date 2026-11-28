@@ -426,7 +426,7 @@ pub fn is_green_check(call: &str, ok: bool, text: &str, changed: bool) -> bool {
         return false;
     }
     let lower = text.to_ascii_lowercase();
-    text.contains("exit 0") || text.contains("exit=0") || lower.contains("pass:") || lower.contains("all tests pass")
+    lower.contains("exit code 0") || lower.contains("exit code: 0") || lower.contains("pass:") || lower.contains("all tests pass")
 }
 
 fn attempts_of(v: &serde_json::Value) -> usize {
@@ -1244,7 +1244,8 @@ mod tests {
         assert!(!is_green_check("read", true, "exit 0", true));
         assert!(!is_green_check("run", false, "exit 0", true));
         assert!(!is_green_check("run", true, "exit 1", true));
-        assert!(is_green_check("run", true, "$ python3 -m pytest\nexit 0", true));
+        assert!(is_green_check("run", true, "$ python3 -m pytest\nexit code 0", true));
+        assert!(is_green_check("run", true, "Exit code: 0\nok", true));
         assert!(is_green_check("check", true, "PASS: 3 tests", true));
     }
 
