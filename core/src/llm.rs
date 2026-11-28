@@ -490,6 +490,9 @@ pub fn run_loop_with(model: &Value, system: &str, history: &mut Vec<Value>, tool
                      tick: &mut dyn FnMut(&Usage) -> Option<String>,
                      exec: &mut dyn FnMut(&ToolCall) -> (String, bool), on_text: &mut dyn FnMut(&str)) -> Result<String, String> {
     let kind = if model["tool_format"].as_str() == Some("text") { "text".to_string() } else { kind_of(model).to_string() };
+    let stop_green = model["stop_green"].as_bool().unwrap_or(false);
+    let mut changed = false;
+    let mut green = false;
     for round in 0..rounds {
         if cancel.map(|c| c.load(Ordering::SeqCst)).unwrap_or(false) {
             return Err("stopped".to_string());
@@ -553,8 +556,25 @@ pub fn run_loop_with(model: &Value, system: &str, history: &mut Vec<Value>, tool
             } else {
                 results.push((call.id.clone(), text, ok));
             }
+            if ok && matches!(call.name.as_str(), "write" | "edit") {
+                changed = true;
+            }
+            if crate::tools::is_green_check(&call.name, ok, &results.last().map(|x| x.1.as_str()).unwrap_or(""), changed) {
+                green = true;
+            }
         }
         history.extend(result_messages(&kind, &results));
+        if stop_green && green {
+            let final_reply = match chat_cancel(model, system, history, &[], cancel) {
+                Ok(reply) => reply,
+                Err(e) if e == "stopped" => return Err(e),
+                Err(e) => return Ok(format!("The check passed; the final answer could not be written: {}", e)),
+            };
+            usage.tokens_in += final_reply.tokens_in;
+            usage.tokens_out += final_reply.tokens_out;
+            history.push(final_reply.message);
+            return Ok(if final_reply.text.trim().is_empty() { "The check passed after the change.".to_string() } else { final_reply.text });
+        }
         if let Some(stop) = stop_text {
             let final_reply = match chat_cancel(model, system, history, &[], cancel) {
                 Ok(reply) => reply,

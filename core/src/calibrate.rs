@@ -58,21 +58,24 @@ pub struct Variant {
     pub prompt: String,
     /// The most tool-call rounds of one turn through an HTTP endpoint; 0 keeps the built-in 12.
     pub rounds: u64,
+    /// End the turn at the first green check after a file change.
+    pub stop_green: bool,
 }
 
 impl Variant {
     pub fn default_for(effort: &str) -> Variant {
-        Variant { name: "default".into(), tool_format: "native".into(), tool_list: "full".into(), effort: effort.into(), prompt: "current".into(), rounds: 0 }
+        Variant { name: "default".into(), tool_format: "native".into(), tool_list: "full".into(), effort: effort.into(), prompt: "current".into(), rounds: 0, stop_green: false }
     }
 
     pub fn to_json(&self) -> Value {
-        json!({"variant": self.name, "tool_format": self.tool_format, "tool_list": self.tool_list, "effort": self.effort, "prompt": self.prompt, "rounds": self.rounds})
+        json!({"variant": self.name, "tool_format": self.tool_format, "tool_list": self.tool_list, "effort": self.effort, "prompt": self.prompt, "rounds": self.rounds, "stop_green": self.stop_green})
     }
 
     pub fn from_json(v: &Value) -> Variant {
         let s = |k: &str, d: &str| v[k].as_str().filter(|x| !x.is_empty()).unwrap_or(d).to_string();
         Variant { name: s("variant", "default"), tool_format: s("tool_format", "native"), tool_list: s("tool_list", "full"),
-                  effort: v["effort"].as_str().unwrap_or("").to_string(), prompt: s("prompt", "current"), rounds: v["rounds"].as_u64().unwrap_or(0) }
+                  effort: v["effort"].as_str().unwrap_or("").to_string(), prompt: s("prompt", "current"), rounds: v["rounds"].as_u64().unwrap_or(0),
+                  stop_green: v["stop_green"].as_bool().unwrap_or(false) }
     }
 }
 
@@ -98,7 +101,8 @@ pub fn variants(provider: &str, model: &str) -> Vec<Variant> {
     }
     out.push(Variant { name: "prompt-short".into(), prompt: "short".into(), ..base.clone() });
     if provider != "claude-cli" {
-        out.push(Variant { name: "rounds-24".into(), rounds: 24, ..base });
+        out.push(Variant { name: "rounds-24".into(), rounds: 24, ..base.clone() });
+        out.push(Variant { name: "stop-green".into(), stop_green: true, ..base });
     }
     out
 }
@@ -157,6 +161,7 @@ pub fn apply(ctx: &Ctx) -> Ctx {
     if p.rounds > 0 {
         m["max_rounds"] = json!(p.rounds);
     }
+    m["stop_green"] = json!(p.stop_green);
     run
 }
 
@@ -983,10 +988,10 @@ mod tests {
     fn variants_change_one_factor_each() {
         let v = variants("opencode", "glm-5.3");
         let names: Vec<&str> = v.iter().map(|x| x.name.as_str()).collect();
-        assert_eq!(names, ["default", "text", "index", "effort-low", "prompt-short", "rounds-24"]);
+        assert_eq!(names, ["default", "text", "index", "effort-low", "prompt-short", "rounds-24", "stop-green"]);
         assert_eq!(v[0].effort, "high");
         for x in &v[1..] {
-            let diffs = [x.tool_format != v[0].tool_format, x.tool_list != v[0].tool_list, x.effort != v[0].effort, x.prompt != v[0].prompt, x.rounds != v[0].rounds];
+            let diffs = [x.tool_format != v[0].tool_format, x.tool_list != v[0].tool_list, x.effort != v[0].effort, x.prompt != v[0].prompt, x.rounds != v[0].rounds, x.stop_green != v[0].stop_green];
             assert_eq!(diffs.iter().filter(|d| **d).count(), 1, "{} changes one factor", x.name);
         }
         // Kimi K3 has only "max", MiniMax M3 none: no effort variant. The claude command owns its tool loop.
@@ -1014,6 +1019,12 @@ mod tests {
         let rounds = Variant { name: "rounds-24".into(), rounds: 24, ..Variant::default_for("high") };
         save_profile(&dir, "opencode", "glm-5.3", &rounds.to_json()).unwrap();
         assert_eq!(apply(&ctx).cfg["main"]["max_rounds"], 24);
+        let green = Variant { name: "stop-green".into(), stop_green: true, ..Variant::default_for("high") };
+        save_profile(&dir, "opencode", "glm-5.3", &green.to_json()).unwrap();
+        assert_eq!(load_profile(&dir, &model), Some(green));
+        assert_eq!(apply(&ctx).cfg["main"]["stop_green"], true);
+        let names: Vec<String> = variants("opencode", "glm-5.3").into_iter().map(|x| x.name).collect();
+        assert!(names.contains(&"stop-green".to_string()), "{:?}", names);
         // A level the model does not have is not sent; the switch turns the profile off.
         save_profile(&dir, "opencode", "glm-5.3", &json!({"variant": "x", "effort": "xhigh"})).unwrap();
         assert_eq!(apply(&ctx).cfg["main"]["effort"], "high");

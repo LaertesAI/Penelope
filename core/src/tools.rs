@@ -418,6 +418,17 @@ pub fn is_test_stop(text: &str) -> bool {
     text.trim_start().starts_with(TEST_STOP) || text.contains(&format!("\n{}: STOP.", TEST_STOP))
 }
 
+/// True for a green check after a file change. The `stop-green` variant of the calibration uses this to end a turn
+/// before more edits can break a passing state. The text of `run` carries the exit code; a test command that wrote
+/// "PASS" in its output counts as well.
+pub fn is_green_check(call: &str, ok: bool, text: &str, changed: bool) -> bool {
+    if !ok || !changed || !matches!(call, "run" | "test" | "check") {
+        return false;
+    }
+    let lower = text.to_ascii_lowercase();
+    text.contains("exit 0") || text.contains("exit=0") || lower.contains("pass:") || lower.contains("all tests pass")
+}
+
 fn attempts_of(v: &serde_json::Value) -> usize {
     v["test_attempts"].as_u64().unwrap_or(3).clamp(1, 20) as usize
 }
@@ -1226,6 +1237,16 @@ pub fn scouts(ctx: &Ctx, tasks: &serde_json::Value, cwd: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_green_check_needs_a_change_and_a_passing_run() {
+        assert!(!is_green_check("run", true, "exit 0", false));
+        assert!(!is_green_check("read", true, "exit 0", true));
+        assert!(!is_green_check("run", false, "exit 0", true));
+        assert!(!is_green_check("run", true, "exit 1", true));
+        assert!(is_green_check("run", true, "$ python3 -m pytest\nexit 0", true));
+        assert!(is_green_check("check", true, "PASS: 3 tests", true));
+    }
 
     #[test]
     fn a_short_request_or_a_question_is_not_sent_to_the_weaker_model_for_learning() {
