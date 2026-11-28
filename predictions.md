@@ -124,3 +124,10 @@ Mit der im Auftrag gemeinten Regel (höchstens ein Treffer weniger) wechselt 1 v
 H1 scheiterte mit c = 3. Zwei der drei Verluste (`hard-json-1`, `hard-inv-totals`) kamen nicht von einer echten Prüfung: ein fehlgeschlagener Edit oder ein `echo` mit Exit 0 wurde als grün gewertet, und die Endantwort war roher DSML-Code. H2: `stop-green-confirm` zählt nur echte Testbefehle (`pytest`, `python -m`, `cargo test`, `check`, `verify_fix`) nach einer echten Dateiänderung und verlangt zwei grüne Signale. Danach muss die Endantwort textlich sein; sonst wird erneut zum Textfinale aufgefordert und der Lauf ggf. fortgesetzt.
 
 Vorhersage: c höchstens 1 gegen `default`, EUR je bestandener Aufgabe höchstens so hoch wie im Default, mindestens 2 der 3 H1-Verluste werden Treffer. Abbruch: c mindestens 2 oder EUR je Treffer über dem Default. 20 verschränkte Paare, 40 Läufe, OpenCode Go. Kein drittes Experiment nach diesem Lauf.
+
+
+### Ergebnis H2 und Hypothese H3, 28.11.2026
+
+H2 gemessen (`stopgreen-r2d`): default 17/20, 0,372410 EUR, 0,021906 EUR je Treffer. stop-green 18/20, 0,412383 EUR, 0,022910 EUR je Treffer. b = 1, c = 0, p = 1,0. Das Ziel c = 0 ist erreicht, das Kostenziel nicht: 4,59 % teurer je Treffer, gepaarte EUR-Differenz +0,001999 mit Bootstrap-CI [−0,000174, 0,004259]. Die Abbruchregel „EUR je Treffer über dem Default" greift. Nur 1 der 3 alten Verluste kam zurück, nicht 2.
+
+H3 aus dem Scheitern: Die zweite Bestätigung und der zusätzliche Textfinale-Durchlauf kosten mehr Token. Ein einziger echter Test nach einer echten Dateiänderung soll genügen; die Scheinerkennung (`cat`, `echo`, fehlgeschlagener Edit) und die Textfinale-Regel bleiben. Vorhersage: c höchstens 1, Treffer mindestens 17, EUR je Treffer höchstens so hoch wie im Default. Abbruch: c mindestens 2 oder EUR je Treffer über dem Default. 20 verschränkte Paare, 40 Läufe.

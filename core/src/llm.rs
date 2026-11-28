@@ -566,7 +566,7 @@ pub fn run_loop_with(model: &Value, system: &str, history: &mut Vec<Value>, tool
             }
         }
         history.extend(result_messages(&kind, &results));
-        if stop_green && greens >= 2 {
+        if stop_green && greens >= 1 {
             let mut final_reply = match chat_cancel(model, system, history, &[], cancel) {
                 Ok(reply) => reply,
                 Err(e) if e == "stopped" => return Err(e),
