@@ -289,6 +289,13 @@ fn registry(ctx: &Ctx) -> Value {
     value
 }
 
+/// Replaces the source an app is listed with, for an app that Penelope wrote herself.
+pub(crate) fn set_source(ctx: &Ctx, folder: &str, source: &str) {
+    let mut reg = registry(ctx);
+    reg["sources"][folder] = json!(source);
+    let _ = save_registry(ctx, &reg);
+}
+
 fn save_registry(ctx: &Ctx, value: &Value) -> Result<(), String> {
     let path = registry_path(ctx);
     let tmp = path.with_extension("json.tmp");

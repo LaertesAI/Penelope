@@ -393,9 +393,15 @@ to the model with these tools. The steps of a call:
 1. The files go to `.penelope/staging/KIND-NAME-STAMP/`. A missing manifest is made from the name and the description.
 2. `plugins::check` reads scripts, skills, commands, `.mcp.json` and the manifests (hidden Unicode, download pipes, the
    rules of `vet.rs`), and the manifest parser of the kind runs: `mods::parse`, `apps::load_dir`, the plugin manifest, the
-   cluster profile parser and the schedule parser. A finding ends the call before any question.
+   cluster profile parser and the schedule parser. Then every file the model wrote is read again with no skipped folder
+   (`node_modules`, `dist`) and no extension list: hidden Unicode, the install patterns per line, the prose rules for
+   `.md` and `.txt`, and the tool rules of the tool scan over every `tools` list a JSON file declares (the server is
+   gated again at its first probe). A link or a binary file is refused. A mod whose manifest changes nothing is refused.
+   A finding ends the call before any question.
 3. The person sees one summary through the question dialog: the files with their sizes, the rights of an app, the MCP
    server commands of a plugin, the schedule and parts of a factory, and the target folder.
+   The summary lists rights, commands, schedule, tasks and limits before the file list. A summary that does not fit the
+   dialog is refused, never cut.
 4. Only a yes moves the folder into place and registers it. A no, a closed dialog, a timeout and a missing dialog remove the
    staging folder and change nothing else.
 
