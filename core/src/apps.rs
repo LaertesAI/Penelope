@@ -145,7 +145,7 @@ fn valid_name(name: &str) -> bool {
 
 /// A path from a manifest or an app call. It must stay below the folder it is joined to: no root, no drive, no `..`,
 /// no `~` and no backslash (which is a separator on Windows and would slip past a Unix check).
-fn clean_relative(text: &str) -> Result<PathBuf, String> {
+pub(crate) fn clean_relative(text: &str) -> Result<PathBuf, String> {
     let text = text.trim();
     if text.is_empty() {
         return Err("the path is empty".to_string());
@@ -287,6 +287,13 @@ fn registry(ctx: &Ctx) -> Value {
         value["active"] = json!("");
     }
     value
+}
+
+/// Replaces the source an app is listed with, for an app that Penelope wrote herself.
+pub(crate) fn set_source(ctx: &Ctx, folder: &str, source: &str) {
+    let mut reg = registry(ctx);
+    reg["sources"][folder] = json!(source);
+    let _ = save_registry(ctx, &reg);
 }
 
 fn save_registry(ctx: &Ctx, value: &Value) -> Result<(), String> {
@@ -1031,6 +1038,7 @@ pub fn cli(ctx: &Ctx, args: &[String]) -> Result<String, String> {
     let verb = args.first().map(String::as_str).unwrap_or("");
     match verb {
         "" | "list" => Ok(list(ctx)),
+        "new" => crate::create::new_cli(ctx, crate::create::Kind::App, &args[1..]),
         "install" => {
             let mut unattended = false;
             let mut target = String::new();

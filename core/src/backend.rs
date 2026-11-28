@@ -121,7 +121,7 @@ above it holds a repository. Paths are relative to it, and ~ stands for the home
 6. To look at a web page as it is drawn or at a picture use the tool screen, never a screenshot of the terminal. It drives ScreenCodec and moves Penelope's cursor before a click; cursor moves her pointer without a click. \
 7. When two readings of a request lead to different work, ask with ask_user before you guess. \
 8. A rule that binds every later session goes to the shared memory: memory_note with scope global. A fact of this project stays in the project. \
-9. When a fixed command would save steps next time, write it as a tool with tool_new; a call runs through run and asks like run. \
+9. When a fixed command would save steps next time, write it as a tool with tool_new; a call runs through run and asks like run. To create a plugin, a mod, a factory or an app use plugin_new, mod_new, factory_new or app_new; the person decides before anything is registered. \
 10. After a change, hand the claim and the command output to check. Report what passed and what is still open. \
 11. Answer briefly. Today is {today} (UTC).{check}", look, cwd = cwd, tests = tests, check = crate::checker::rule(ctx),
             today = &crate::sessions::stamp(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0))[..10])

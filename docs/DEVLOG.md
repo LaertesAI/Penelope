@@ -371,6 +371,46 @@ proves that no second file appears.
 The forged tools are offered to the lead and the worker, never to a scout or a judge. The claude command gets their
 names on its allow list too, so the same contract holds in both backends.
 
+### Plugins, mods, factories and apps that Penelope writes herself
+
+`core/src/create.rs` writes an extension from a plain request. The command line writes a skeleton, and four model tools
+write what the model sends.
+
+Command line, one skeleton each: a manifest and one example file. The files go to a staging folder, the local check runs
+on them, and a clean skeleton moves to its folder. Nothing is registered or switched on.
+
+| Command | Folder | Example file | Next command |
+|---|---|---|---|
+| `penelope plugin new NAME [--skill] [--mcp]` | `.penelope/plugins/NAME` | `commands/hello.md`, with `--skill` a `SKILL.md`, with `--mcp` `.mcp.json` and `server.js` | `penelope plugin add DIR` |
+| `penelope mod new NAME` | `.penelope/mods/NAME` | `README.md` beside `.penelope-mod.json` | `/mod on NAME` |
+| `penelope app new NAME` | `.penelope/apps/NAME` | `index.html` beside `.penelope-app.json` | `/app on NAME` |
+| `penelope factory new NAME --profile P --every 3h` | profile and registry | none (existed before) | `penelope factory install NAME --yes` |
+
+Model tools `plugin_new`, `mod_new`, `app_new` and `factory_new` take a name, a description and the files (a factory takes
+a goal, a base profile or a new profile, and `every` or `at`). `/new plugin|mod|factory|app DESCRIPTION` sends the request
+to the model with these tools. The steps of a call:
+
+1. The files go to `.penelope/staging/KIND-NAME-STAMP/`. A missing manifest is made from the name and the description.
+2. `plugins::check` reads scripts, skills, commands, `.mcp.json` and the manifests (hidden Unicode, download pipes, the
+   rules of `vet.rs`), and the manifest parser of the kind runs: `mods::parse`, `apps::load_dir`, the plugin manifest, the
+   cluster profile parser and the schedule parser. Then every file the model wrote is read again with no skipped folder
+   (`node_modules`, `dist`) and no extension list: hidden Unicode, the install patterns per line, the prose rules for
+   `.md` and `.txt`, and the tool rules of the tool scan over every `tools` list a JSON file declares (the server is
+   gated again at its first probe). A link or a binary file is refused. A mod whose manifest changes nothing is refused.
+   A finding ends the call before any question.
+3. The person sees one summary through the question dialog: the files with their sizes, the rights of an app, the MCP
+   server commands of a plugin, the schedule and parts of a factory, and the target folder.
+   The summary lists rights, commands, schedule, tasks and limits before the file list. A summary that does not fit the
+   dialog is refused, never cut.
+4. Only a yes moves the folder into place and registers it. A no, a closed dialog, a timeout and a missing dialog remove the
+   staging folder and change nothing else.
+
+Three rules hold for every kind. Only the main turn creates: a worker, a scout and a part of a cluster get a refusal, the
+same rule as `ask_user`, and the roles `worker`, `scout`, `judge` and `tool` do not have the tools. A new plugin starts with
+its MCP tools denied (`penelope plugin allow NAME` switches them on). A factory is created on one yes and armed only on a
+second, separate question, because its timer starts a model while Penelope is closed. The tools are in the class `install`
+of the gates and in the rights that a hand-off to another mode must confirm.
+
 ## Models in every role
 
 `penelope provider use NAME --role ROLE` now accepts `main`, `weak`, `scout` and every role from `route::ROLES`:

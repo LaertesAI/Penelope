@@ -27,6 +27,7 @@ pub mod checker;
 pub mod claudecli;
 pub mod config;
 pub mod context;
+pub mod create;
 pub mod cost;
 pub mod crew;
 pub mod cursor;

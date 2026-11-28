@@ -97,6 +97,11 @@ penelope allow [list|clear]   confirmed shell commands for this project (values 
 penelope jobs                 list the background jobs of this folder
 penelope jobs stop N          end background job N
 penelope plugin add DIR       register a plugin folder after a local check of its scripts (skills and MCP servers)
+penelope plugin new NAME [--skill] [--mcp]
+                              write a plugin skeleton (manifest and one example file) into .penelope/plugins/NAME and check it
+penelope mod new NAME         write a mod skeleton into .penelope/mods/NAME and check it
+penelope mod list             the mods of this project
+penelope app new NAME         write an app skeleton into .penelope/apps/NAME and check it
 penelope plugin list          show the registered plugins and whether the tools of their MCP servers are allowed
 penelope plugin allow NAME    put the tools of a plugin's MCP servers on the allow list of the main model
 penelope plugin deny NAME     take them off the allow list (the state of a new plugin)
@@ -460,6 +465,13 @@ fn main() {
         "factory" => match factories::cli(&ctx, &args[1..]) {
             Ok(text) => print!("{}", text),
             Err(e) => { loom::warn(&e); std::process::exit(2); }
+        },
+        "mod" => match args.get(1).map(String::as_str) {
+            Some("new") => match penelope_core::create::new_cli(&ctx, penelope_core::create::Kind::Mod, &args[2..]) {
+                Ok(text) => print!("{}", text),
+                Err(e) => { loom::warn(&e); std::process::exit(2); }
+            },
+            _ => print!("{}", penelope_core::mods::report(&ctx)),
         },
         "app" => match apps::cli(&ctx, &args[1..]) {
             Ok(text) => print!("{}", text),
@@ -879,6 +891,10 @@ fn main() {
         "sessions" => print!("{}", sessions::list(&ctx)),
         "stats" => print!("{}", tools::stats(&ctx)),
         "plugin" => match args.get(1).map(String::as_str) {
+            Some("new") => match penelope_core::create::new_cli(&ctx, penelope_core::create::Kind::Plugin, &args[2..]) {
+                Ok(text) => print!("{}", text),
+                Err(e) => { loom::warn(&e); std::process::exit(2); }
+            },
             Some(verb @ ("add" | "install" | "allow" | "deny" | "update" | "remove" | "command")) if args.len() < 3 => {
                 let what = if verb == "add" { "DIR" } else if verb == "install" { "LINK" } else { "NAME" };
                 loom::warn(&format!("usage: penelope plugin {} {}", verb, what));
